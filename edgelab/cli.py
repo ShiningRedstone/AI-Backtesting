@@ -13,6 +13,10 @@
     python -m edgelab.cli strategy proposals BATCH_FILE [--no-save]
     python -m edgelab.cli strategy list [--family ID] | show ID | lineage ID | menu
     python -m edgelab.cli strategy backtest FILE_OR_ID DATASET_ID
+    python -m edgelab.cli research validate|plan SEARCH_SPEC_FILE
+    python -m edgelab.cli research run SEARCH_SPEC_FILE [--workers N]
+    python -m edgelab.cli research rank SEARCH_ID [--metric M] [--min-sample-label L]
+    python -m edgelab.cli research job SEARCH_SPEC_FILE     (background job; progress; Ctrl-C cancels)
 
 Add --json to any command for machine-readable output.
 """
@@ -130,9 +134,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-save", action="store_true")
     p.add_argument("--n-families", type=int, default=20)
 
+    p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
+    p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
+    p.add_argument("target", help="search spec file (YAML/JSON), or a SRCH_ id for rank")
+    p.add_argument("--workers", type=int, help="run: worker processes (default: the spec's workers, 1)")
+    p.add_argument("--metric", help="rank: expectancy_r | profit_factor | net_r (default: the search spec's)")
+    p.add_argument("--min-sample-label", help="rank: LOW SAMPLE SIZE | MODERATE SAMPLE | ADEQUATE SAMPLE")
+
     a = ap.parse_args(argv)
     from edgelab.data.importer import ImportFailed
+    from edgelab.data.store import SearchStorageUnsupported
     from edgelab.engine.costs import CostConfigError
+    from edgelab.research.ranking import RankingError
+    from edgelab.research.search import SearchSpecError
     from edgelab.services import Services
     from edgelab.strategy.compiler import StrategyCompileError
     from edgelab.strategy.dsl import StrategyValidationError
@@ -176,6 +190,14 @@ def main(argv: list[str] | None = None) -> int:
             _print([v.definition() for v in svc.sessions.values()], a.json)
         elif a.cmd == "strategy":
             return _strategy(svc, a, ap)
+        elif a.cmd == "research":
+            return _research(svc, a)
+    except SearchSpecError as exc:
+        print(f"search refused: {exc}", file=sys.stderr)
+        return 2
+    except (RankingError, SearchStorageUnsupported) as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
     except StrategyValidationError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -256,6 +278,79 @@ def _strategy(svc, a, ap) -> int:
     elif a.action == "backtest":
         _print(svc.backtest_strategy(x[0], x[1]), a.json)
     return 0
+
+
+def _research(svc, a) -> int:
+    """Thin wrappers over the Phase 4 research services (the same calls /api/research makes)."""
+    if a.action == "validate":
+        r = svc.validate_search(a.target)
+        if a.json:
+            _print(r, True)
+        else:
+            print("search spec is valid" if r["valid"] else f"search spec is invalid ({len(r['errors'])} error(s)):")
+            for i in r["errors"]:
+                print(f"  {i['path']}: {i['message']}" + (f" ({i['hint']})" if i.get("hint") else ""))
+            if r["valid"]:
+                print(f"search_hash: {r['search_hash']}")
+        return 0 if r["valid"] else 2
+    if a.action == "plan":
+        r = svc.plan_search(a.target)
+        if a.json:
+            _print(r, True)
+        else:
+            print(f"{r['search_id']}: {r['counts']}")
+            for w in r["warnings"]:
+                print(f"  WARNING {w}")
+            for c in r["cells"]:
+                print(f"  [{c['plan_index']}] {c['cell_id']} {c['strategy_id']} x {c['dataset_id']} "
+                      + ("eligible" if c["eligible"] else "INELIGIBLE: " + "; ".join(c["reasons"])))
+        return 0
+    if a.action == "run":
+        r = svc.run_search(a.target, workers=a.workers)
+        _print(r if a.json else {k: r[k] for k in ("search_id", "status", "n_planned", "n_eligible", "n_ineligible",
+                                                   "n_evaluated", "n_skipped_resume", "n_failed", "n_trials",
+                                                   "cumulative", "execution", "note")}, a.json)
+        return 0
+    if a.action == "rank":
+        r = svc.rank_search(a.target, a.metric, a.min_sample_label)
+        if a.json:
+            _print(r, True)
+        else:
+            print(r["label"])
+            print(f"metric={r['metric']} min_sample_label={r['min_sample_label']} excluded={r['excluded']}")
+            for x in r["ranked"]:
+                val = "+inf" if x.get("value_infinite") else x["value"]
+                print(f"  {x['rank']:>3}  {x['strategy_id']} x {x['dataset_id']}  {r['metric']}={val}  "
+                      f"trades={x['metrics'].get('trade_count')} [{x['metrics'].get('sample_label')}]")
+            print(r["note"])
+        return 0
+    return _research_job(svc, a)
+
+
+def _research_job(svc, a) -> int:
+    """Start a background search job and follow it until it ends. Ctrl-C requests cooperative
+    cancellation (the running cell finishes). Job ids live in this process only; the stored search
+    (SRCH_ id) persists and can be resumed with `research run`."""
+    st = svc.start_search_job(a.target)
+    jid = st["job_id"]
+    if not a.json:
+        print(f"job {jid} started for {st['search_id']} (Ctrl-C cancels)")
+    try:
+        while st["state"] not in ("completed", "failed", "cancelled"):
+            svc.jobs.join(timeout=1.0)                     # progress interval only
+            st = svc.job_status(jid)
+            if not a.json:
+                p = st["progress"]
+                if p.get("stored"):
+                    print(f"  {st['state']}: evaluated {p['evaluated']}/{p['eligible']} eligible, "
+                          f"failed {p['failed']}, skipped {p['skipped_resume']}")
+    except KeyboardInterrupt:
+        svc.cancel_job(jid)
+        print(f"cancellation requested for {jid}; the running cell will finish", file=sys.stderr)
+        svc.jobs.join()
+    st = svc.job_status(jid)
+    _print(st if a.json else {k: st[k] for k in ("job_id", "search_id", "state", "error", "progress")}, a.json)
+    return {"completed": 0, "cancelled": 130}.get(st["state"], 1)
 
 
 if __name__ == "__main__":

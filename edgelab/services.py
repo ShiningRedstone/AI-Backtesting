@@ -351,6 +351,32 @@ class Services:
         from edgelab.research.batch import run_search
         return run_search(self, spec if isinstance(spec, Mapping) else self._definition(spec), workers)
 
+    def validate_search(self, spec: Any) -> dict:
+        """Structural check of a search spec (keys, types, values); references are checked by plan."""
+        from edgelab.research.search import canonical_search_spec, search_hash, validate_search_spec
+        raw = spec if isinstance(spec, Mapping) else self._definition(spec)
+        res = validate_search_spec(raw)
+        out = {"valid": res.valid, "errors": [i.to_dict() for i in res.errors],
+               "warnings": [i.to_dict() for i in res.warnings]}
+        if res.valid:
+            out.update(canonical=canonical_search_spec(raw), search_hash=search_hash(raw, self._config_hash()))
+        return _jsonable(out)
+
+    def plan_search(self, spec: Any) -> dict:
+        """The deterministic strategy x dataset plan (nothing is executed)."""
+        from edgelab.research.search import plan_search
+        return _jsonable(plan_search(spec if isinstance(spec, Mapping) else self._definition(spec), self).to_dict())
+
+    def list_searches(self) -> list[dict]:
+        """Stored searches (batch rows, JSON fields decoded; no cells)."""
+        from edgelab.research.batch import _decode_batch
+        return _jsonable([_decode_batch(b) for b in self.store.list_search_batches()])
+
+    def get_search(self, search_id: str) -> dict:
+        """One stored search: batch, current cells, historical cells, cumulative totals."""
+        from edgelab.research.batch import search_summary
+        return _jsonable(search_summary(self.store, search_id))
+
     @property
     def jobs(self):
         """The background search job manager (created on first use; creating it marks searches a

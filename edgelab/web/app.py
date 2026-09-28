@@ -27,6 +27,8 @@ STATIC = Path(__file__).parent / "static"
 STRATEGY_ID = re.compile(r"^STR_[0-9A-F]{12}$")
 BATCH_ID = re.compile(r"^VB_[0-9A-F]{12}$")
 RUN_ID = re.compile(r"^RUN_\d{4}_\d{5}$")
+SEARCH_ID = re.compile(r"^SRCH_[0-9A-F]{12}$")
+JOB_ID = re.compile(r"^JOB_[0-9A-F]{12}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
 
 
@@ -61,6 +63,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     web = web or load_web_config(root)
     svc = Services(root=root)
     lock = svc.lock                  # the one service lock (shared with the Phase 4 job manager)
+    if svc.store.backend == "sqlite":
+        svc.jobs                     # start the job manager: searches a dead process left `running` -> interrupted
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = int(web.max_request_mb * 1024 * 1024)
     app.config["EDGELAB"] = {"root": root, "demo": demo, "services": svc, "web": web}
@@ -87,8 +91,12 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         from werkzeug.exceptions import HTTPException
 
         from edgelab.data.importer import ImportFailed
+        from edgelab.data.store import SearchStorageUnsupported
         from edgelab.engine.backtester import BacktestError
         from edgelab.engine.costs import CostConfigError
+        from edgelab.research.jobs import JobConflict
+        from edgelab.research.ranking import RankingError
+        from edgelab.research.search import SearchSpecError
         from edgelab.strategy.compiler import StrategyCompileError
         from edgelab.strategy.dsl import StrategyValidationError
         from edgelab.strategy.variations import VariationError
@@ -96,6 +104,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, HTTPException):
             kind = "not_found" if e.code == 404 else "http"
             return jsonify({"error": {"kind": kind, "message": e.description}}), e.code
+        if isinstance(e, SearchSpecError):
+            return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
+                                      "reason": str(e), "issues": [i.to_dict() for i in e.issues],
+                                      "details": details}}), 422
         if isinstance(e, StrategyValidationError):
             return jsonify({"error": {"kind": "validation", "message": "The strategy is not valid.",
                                       "issues": [i.to_dict() for i in e.result.issues],
@@ -106,6 +118,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                   "Backtest unavailable: the broker/provider cost profile is unconfigured. "
                   "Configure verified costs before running research."),
                  (BacktestError, 422, "backtest", "The backtest was stopped."),
+                 (RankingError, 422, "ranking", "The ranking request was refused."),
+                 (JobConflict, 409, "job_conflict", "Another search job is still active; one runs at a time."),
+                 (SearchStorageUnsupported, 409, "search_storage_unsupported",
+                  "Research searches need the SQLite result store."),
                  (ImportFailed, 422, "import_failed", "The import was refused."),
                  (KeyError, 404, "not_found", "Not found."),
                  (FileNotFoundError, 404, "not_found", "File not found.")]
@@ -346,6 +362,54 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.get("/api/results/<rid>")
     def result(rid):
         return jsonify(call(svc.get_run, _id(rid, RUN_ID, "run id")))
+
+    # ------------------------------------------------------------------ research (Phase 4)
+    def _search_spec(b: dict) -> dict:
+        spec = b.get("spec")
+        if not isinstance(spec, dict):
+            raise _bad("a search spec must be a JSON object under 'spec'")
+        return spec
+
+    @app.post("/api/research/validate")
+    def research_validate():
+        return jsonify(call(svc.validate_search, _search_spec(body())))
+
+    @app.post("/api/research/plan")
+    def research_plan():
+        return jsonify(call(svc.plan_search, _search_spec(body())))
+
+    @app.post("/api/research/jobs")
+    def research_job_start():
+        return jsonify(call(svc.start_search_job, _search_spec(body()))), 202
+
+    @app.get("/api/research/jobs/<jid>")
+    def research_job_status(jid):
+        return jsonify(call(svc.job_status, _id(jid, JOB_ID, "job id")))
+
+    @app.post("/api/research/jobs/<jid>/cancel")
+    def research_job_cancel(jid):
+        return jsonify(call(svc.cancel_job, _id(jid, JOB_ID, "job id")))
+
+    @app.get("/api/research/searches")
+    def research_searches():
+        return jsonify(call(svc.list_searches))
+
+    @app.get("/api/research/searches/<sid>")
+    def research_search(sid):
+        return jsonify(call(svc.get_search, _id(sid, SEARCH_ID, "search id")))
+
+    @app.get("/api/research/searches/<sid>/ranking")
+    def research_ranking(sid):
+        q = request.args
+        return jsonify(call(svc.rank_search, _id(sid, SEARCH_ID, "search id"), q.get("metric") or None,
+                            q.get("min_sample_label") or None))
+
+    @app.post("/api/research/searches/<sid>/shortlist")
+    def research_shortlist(sid):
+        ids = body().get("strategy_ids")
+        if not isinstance(ids, list):
+            raise _bad("strategy_ids must be a JSON list")
+        return jsonify(call(svc.select_shortlist, _id(sid, SEARCH_ID, "search id"), ids))
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")
