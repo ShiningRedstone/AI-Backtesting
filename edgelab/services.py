@@ -290,18 +290,22 @@ class Services:
 
     def _run_cell(self, src: Any, dataset_id: str, record: bool = False, *,
                   parent_strategy_id: str | None = None, mutation: str | None = None,
-                  notes: str | None = None) -> dict:
+                  notes: str | None = None, period: tuple | None = None) -> dict:
         """One (strategy, dataset) cell through the existing engine: load (re-validated) ->
-        compile -> cost model (CFD refusal) -> bind -> causality-checked backtest with the
-        strategy's OWN sizing -> metrics -> optional run record. Returns the internal objects
-        (not JSON); `backtest_strategy` and Phase 4 batch search both use this one path.
-        `notes=None` keeps the Strategy Lab note (synthetic data is always labelled)."""
+        [optional period restriction, re-validated] -> compile -> cost model (CFD refusal) ->
+        bind -> causality-checked backtest with the strategy's OWN sizing -> metrics ->
+        optional run record. Returns the internal objects (not JSON); `backtest_strategy` and
+        Phase 4 batch search both use this one path. `notes=None` keeps the Strategy Lab note;
+        synthetic data is always labelled first."""
         from edgelab.analytics.metrics import compute_metrics
         from edgelab.engine.backtester import run_backtest
         from edgelab.engine.costs import cost_model_from_config
         from edgelab.features.strategy_api import FeatureContext
         from edgelab.strategy.compiler import compile_strategy
         ds = self.load_dataset(dataset_id)
+        if period is not None:
+            from edgelab.research.compare import restrict_to_period
+            ds = restrict_to_period(ds, period[0], period[1], self.cfg.get("validation"))
         strat = compile_strategy(self._definition(src), self.sessions, self._config_hash())
         costs = cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
@@ -312,13 +316,21 @@ class Services:
         if record:
             from edgelab.research.runs import record_run
             if synthetic:
-                notes = "SYNTHETIC DEMONSTRATION - not evidence of trading performance"
+                label = "SYNTHETIC DEMONSTRATION - not evidence of trading performance"
+                notes = label if notes is None else f"{label} | {notes}"
             elif notes is None:
                 notes = "single backtest (Strategy Lab)"
             run_id = record_run(self.store, self.cfg, res, met, notes=notes,
                                 parent_strategy_id=parent_strategy_id, mutation=mutation)
         return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
                 "metrics": met, "synthetic": synthetic, "run_id": run_id}
+
+    def run_search(self, spec: Any, workers: int = 1) -> dict:
+        """Phase 4: plan and run a strategy x dataset search synchronously (workers=1), storing
+        every cell durably; re-running the same search resumes (completed cells are skipped).
+        Results are in-sample measurements only."""
+        from edgelab.research.batch import run_search
+        return run_search(self, spec if isinstance(spec, Mapping) else self._definition(spec), workers)
 
     def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False) -> dict:
         """One backtest through the existing engine (causality-checked). Returns measurements with

@@ -36,7 +36,28 @@ SCHEMA = [
         n BIGINT)""",
     """CREATE TABLE IF NOT EXISTS dataset_reports (dataset_id TEXT PRIMARY KEY, report_json TEXT)""",
 ]
+# Phase 4 search storage (SQLite only; see ResultStore._require_search_storage).
+SEARCH_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS search_batches (search_id TEXT PRIMARY KEY, search_hash TEXT,
+        config_hash TEXT, code_version TEXT, created_at TEXT, finished_at TEXT, status TEXT,
+        spec_json TEXT, n_planned INTEGER, n_eligible INTEGER, n_ineligible INTEGER,
+        n_evaluated INTEGER, n_skipped_resume INTEGER, n_failed INTEGER, n_cancelled INTEGER,
+        n_trials INTEGER, shortlist_json TEXT, warnings_json TEXT)""",
+    """CREATE TABLE IF NOT EXISTS search_cells (search_id TEXT, cell_id TEXT, plan_index INTEGER,
+        strategy_id TEXT, dataset_id TEXT, dataset_content_hash TEXT, status TEXT, run_id TEXT,
+        trades_hash TEXT, reasons_json TEXT, error TEXT, headline_json TEXT, current INTEGER,
+        PRIMARY KEY (search_id, cell_id))""",
+]
+SEARCH_BATCH_COLS = ("search_id", "search_hash", "config_hash", "code_version", "created_at", "finished_at",
+                     "status", "spec_json", "n_planned", "n_eligible", "n_ineligible", "n_evaluated",
+                     "n_skipped_resume", "n_failed", "n_cancelled", "n_trials", "shortlist_json", "warnings_json")
+SEARCH_CELL_COLS = ("search_id", "cell_id", "plan_index", "strategy_id", "dataset_id", "dataset_content_hash",
+                    "status", "run_id", "trades_hash", "reasons_json", "error", "headline_json", "current")
 TS_COLS = ("signal_ts", "entry_ts", "exit_ts")
+
+
+class SearchStorageUnsupported(NotImplementedError):
+    """Phase 4 search storage is SQLite-backed only."""
 
 
 def _trades_to_table(run_id: str, trades: pd.DataFrame) -> pd.DataFrame:
@@ -157,6 +178,66 @@ class ResultStore(ABC):
         return pd.DataFrame(rows, columns=["run_id", "created_at", "status", "strategy_id",
                                            "dataset_id", "trades_hash"])
 
+    # --- Phase 4 search batches / cells (SQLite only) -----------------------------
+    def _require_search_storage(self) -> None:
+        if self.backend != "sqlite":
+            raise SearchStorageUnsupported(
+                f"search storage is SQLite-backed only (this store is {self.backend}); set "
+                "storage.backend: sqlite to run batch searches")
+
+    def upsert_search_batch(self, row: dict) -> None:
+        """Insert or replace one search batch row (columns SEARCH_BATCH_COLS; *_json values as text)."""
+        self._require_search_storage()
+        cols = ", ".join(SEARCH_BATCH_COLS)
+        marks = ", ".join("?" for _ in SEARCH_BATCH_COLS)
+        self._exec(f"INSERT OR REPLACE INTO search_batches ({cols}) VALUES ({marks})",
+                   tuple(row.get(c) for c in SEARCH_BATCH_COLS))
+
+    def update_search_batch(self, search_id: str, **fields) -> None:
+        self._require_search_storage()
+        bad = set(fields) - set(SEARCH_BATCH_COLS) - {"search_id"}
+        if bad or "search_id" in fields:
+            raise ValueError(f"unknown/immutable search batch fields: {sorted(bad | ({'search_id'} & set(fields)))}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self._exec(f"UPDATE search_batches SET {sets} WHERE search_id = ?", (*fields.values(), search_id))
+
+    def upsert_search_cell(self, row: dict) -> None:
+        self._require_search_storage()
+        cols = ", ".join(SEARCH_CELL_COLS)
+        marks = ", ".join("?" for _ in SEARCH_CELL_COLS)
+        self._exec(f"INSERT OR REPLACE INTO search_cells ({cols}) VALUES ({marks})",
+                   tuple(row.get(c) for c in SEARCH_CELL_COLS))
+
+    def get_search_batch(self, search_id: str) -> dict | None:
+        self._require_search_storage()
+        rows = self._query(f"SELECT {', '.join(SEARCH_BATCH_COLS)} FROM search_batches WHERE search_id = ?",
+                           (search_id,))
+        return dict(zip(SEARCH_BATCH_COLS, rows[0])) if rows else None
+
+    def list_search_cells(self, search_id: str, current: bool | None = None) -> list[dict]:
+        """Cells of a search in plan order; `current=True` only those in the latest plan,
+        `False` only historical ones (kept for research history, never deleted)."""
+        self._require_search_storage()
+        where = "" if current is None else f" AND current = {1 if current else 0}"
+        rows = self._query(f"SELECT {', '.join(SEARCH_CELL_COLS)} FROM search_cells WHERE search_id = ?{where} "
+                           "ORDER BY plan_index, cell_id", (search_id,))
+        return [dict(zip(SEARCH_CELL_COLS, r)) for r in rows]
+
+    def mark_current_search_cells(self, search_id: str, cell_ids: list[str]) -> None:
+        """Flag exactly `cell_ids` as the search's current plan; other rows become historical."""
+        self._require_search_storage()
+        self._exec("UPDATE search_cells SET current = 0 WHERE search_id = ?", (search_id,))
+        self._executemany("UPDATE search_cells SET current = 1 WHERE search_id = ? AND cell_id = ?",
+                          [(search_id, c) for c in cell_ids])
+
+    def list_search_batches(self) -> list[dict]:
+        self._require_search_storage()
+        rows = self._query(f"SELECT {', '.join(SEARCH_BATCH_COLS)} FROM search_batches ORDER BY created_at, search_id")
+        return [dict(zip(SEARCH_BATCH_COLS, r)) for r in rows]
+
+    def has_run(self, run_id: str) -> bool:
+        return bool(self._query("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)))
+
     # --- backend primitives ------------------------------------------------------
     @abstractmethod
     def _exec(self, sql: str, params: tuple = ()) -> None: ...
@@ -189,7 +270,7 @@ class SQLiteStore(ResultStore):
         # serializes every store access behind one lock, so the connection is never shared
         # concurrently. Single-threaded callers (CLI, tests) are unaffected.
         self.con = sqlite3.connect(self.path, check_same_thread=False)
-        for s in SCHEMA:
+        for s in SCHEMA + SEARCH_SCHEMA:
             self.con.execute(s.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER"))
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_bars ON bars(dataset_id, ts_ns)")
         self._add_missing_columns("bars", {"spread": "REAL"})   # Phase 2 migration

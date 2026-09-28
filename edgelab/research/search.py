@@ -13,7 +13,8 @@ into deterministic strategy x dataset cells:
   * datasets are never merged or averaged: each cell is one strategy on one dataset.
 
 Identity:
-  search_hash = hash(canonical strategy sources, datasets, period, seed, spec version)
+  search_hash = hash(canonical strategy sources, datasets, period, seed, spec version,
+                     execution config_hash)   (a different config is a different search)
                 (ranking, max_cells and workers are excluded: ranking analyses stored results,
                 max_cells is a safety cap, workers never changes results)
   cell_id     = hash(strategy_id, dataset_id, dataset content_hash, config_hash, search_hash)
@@ -186,12 +187,12 @@ def canonical_search_spec(spec: Mapping) -> dict:
     }
 
 
-def search_hash(spec: Mapping) -> str:
-    return _hash_canonical(canonical_search_spec(spec))
+def search_hash(spec: Mapping, config_hash: str) -> str:
+    return _hash_canonical(canonical_search_spec(spec), config_hash)
 
 
-def _hash_canonical(canon: Mapping) -> str:
-    return hash_obj({k: v for k, v in canon.items() if k not in NOT_HASHED})
+def _hash_canonical(canon: Mapping, config_hash: str) -> str:
+    return hash_obj({**{k: v for k, v in canon.items() if k not in NOT_HASHED}, "config_hash": config_hash})
 
 
 def cell_id(strategy_id: str, dataset_id: str, content_hash: str, config_hash: str, s_hash: str) -> str:
@@ -302,8 +303,8 @@ def plan_search(spec: Mapping, services) -> SearchPlan:
     Raises SearchSpecError on any invalid spec or reference, or when the eligible cells
     exceed max_cells (the search is refused, never truncated)."""
     canon = canonical_search_spec(spec)
-    s_hash = _hash_canonical(canon)
     cfg_hash = services._config_hash()
+    s_hash = _hash_canonical(canon, cfg_hash)
 
     strategies, excluded, ref_counts, iss = _resolve_strategies(canon, services.library)
     n_refs, n_collapsed = ref_counts["references"], ref_counts["collapsed"]

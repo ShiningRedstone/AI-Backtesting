@@ -103,10 +103,11 @@ class TestSearchPlan(unittest.TestCase):
 
     # ------------------------------------------------------------------ identity
     def test_search_hash_is_canonical(self):
-        h = search_hash(self.spec())
+        cfg = self.svc._config_hash()
+        h = search_hash(self.spec(), cfg)
         same = {"datasets": [self.cfd, self.fut], "strategies": {"ids": [self.rsi, self.ema, self.rsi]},
                 "workers": 4, "ranking": {"metric": "expectancy_r"}}
-        self.assertEqual(search_hash(same), h)                              # order, duplicates, workers, defaults
+        self.assertEqual(search_hash(same, cfg), h)                              # order, duplicates, workers, defaults
         self.assertEqual(canonical_search_spec(same)["strategies"]["ids"], sorted([self.ema, self.rsi]))
         for change in ({"ranking": {"metric": "profit_factor"}},            # downstream analysis of results
                        {"ranking": {"min_sample_label": "ADEQUATE SAMPLE"}},
@@ -114,17 +115,34 @@ class TestSearchPlan(unittest.TestCase):
                        {"max_cells": 5}, {"max_cells": 99999},              # a safety cap, not an input
                        {"workers": 1}, {"workers": 16}):                    # never changes results
             with self.subTest(same=change):
-                self.assertEqual(search_hash(self.spec(**change)), h)
+                self.assertEqual(search_hash(self.spec(**change), cfg), h)
                 self.assertEqual(plan_search(self.spec(**change), self.svc).search_id,
                                  plan_search(self.spec(), self.svc).search_id)
         for change in ({"datasets": [self.fut]}, {"seed": 1}, {"period": "common"},
                        {"strategies": {"ids": [self.ema]}}, {"strategies": {"families": [self.ema_family]}},
                        {"period": {"start": "2024-03-11T00:00:00Z", "end": "2024-03-15T00:00:00Z"}}):
             with self.subTest(different=change):
-                self.assertNotEqual(search_hash(self.spec(**change)), h)
+                self.assertNotEqual(search_hash(self.spec(**change), cfg), h)
         p1 = {"start": "2024-03-11T00:00:00Z", "end": "2024-03-15T00:00:00Z"}
         p2 = {"start": "2024-03-10T19:00:00-05:00", "end": "2024-03-15T01:00:00+01:00"}
-        self.assertEqual(search_hash(self.spec(period=p1)), search_hash(self.spec(period=p2)))
+        self.assertEqual(search_hash(self.spec(period=p1), cfg), search_hash(self.spec(period=p2), cfg))
+        self.assertEqual(plan_search(self.spec(), self.svc).search_hash, h)
+
+    def test_config_is_part_of_the_search_identity(self):
+        cfg = self.svc._config_hash()
+        self.assertNotEqual(search_hash(self.spec(), cfg), search_hash(self.spec(), "another-config"))
+        other = Services(cfg={**self.svc.cfg, "sample_size": {"min_trades": 7, "preferred_trades": 70}},
+                         root=self.root)
+        try:
+            self.assertNotEqual(other._config_hash(), cfg)
+            a, b = plan_search(self.spec(), self.svc), plan_search(self.spec(), other)
+            self.assertNotEqual((a.search_hash, a.search_id), (b.search_hash, b.search_id))
+            self.assertEqual(b.search_hash, search_hash(self.spec(), other._config_hash()))
+            self.assertTrue(set(c["cell_id"] for c in a.cells).isdisjoint(c["cell_id"] for c in b.cells))
+            same = plan_search({**self.spec(), "ranking": {"metric": "net_r"}, "max_cells": 7, "workers": 2}, other)
+            self.assertEqual(same.search_id, b.search_id)
+        finally:
+            other.store.close()
 
     def test_cells_are_deterministic_and_stable(self):
         a = plan_search(self.spec(), self.svc)
