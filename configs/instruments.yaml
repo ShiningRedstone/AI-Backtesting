@@ -18,6 +18,17 @@ instruments:
         description: "WTI Crude Oil", contract_months: all}
   GC:  {exchange: COMEX, tick_size: 0.10, tick_value: 10.00, point_value: 100,  calendar: CME_GLOBEX_COMMODITY,
         description: "Gold", contract_months: GJMQVZ}
-  # CFD fallback: broker-specific. Values below assume 1 unit = $1/point; set to YOUR broker's spec.
-  NAS100_CFD: {exchange: OTC, asset_class: cfd, tick_size: 0.1, tick_value: 0.1, point_value: 1,
-               calendar: CME_EQUITY, description: "Nasdaq-100 CFD (broker-specific; verify)"}
+  # ---- CFDs (Phase 2) -------------------------------------------------------------------
+  # CFD contract specs are BROKER-SPECIFIC. Convention used here: 1 size unit = 1 currency
+  # unit per index point (point_value 1), priced on a 0.01 grid. Map broker lots to units
+  # in your broker profile. The different Nasdaq-100 CFD symbols are separate instruments:
+  # some track the cash index, some the futures price (basis!) - never merged.
+  NAS100_CFD: {exchange: OTC, asset_class: cfd, tick_size: 0.01, tick_value: 0.01, point_value: 1,
+               min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: CME_EQUITY,
+               description: "Nasdaq-100 CFD (broker-specific spec; verify)"}
+  US100_CFD:  {exchange: OTC, asset_class: cfd, tick_size: 0.01, tick_value: 0.01, point_value: 1,
+               min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: CME_EQUITY,
+               description: "US Tech 100 CFD (broker-specific spec; verify)"}
+  NQ_CFD:     {exchange: OTC, asset_class: cfd, tick_size: 0.01, tick_value: 0.01, point_value: 1,
+               min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: CME_EQUITY,
+               description: "CFD referencing Nasdaq-100 futures (broker-specific; verify)"}

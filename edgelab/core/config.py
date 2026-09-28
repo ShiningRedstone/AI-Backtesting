@@ -27,7 +27,8 @@ DEFAULT_CONFIG_DIR = PROJECT_ROOT / "configs"
 
 # Files merged (in this order) into one config tree. Top-level keys must not collide.
 CONFIG_FILES = ("data.yaml", "instruments.yaml", "costs.yaml", "backtest.yaml",
-                "storage.yaml", "logging.yaml")
+                "storage.yaml", "logging.yaml", "sessions.yaml", "features.yaml",
+                "import_profiles.yaml")
 
 
 class ConfigError(ValueError):
@@ -125,6 +126,13 @@ def validate_config(cfg: Mapping) -> None:
                 raise ConfigError(f"instruments.{sym} missing '{k}'")
     if "default" not in _get(cfg, ("costs",)):
         raise ConfigError("costs.default block is required")
+    for name, w in (cfg.get("sessions") or {}).items():
+        for k in ("timezone", "start", "end"):
+            if k not in w:
+                raise ConfigError(f"sessions.{name} missing '{k}'")
+    for i, spec in enumerate((cfg.get("features") or {}).get("default_set", []) or []):
+        if "id" not in spec:
+            raise ConfigError(f"features.default_set[{i}] missing 'id'")
 
 
 def get_secret(name: str, required: bool = True) -> str | None:

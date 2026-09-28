@@ -34,6 +34,7 @@ SCHEMA = [
         strategy_id TEXT, dataset_id TEXT, config_hash TEXT, trades_hash TEXT, record_json TEXT)""",
     """CREATE TABLE IF NOT EXISTS metrics (run_id TEXT, scope TEXT, metric TEXT, value DOUBLE,
         n BIGINT)""",
+    """CREATE TABLE IF NOT EXISTS dataset_reports (dataset_id TEXT PRIMARY KEY, report_json TEXT)""",
 ]
 TS_COLS = ("signal_ts", "entry_ts", "exit_ts")
 
@@ -67,33 +68,63 @@ class ResultStore(ABC):
         return f"{prefix}{seq:05d}"
 
     # --- datasets --------------------------------------------------------------
-    def save_dataset(self, manifest: DatasetManifest, bars: BarArrays) -> None:
+    def save_dataset(self, manifest: DatasetManifest, bars: BarArrays, report: Any = None) -> bool:
+        """Store an immutable validated dataset. Returns False if it already existed (same content)."""
         if self._query("SELECT 1 FROM datasets WHERE dataset_id = ?", (manifest.dataset_id,)):
             existing = self._query("SELECT content_hash FROM datasets WHERE dataset_id = ?",
                                    (manifest.dataset_id,))[0][0]
             if existing != manifest.content_hash:
                 raise ValueError(f"dataset_id {manifest.dataset_id} exists with different content")
-            return
+            return False
         df = pd.DataFrame({"dataset_id": manifest.dataset_id, "ts_ns": bars.ts_ns,
                            "open": bars.open, "high": bars.high, "low": bars.low,
                            "close": bars.close, "volume": bars.volume})
+        if bars.spread is not None:
+            df["spread"] = bars.spread
         self._write_bars(manifest.dataset_id, df)
         self._exec("INSERT INTO datasets VALUES (?, ?, ?, ?)",
                    (manifest.dataset_id, manifest.content_hash, json.dumps(manifest.to_dict()),
                     datetime.now(timezone.utc).isoformat()))
+        if report is not None:
+            self._exec("INSERT INTO dataset_reports VALUES (?, ?)",
+                       (manifest.dataset_id, json.dumps(report.to_dict(), default=str)))
+        return True
 
     def load_dataset(self, dataset_id: str, tf_minutes: int) -> tuple[DatasetManifest, BarArrays]:
         rows = self._query("SELECT manifest_json FROM datasets WHERE dataset_id = ?", (dataset_id,))
         if not rows:
             raise KeyError(dataset_id)
-        manifest = DatasetManifest(**json.loads(rows[0][0]))
+        manifest = DatasetManifest.from_dict(json.loads(rows[0][0]))
         df = self._read_bars(dataset_id)
+        spread = None
+        if manifest.has_spread and "spread" in df.columns:
+            spread = pd.to_numeric(df["spread"], errors="coerce").to_numpy(float)
+        vol = pd.to_numeric(df["volume"], errors="coerce").to_numpy(float)
         bars = BarArrays(df["ts_ns"].to_numpy(np.int64), df["open"].to_numpy(float),
                          df["high"].to_numpy(float), df["low"].to_numpy(float),
-                         df["close"].to_numpy(float), df["volume"].to_numpy(float), tf_minutes)
+                         df["close"].to_numpy(float), vol, tf_minutes, spread)
         if bars.content_hash() != manifest.content_hash:
             raise ValueError(f"dataset {dataset_id}: stored bars do not match manifest hash")
         return manifest, bars
+
+    def list_datasets(self) -> list[dict]:
+        """Manifests of all stored datasets (for the Data Center)."""
+        rows = self._query("SELECT manifest_json FROM datasets ORDER BY dataset_id")
+        return [DatasetManifest.from_dict(json.loads(r[0])).to_dict() for r in rows]
+
+    def get_manifest(self, dataset_id: str) -> DatasetManifest:
+        rows = self._query("SELECT manifest_json FROM datasets WHERE dataset_id = ?", (dataset_id,))
+        if not rows:
+            raise KeyError(dataset_id)
+        return DatasetManifest.from_dict(json.loads(rows[0][0]))
+
+    def get_report(self, dataset_id: str) -> dict | None:
+        rows = self._query("SELECT report_json FROM dataset_reports WHERE dataset_id = ?", (dataset_id,))
+        return json.loads(rows[0][0]) if rows else None
+
+    def find_by_content_hash(self, content_hash: str) -> list[str]:
+        return [r[0] for r in self._query("SELECT dataset_id FROM datasets WHERE content_hash = ?",
+                                          (content_hash,))]
 
     # --- runs --------------------------------------------------------------------
     def save_run(self, run_id: str, record: dict, trades: pd.DataFrame, metrics: dict) -> None:
@@ -158,7 +189,17 @@ class SQLiteStore(ResultStore):
         for s in SCHEMA:
             self.con.execute(s.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER"))
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_bars ON bars(dataset_id, ts_ns)")
+        self._add_missing_columns("bars", {"spread": "REAL"})   # Phase 2 migration
         self.con.commit()
+
+    def _columns(self, name):
+        return [r[1] for r in self.con.execute(f"PRAGMA table_info({name})").fetchall()]
+
+    def _add_missing_columns(self, name, wanted: dict):
+        have = set(self._columns(name))
+        for col, typ in wanted.items():
+            if col not in have:
+                self.con.execute(f'ALTER TABLE {name} ADD COLUMN "{col}" {typ}')
 
     def _exec(self, sql, params=()):
         self.con.execute(sql, params)
@@ -172,6 +213,9 @@ class SQLiteStore(ResultStore):
         return self.con.execute(sql, params).fetchall()
 
     def _append_table(self, name, df):
+        if self._has_table(name):   # schema evolution: new result columns are added, never dropped
+            self._add_missing_columns(name, {c: "REAL" if df[c].dtype.kind in "fiub" else "TEXT"
+                                             for c in df.columns})
         df.to_sql(name, self.con, if_exists="append", index=False, chunksize=50_000)
         self.con.commit()
 
@@ -185,7 +229,7 @@ class SQLiteStore(ResultStore):
         self._append_table("bars", df)
 
     def _read_bars(self, dataset_id):
-        return pd.read_sql_query("SELECT ts_ns, open, high, low, close, volume FROM bars "
+        return pd.read_sql_query("SELECT ts_ns, open, high, low, close, volume, spread FROM bars "
                                  "WHERE dataset_id = ? ORDER BY ts_ns", self.con, params=(dataset_id,))
 
     def close(self):
@@ -224,6 +268,12 @@ class DuckDBStore(ResultStore):
     def _append_table(self, name, df):
         self.con.register("_tmp_df", df)
         self.con.execute(f"CREATE TABLE IF NOT EXISTS {name} AS SELECT * FROM _tmp_df WHERE false")
+        have = {r[0] for r in self.con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", [name]).fetchall()}
+        for c in df.columns:
+            if c not in have:
+                typ = "DOUBLE" if df[c].dtype.kind in "fiub" else "VARCHAR"
+                self.con.execute(f'ALTER TABLE {name} ADD COLUMN "{c}" {typ}')
         self.con.execute(f"INSERT INTO {name} BY NAME SELECT * FROM _tmp_df")
         self.con.unregister("_tmp_df")
 
@@ -244,8 +294,8 @@ class DuckDBStore(ResultStore):
         self.con.unregister("_bars_df")
 
     def _read_bars(self, dataset_id):
-        return self.con.execute(f"SELECT ts_ns, open, high, low, close, volume FROM "
-                                f"read_parquet('{self._pq(dataset_id)}') ORDER BY ts_ns").df()
+        return self.con.execute(f"SELECT * FROM read_parquet('{self._pq(dataset_id)}') "
+                                "ORDER BY ts_ns").df()
 
     def close(self):
         self.con.close()

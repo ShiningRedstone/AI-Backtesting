@@ -8,56 +8,182 @@ triggers on, cost sensitivity is exact post hoc:
 
 The engine stores ``cost_usd_base`` (1x) on every trade so analytics can
 produce the 0.5x/1x/1.5x/2x/3x table without re-running the backtest.
+
+Phase 2 (CFD readiness):
+  * ``status`` records where the numbers came from: ``assumed`` (placeholder you
+    chose), ``broker_verified`` (checked against a real schedule), or
+    ``unconfigured``. Unconfigured profiles REFUSE to build a cost model - the
+    engine never invents broker numbers.
+  * ``slippage_unit`` = ticks | points (CFD feeds often have tiny ticks).
+  * ``spread_source`` = fixed (``spread_points``) | dataset (per-bar ``spread``
+    column: the average of the entry-bar and exit-bar spread is charged once
+    per round trip, which is the correct total whether prices are bid-, ask- or
+    mid-based).
+  * Overnight financing: ``financing_mode: annual_rate`` charges
+    notional x rate / day_count for every rollover instant the position is held
+    through (``triple_rollover_weekday`` counts 3). Rates may be negative (credit).
 """
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from typing import Mapping
+
+import pandas as pd
 
 from edgelab.instruments import Instrument
 
 ORDER_TYPES = ("market", "stop", "limit")
+COST_STATUSES = ("assumed", "broker_verified", "unconfigured", "zero_for_testing")
+_NON_NEGATIVE = ("commission_per_side", "fees_per_side", "slippage_ticks_market",
+                 "slippage_ticks_stop", "slippage_ticks_limit", "spread_points", "multiplier",
+                 "financing_day_count")
+
+
+class CostConfigError(ValueError):
+    """A cost model was requested for a profile that has no real numbers."""
 
 
 @dataclass(frozen=True)
 class CostModel:
-    commission_per_side: float = 0.0       # $ per contract per side
+    commission_per_side: float = 0.0       # $ per contract/unit per side
     fees_per_side: float = 0.0             # exchange + clearing + NFA, $ per contract per side
-    slippage_ticks_market: float = 0.0     # adverse ticks on market fills
-    slippage_ticks_stop: float = 0.0       # adverse ticks on stop fills (entries and stop-losses)
+    slippage_ticks_market: float = 0.0     # adverse slippage on market fills (see slippage_unit)
+    slippage_ticks_stop: float = 0.0       # adverse slippage on stop fills (entries and stop-losses)
     slippage_ticks_limit: float = 0.0      # usually 0: limits fill at price or not at all
     spread_points: float = 0.0             # full bid/ask spread in points (CFDs); half per side
     multiplier: float = 1.0                # scenario scaling of ALL costs
+    # ---- Phase 2 ----
+    slippage_unit: str = "ticks"           # ticks | points
+    spread_source: str = "fixed"           # fixed | dataset
+    financing_mode: str = "none"           # none | annual_rate
+    financing_long_rate: float = 0.0       # annual; + = cost, - = credit
+    financing_short_rate: float = 0.0
+    financing_day_count: float = 365.0
+    rollover_time: str = "17:00"
+    rollover_timezone: str = "America/New_York"
+    triple_rollover_weekday: int | None = None   # 0=Mon .. 6=Sun; e.g. 2 for Wednesday
+    status: str = "assumed"
+    profile: str = ""
 
     def __post_init__(self):
-        for k, v in asdict(self).items():
-            if v < 0:
+        for k in _NON_NEGATIVE:
+            if getattr(self, k) < 0:
                 raise ValueError(f"cost field {k} must be >= 0")
+        if self.slippage_unit not in ("ticks", "points"):
+            raise ValueError("slippage_unit must be ticks|points")
+        if self.spread_source not in ("fixed", "dataset"):
+            raise ValueError("spread_source must be fixed|dataset")
+        if self.financing_mode not in ("none", "annual_rate"):
+            raise ValueError("financing_mode must be none|annual_rate")
+        if self.status not in COST_STATUSES:
+            raise ValueError(f"status must be one of {COST_STATUSES}")
 
+    # ---- slippage ----------------------------------------------------------------------
     def slippage_ticks(self, order_type: str) -> float:
+        """Raw configured slippage for an order type (in ``slippage_unit``)."""
         return {"market": self.slippage_ticks_market, "stop": self.slippage_ticks_stop,
                 "limit": self.slippage_ticks_limit}[order_type]
 
+    def slippage_points(self, order_type: str, inst: Instrument) -> float:
+        raw = self.slippage_ticks(order_type)
+        return raw if self.slippage_unit == "points" else raw * inst.tick_size
+
+    # ---- round trip --------------------------------------------------------------------
     def round_trip_base(self, entry_type: str, exit_type: str, contracts: float,
-                        inst: Instrument) -> dict:
-        """Costs at 1x for one round trip, in dollars, by component."""
-        slip_ticks = self.slippage_ticks(entry_type) + self.slippage_ticks(exit_type)
+                        inst: Instrument, spread_points: float | None = None) -> dict:
+        """Costs at 1x for one round trip, in dollars, by component.
+        ``spread_points`` overrides the fixed spread (dataset spread mode)."""
+        slip_pts = self.slippage_points(entry_type, inst) + self.slippage_points(exit_type, inst)
+        spread = self.spread_points if spread_points is None else spread_points
         return {
             "commission_usd": 2 * self.commission_per_side * contracts,
             "fees_usd": 2 * self.fees_per_side * contracts,
-            "slippage_usd": slip_ticks * inst.tick_value * contracts,
-            "spread_usd": self.spread_points * inst.point_value * contracts,
-            "slippage_ticks": slip_ticks,
+            "slippage_usd": slip_pts * inst.point_value * contracts,
+            "spread_usd": spread * inst.point_value * contracts,
+            "slippage_ticks": slip_pts / inst.tick_size,
         }
+
+    # ---- financing ---------------------------------------------------------------------
+    def rollovers_held(self, entry_ts_ns: int, exit_ts_ns: int) -> int:
+        """Weighted count of rollover instants r with entry < r <= exit."""
+        if self.financing_mode == "none" or exit_ts_ns <= entry_ts_ns:
+            return 0
+        tz = self.rollover_timezone
+        entry = pd.Timestamp(int(entry_ts_ns), tz="UTC").tz_convert(tz)
+        exit_ = pd.Timestamp(int(exit_ts_ns), tz="UTC").tz_convert(tz)
+        hh, mm = (int(x) for x in self.rollover_time.split(":"))
+        d = entry.normalize().tz_localize(None).date() - timedelta(days=1)
+        last = exit_.normalize().tz_localize(None).date()
+        count = 0
+        while d <= last:
+            r = pd.Timestamp(d).replace(hour=hh, minute=mm).tz_localize(tz, nonexistent="shift_forward",
+                                                                        ambiguous=True)
+            if entry < r <= exit_ and d.weekday() < 5:
+                count += 3 if self.triple_rollover_weekday == d.weekday() else 1
+            d += timedelta(days=1)
+        return count
+
+    def financing_usd(self, direction: int, entry_price: float, contracts: float,
+                      inst: Instrument, entry_ts_ns: int, exit_ts_ns: int) -> float:
+        n = self.rollovers_held(entry_ts_ns, exit_ts_ns)
+        if n == 0:
+            return 0.0
+        rate = self.financing_long_rate if direction > 0 else self.financing_short_rate
+        notional = abs(entry_price) * inst.point_value * contracts
+        return notional * rate / self.financing_day_count * n
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None = None) -> CostModel:
+_REQUIRED_WHEN_CONFIGURED = ("commission_per_side", "slippage_ticks_market", "slippage_ticks_stop")
+
+
+def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None = None,
+                           provider: str | None = None, allow_unconfigured: bool = False) -> CostModel:
+    """Resolve costs: ``costs.default`` <- ``costs.symbols.<SYMBOL>`` <-
+    ``costs.symbols.<SYMBOL>.providers.<PROVIDER>``.
+
+    A resolved profile with ``status: unconfigured`` raises CostConfigError listing what
+    to fill in - unless ``allow_unconfigured`` (plumbing tests only), which returns an
+    all-zero model labelled ``zero_for_testing`` so no result can be mistaken for real.
+    """
     costs = cfg["costs"]
-    merged = {**costs["default"], **(costs.get("symbols", {}) or {}).get(symbol, {})}
+    sym = dict((costs.get("symbols", {}) or {}).get(symbol, {}) or {})
+    prov_blocks = sym.pop("providers", {}) or {}
+    merged = {**costs["default"], **sym}
+    profile = symbol
+    if provider and provider in prov_blocks:
+        merged.update(prov_blocks[provider])
+        profile = f"{symbol}@{provider}"
+    status = merged.pop("status", "assumed")
+    notes = merged.pop("notes", None)  # documentation only
+    if status == "unconfigured" or any(merged.get(k) is None for k in _REQUIRED_WHEN_CONFIGURED):
+        if allow_unconfigured:
+            return CostModel(status="zero_for_testing", profile=profile,
+                             multiplier=float(1.0 if multiplier is None else multiplier))
+        missing = [k for k, v in merged.items() if v is None]
+        raise CostConfigError(
+            f"cost profile '{profile}' is unconfigured{f' ({notes})' if notes else ''}. "
+            f"Set real broker values in configs/costs.yaml (costs.symbols.{symbol}"
+            f"{'.providers.' + provider if provider else ''}): {missing or 'status: assumed|broker_verified'}")
+    if merged.get("spread_points") is None:
+        if merged.get("spread_source", "fixed") != "dataset":
+            raise CostConfigError(f"cost profile '{profile}': set spread_points or spread_source: dataset")
+        merged["spread_points"] = 0.0
+    merged = {k: v for k, v in merged.items() if v is not None}
     if multiplier is None:
         multiplier = cfg.get("backtest", {}).get("cost_multiplier", 1.0)
     merged["multiplier"] = float(multiplier)
-    return CostModel(**{k: float(v) for k, v in merged.items()})
+    str_fields = {"slippage_unit", "spread_source", "financing_mode", "rollover_time", "rollover_timezone"}
+    kw = {}
+    for k, v in merged.items():
+        if k in str_fields:
+            kw[k] = str(v)
+        elif k == "triple_rollover_weekday":
+            kw[k] = None if v is None else int(v)
+        else:
+            kw[k] = float(v)
+    return CostModel(status=status, profile=profile, **kw)

@@ -32,10 +32,16 @@ def resample_bars(df: pd.DataFrame, calendar: SessionCalendar, tf_minutes: int) 
     step = np.int64(tf_minutes) * NS_PER_MIN
     bucket = sess_open + (since // step) * step
     g = bars.assign(_b=bucket).groupby("_b", sort=True)
+    size = g.size()
+    # Volume is only defined when EVERY sub-bar has it. pandas' sum() would turn an all-NaN
+    # bucket into 0.0 and a partially-missing bucket into an under-count (fixed in Phase 2).
+    vol = g["volume"].sum(min_count=1).where(g["volume"].count() == size)
     out = pd.DataFrame({
         "open": g["open"].first(), "high": g["high"].max(), "low": g["low"].min(),
-        "close": g["close"].last(), "volume": g["volume"].sum(), "n_subbars": g.size(),
+        "close": g["close"].last(), "volume": vol, "n_subbars": size,
     })
+    if "spread" in bars.columns:   # mean spread of the sub-bars; NaN if any sub-bar lacks it
+        out["spread"] = g["spread"].mean().where(g["spread"].count() == size)
     out.insert(0, "ts", pd.DatetimeIndex(out.index.to_numpy().astype("datetime64[ns]")).tz_localize("UTC"))
     return out.reset_index(drop=True)
 

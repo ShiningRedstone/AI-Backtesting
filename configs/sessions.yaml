@@ -1,0 +1,21 @@
+# Named session windows. Stored timestamps are UTC; membership is evaluated in each window's
+# own IANA timezone, so DST is handled per window (London and New York change on different dates).
+# A bar belongs to a window if its OPEN time (local) is in [start, end). end < start wraps midnight.
+# `weekdays` refers to the local weekday on which the session STARTS. All windows are conventions:
+# edit or add freely - feature identities include the resolved definition.
+sessions:
+  NY_0900_1000: {timezone: America/New_York, start: "09:00", end: "10:00"}
+  NY_1000_1100: {timezone: America/New_York, start: "10:00", end: "11:00"}
+  NY_0930_1030: {timezone: America/New_York, start: "09:30", end: "10:30"}
+  NY_0930_1100: {timezone: America/New_York, start: "09:30", end: "11:00"}
+  NY_1100_1200: {timezone: America/New_York, start: "11:00", end: "12:00"}
+  NY_AM:        {timezone: America/New_York, start: "09:30", end: "12:00"}
+  NY_PM:        {timezone: America/New_York, start: "12:00", end: "16:00"}
+  NY_RTH:       {timezone: America/New_York, start: "09:30", end: "16:00"}
+  LONDON:       {timezone: Europe/London,    start: "08:00", end: "16:30"}
+  ASIA_TOKYO:   {timezone: Asia/Tokyo,       start: "09:00", end: "15:00"}
+  ASIA_NY_EVENING:                       # "Asia" as commonly defined in NY time; wraps midnight
+    timezone: America/New_York
+    start: "19:00"
+    end: "02:00"
+    weekdays: [sun, mon, tue, wed, thu]

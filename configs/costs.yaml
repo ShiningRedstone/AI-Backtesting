@@ -17,5 +17,32 @@ costs:
     RTY: {commission_per_side: 1.50, fees_per_side: 0.70}
     CL:  {commission_per_side: 1.50, fees_per_side: 0.80}
     GC:  {commission_per_side: 1.50, fees_per_side: 0.80}
-    NAS100_CFD: {commission_per_side: 0.0, fees_per_side: 0.0, slippage_ticks_market: 2,
-                 slippage_ticks_stop: 2, spread_points: 1.0}
+    # ---- CFDs: deliberately UNCONFIGURED. The engine refuses to run with these until you
+    # enter your broker's real numbers (no broker figures are invented here). Either set a
+    # fixed spread (spread_points) or use the dataset's own spread column (spread_source: dataset).
+    # Per-provider overrides live under `providers:` so two feeds of the same symbol can carry
+    # different cost assumptions. Example (fill in YOUR numbers, then set status):
+    #   NAS100_CFD:
+    #     providers:
+    #       MYBROKER:
+    #         status: broker_verified          # or: assumed
+    #         commission_per_side: <$ per unit per side>
+    #         slippage_unit: points
+    #         slippage_ticks_market: <points>
+    #         slippage_ticks_stop: <points>
+    #         spread_source: dataset           # or fixed + spread_points: <points>
+    #         financing_mode: annual_rate      # overnight holding cost, if you hold overnight
+    #         financing_long_rate: <annual rate, e.g. 0.0725>
+    #         financing_short_rate: <annual rate>
+    #         triple_rollover_weekday: <0-6>
+    NAS100_CFD: &cfd_unconfigured
+      status: unconfigured
+      notes: "CFD costs are broker-specific; none are assumed"
+      slippage_unit: points
+      commission_per_side: null
+      slippage_ticks_market: null
+      slippage_ticks_stop: null
+      spread_points: null
+      providers: {}
+    US100_CFD: *cfd_unconfigured
+    NQ_CFD: *cfd_unconfigured

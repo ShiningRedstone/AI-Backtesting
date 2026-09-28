@@ -1,0 +1,23 @@
+# Import presets for common file layouts. A profile only describes FILE LAYOUT; you still
+# state provider, symbol, instrument, asset type, timezone and price basis explicitly at
+# import time. Always run `inspect` first and confirm against your file.
+import_profiles:
+  generic_csv:               # ts,open,high,low,close[,volume][,spread]
+    delimiter: ","
+    columns: {ts: ts, open: open, high: high, low: low, close: close, volume: volume}
+  mt5_export:                # MetaTrader 5 "Bars" export (tab-separated, <DATE> <TIME> ... <TICKVOL> <VOL> <SPREAD>)
+    delimiter: "\t"
+    date_column: "<DATE>"
+    time_column: "<TIME>"
+    datetime_format: "%Y.%m.%d %H:%M:%S"
+    columns: {open: "<OPEN>", high: "<HIGH>", low: "<LOW>", close: "<CLOSE>", volume: "<TICKVOL>"}
+    volume_type: tick
+    spread_column: "<SPREAD>"
+    spread_multiplier: REQUIRED   # MT5 spread is in broker "points" (price increments): e.g. 0.01
+    source_timezone: REQUIRED     # broker server time, commonly "America/New_York+7h" (verify!)
+  dukascopy_csv:             # "Gmt time,Open,High,Low,Close,Volume" (one side: bid OR ask per file)
+    delimiter: ","
+    columns: {ts: "Gmt time", open: Open, high: High, low: Low, close: Close, volume: Volume}
+    datetime_format: "%d.%m.%Y %H:%M:%S.%f"
+    source_timezone: UTC
+    volume_type: tick             # verify: provider-defined volume measure, not exchange volume

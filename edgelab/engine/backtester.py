@@ -121,6 +121,10 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
     sig = strategy.generate_signals(bars)
     validate_signals(sig, len(bars), order)
 
+    if costs.spread_source == "dataset" and bars.spread is None:
+        raise BacktestError("cost model uses dataset spread, but this dataset has no spread column")
+    if costs.status == "unconfigured":
+        raise BacktestError("cost model is unconfigured")
     requested = bt_cfg.get("same_bar_policy", "conservative")
     pol = FillPolicy(same_bar=requested, fallback=bt_cfg.get("intrabar_fallback", "conservative"),
                      target_gap_fill=bt_cfg.get("gap_fill", {}).get("target", "limit_price"),
@@ -153,7 +157,7 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
         planned_entry = level if order.entry_type != "market" else bars.close[i]
         planned_risk = abs(planned_entry - stop_abs) if not math.isnan(stop_abs) else order.stop_points
         sz = size_trade(sizing, planned_risk, inst)
-        if sz.contracts < 1:
+        if sz.contracts <= 0:
             skipped["SIZE_ZERO"] += 1
             continue
         # --- entry ------------------------------------------------------------------
@@ -184,11 +188,22 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
         # --- costs & R ----------------------------------------------------------------
         n_c = sz.contracts
         exit_type = EXIT_ORDER_TYPE[x["exit_reason"]]
-        base = costs.round_trip_base(e.order_type, exit_type, n_c, inst)
-        base_total = base["commission_usd"] + base["fees_usd"] + base["slippage_usd"] + base["spread_usd"]
+        k_exit = x["exit_bar"]
+        spread_used = None
+        if costs.spread_source == "dataset":
+            sp = 0.5 * (bars.spread[e.bar] + bars.spread[k_exit])
+            if not math.isfinite(sp):
+                raise BacktestError(f"dataset spread missing at bar {e.bar} or {k_exit}; "
+                                    "cannot charge spread for this trade")
+            spread_used = float(sp)
+        base = costs.round_trip_base(e.order_type, exit_type, n_c, inst, spread_points=spread_used)
+        financing = costs.financing_usd(d, e.price, n_c, inst, int(ts_ns[e.bar]),
+                                        int(ts_ns[k_exit] + tf_ns))
+        base_total = (base["commission_usd"] + base["fees_usd"] + base["slippage_usd"]
+                      + base["spread_usd"] + financing)
         m = costs.multiplier
-        entry_slip = costs.slippage_ticks(e.order_type) * tick * m
-        exit_slip = costs.slippage_ticks(exit_type) * tick * m
+        entry_slip = costs.slippage_points(e.order_type, inst) * m
+        exit_slip = costs.slippage_points(exit_type, inst) * m
         gross_usd = d * (x["exit_price_theo"] - e.price) * pv * n_c
         cost_usd = base_total * m
         risk_usd = risk_pts * pv * n_c
@@ -207,6 +222,7 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
             "gross_usd": gross_usd,
             "commission_usd": base["commission_usd"] * m, "fees_usd": base["fees_usd"] * m,
             "slippage_usd": base["slippage_usd"] * m, "spread_usd": base["spread_usd"] * m,
+            "financing_usd": financing * m,
             "cost_usd": cost_usd, "cost_usd_base": base_total, "net_usd": gross_usd - cost_usd,
             "gross_r": gross_usd / risk_usd, "cost_r": cost_usd / risk_usd,
             "cost_r_base": base_total / risk_usd, "net_r": (gross_usd - cost_usd) / risk_usd,
@@ -239,6 +255,7 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
         "max_trades_per_day": max_per_day,
         "sizing": sizing,
         "costs": costs.to_dict(),
+        "cost_status": costs.status,
         "r_unit": "|fill - stop| x point value x contracts (theoretical fill, before costs)",
         "holding_time": "bar resolution (bars_held x timeframe)",
         "excursions": "bar resolution; entry bar included in full",

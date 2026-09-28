@@ -31,12 +31,19 @@ class Instrument:
     contract_months: str = ""
     roll_methodology: str = "unspecified"
     extra: Mapping[str, Any] = field(default_factory=dict)
+    # Phase 2: position-size granularity. Futures: whole contracts (1, 1). CFDs: broker
+    # units/lots, e.g. min 0.1 in steps of 0.1. tick_value is always per 1 size unit.
+    min_size: float = 1.0
+    size_step: float = 1.0
+    underlying: str = ""        # e.g. NDX. Informational grouping only - never used to merge data.
 
     def __post_init__(self):
         if not (self.tick_size > 0 and math.isfinite(self.tick_size)):
             raise InstrumentError(f"{self.symbol}: tick_size must be > 0")
         if not (self.tick_value > 0 and math.isfinite(self.tick_value)):
             raise InstrumentError(f"{self.symbol}: tick_value must be > 0")
+        if not (self.size_step > 0 and self.min_size > 0):
+            raise InstrumentError(f"{self.symbol}: min_size and size_step must be > 0")
 
     @property
     def point_value(self) -> float:
@@ -55,7 +62,8 @@ class Instrument:
 
 def instrument_from_config(symbol: str, meta: Mapping[str, Any]) -> Instrument:
     known = {"tick_size", "tick_value", "calendar", "exchange", "asset_class", "currency",
-             "description", "contract_months", "roll_methodology", "point_value"}
+             "description", "contract_months", "roll_methodology", "point_value",
+             "min_size", "size_step", "underlying"}
     inst = Instrument(
         symbol=symbol,
         tick_size=float(meta["tick_size"]),
@@ -68,6 +76,9 @@ def instrument_from_config(symbol: str, meta: Mapping[str, Any]) -> Instrument:
         contract_months=meta.get("contract_months", ""),
         roll_methodology=meta.get("roll_methodology", "unspecified"),
         extra={k: v for k, v in meta.items() if k not in known},
+        min_size=float(meta.get("min_size", 1.0)),
+        size_step=float(meta.get("size_step", 1.0)),
+        underlying=meta.get("underlying", ""),
     )
     if "point_value" in meta:
         declared = float(meta["point_value"])

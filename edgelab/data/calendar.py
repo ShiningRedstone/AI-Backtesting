@@ -47,6 +47,14 @@ class SessionCalendar:
     holidays: frozenset = field(default_factory=frozenset)          # trading dates closed
     early_closes: Mapping[date, str] = field(default_factory=dict)  # trading date -> "13:00"
 
+    def fingerprint(self) -> str:
+        """Stable hash of the full calendar definition (used in dataset + feature-cache identity)."""
+        from edgelab.core.identity import hash_obj
+        return hash_obj({"name": self.name, "tz": self.timezone, "open": self.session_open,
+                         "close": self.session_close, "weekdays": list(self.trading_weekdays),
+                         "holidays": sorted(str(d) for d in self.holidays),
+                         "early_closes": {str(k): v for k, v in sorted(self.early_closes.items())}})
+
     # ---- derived -------------------------------------------------------------
     @property
     def open_min(self) -> int:

@@ -1,0 +1,23 @@
+features:
+  cache_dir: feature_cache          # relative to storage.root (data/)
+  verify_cache_checksums: true      # re-hash arrays on every disk load (detects corruption)
+  memory_cache_entries: 512
+  # Built automatically after an import (specs whose data requirements are unmet are skipped
+  # and reported, e.g. volume features on a dataset without volume).
+  default_set:
+    - {id: candle}
+    - {id: atr, params: {period: 14}}
+    - {id: ema, params: {period: 20}}
+    - {id: ema, params: {period: 50}}
+    - {id: rsi, params: {period: 14}}
+    - {id: roc, params: {period: 10}}
+    - {id: vwap, params: {anchor: trading_day}}
+    - {id: volume_stats, params: {period: 20}}
+    - {id: session, params: {session: NY_RTH}}
+    - {id: session, params: {session: NY_0930_1030}}
+    - {id: daily_levels}
+    - {id: swings, params: {left: 3, right: 3}}
+    - {id: range_stats, params: {atr_period: 14, lookback: 20}}
+    - {id: fvg, params: {atr_period: 14}}
+    - {id: atr, params: {period: 14}, timeframe: 15m}
+    - {id: ema, params: {period: 20}, timeframe: 60m}

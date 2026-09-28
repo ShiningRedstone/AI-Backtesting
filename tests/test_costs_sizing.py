@@ -68,9 +68,14 @@ class TestCosts(unittest.TestCase):
         self.assertAlmostEqual(cost_r(5) / cost_r(50), 10.0)
 
     def test_cfd_spread(self):
+        # Phase 2 change: the spread now comes from an explicit model, because the Phase 1
+        # config value (1.0) was an invented broker number. The spread math is unchanged.
         cfd = INSTRUMENTS["NAS100_CFD"]
-        cm = cost_model_from_config(CFG, "NAS100_CFD")
+        cm = CostModel(spread_points=1.0)
         self.assertAlmostEqual(cm.round_trip_base("market", "market", 1, cfd)["spread_usd"], 1.0)
+        from edgelab.engine.costs import CostConfigError
+        with self.assertRaises(CostConfigError):
+            cost_model_from_config(CFG, "NAS100_CFD")   # no broker numbers configured
 
     def test_negative_cost_rejected(self):
         with self.assertRaises(ValueError):

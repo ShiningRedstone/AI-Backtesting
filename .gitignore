@@ -5,3 +5,5 @@ data/*.sqlite
 data/*.duckdb
 data/processed/parquet/
 reports/output/
+data/feature_cache/
+reports/imports/

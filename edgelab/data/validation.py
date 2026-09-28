@@ -156,6 +156,27 @@ def validate_bars(df: pd.DataFrame, instrument: Instrument, calendar: SessionCal
     negv = v < 0
     add(Check("volume_non_negative", "FAIL" if negv.any() else "PASS", int(negv.sum()),
               "negative volume", _fmt(ts[negv])))
+    nanv = ~np.isfinite(v)
+    if nanv.all():
+        add(Check("volume_availability", "INFO", n, "no volume in dataset: volume-based "
+                  "features (VWAP, relative volume) will be unavailable"))
+    elif nanv.any():
+        add(Check("volume_availability", "WARN", int(nanv.sum()),
+                  "volume missing on some bars only (inconsistent feed); volume features refuse "
+                  "to run until resolved", _fmt(ts[nanv])))
+    else:
+        add(Check("volume_availability", "PASS", 0, "volume present on every bar"))
+
+    # --- spread (optional column, CFDs) ---------------------------------------------
+    if "spread" in bars.columns:
+        sp = bars["spread"].to_numpy()
+        neg = sp < 0
+        nan_sp = ~np.isfinite(sp)
+        add(Check("spread_non_negative", "FAIL" if neg.any() else "PASS", int(neg.sum()),
+                  "negative spread (bid > ask?)", _fmt(ts[neg])))
+        add(Check("spread_availability", "WARN" if nan_sp.any() else "PASS", int(nan_sp.sum()),
+                  "bars without a spread value; dataset-spread cost mode refuses trades on them",
+                  _fmt(ts[nan_sp])))
 
     # --- tick alignment ---------------------------------------------------------
     px = np.c_[o, h, l, c]
@@ -276,11 +297,12 @@ def validate_and_freeze(df: pd.DataFrame, instrument: Instrument, calendar: Sess
                         timeframe: str, tf_minutes: int, provider: str, dataset_id: str,
                         thresholds: Mapping[str, Any] | None = None,
                         source_detail: dict | None = None, contract: str = "unspecified",
-                        adjustment: str = "unspecified") -> ValidatedDataset:
+                        adjustment: str = "unspecified", **manifest_fields) -> ValidatedDataset:
     """Validate raw data, apply the (non-fabricating) cleaning policy, re-validate, freeze.
 
     Raises DataIntegrityError if the raw data has unfixable problems (conflicting
     duplicates, bad OHLC, ...) or if the cleaned data still fails.
+    ``manifest_fields`` sets Phase 2 provenance fields (asset_type, volume_type, ...).
     """
     raw = validate_bars(df, instrument, calendar, tf_minutes, thresholds)
     unfixable = [c for c in raw.checks
@@ -301,5 +323,9 @@ def validate_and_freeze(df: pd.DataFrame, instrument: Instrument, calendar: Sess
         start=report.start, end=report.end, n_bars=len(bars), content_hash=bars.content_hash(),
         source_detail=detail, contract=contract, adjustment=adjustment,
         missing_bars=report.missing_bars, duplicate_bars=raw.duplicate_bars,
-        quality_status=report.status)
+        quality_status=report.status, calendar=calendar.name,
+        calendar_fingerprint=calendar.fingerprint(),
+        has_spread=bars.spread is not None, **manifest_fields)
+    if manifest.volume_type == "unknown" and not bars.has_volume:
+        manifest.volume_type = "none"
     return ValidatedDataset(bars, instrument, calendar, report, manifest, _token=_TOKEN)

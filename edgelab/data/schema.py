@@ -23,6 +23,9 @@ from edgelab.core.identity import hash_arrays
 
 BAR_COLUMNS = ("ts", "open", "high", "low", "close", "volume")
 PRICE_COLUMNS = ("open", "high", "low", "close")
+ASSET_TYPES = ("FUTURE", "CFD", "SPOT", "ETF", "INDEX", "CRYPTO", "FX", "SYNTHETIC", "unspecified")
+VOLUME_TYPES = ("exchange", "tick", "none", "synthetic", "unknown")
+PRICE_BASES = ("bid", "ask", "mid", "last", "unknown")
 
 
 class DataRequiredError(RuntimeError):
@@ -73,10 +76,13 @@ class BarArrays:
     close: np.ndarray
     volume: np.ndarray
     tf_minutes: int
+    spread: np.ndarray | None = None   # optional per-bar spread in price points (Phase 2, CFDs)
 
     def __post_init__(self):
-        for name in ("ts_ns", "open", "high", "low", "close", "volume"):
+        for name in ("ts_ns", "open", "high", "low", "close", "volume", "spread"):
             arr = getattr(self, name)
+            if arr is None:
+                continue
             if arr.flags.writeable:
                 arr = arr.copy()
                 arr.flags.writeable = False
@@ -94,12 +100,15 @@ class BarArrays:
                    low=df["low"].to_numpy(np.float64, copy=True),
                    close=df["close"].to_numpy(np.float64, copy=True),
                    volume=df["volume"].to_numpy(np.float64, copy=True),
-                   tf_minutes=tf_minutes)
+                   tf_minutes=tf_minutes,
+                   spread=(df["spread"].to_numpy(np.float64, copy=True)
+                           if "spread" in df.columns else None))
 
     def head(self, n: int) -> "BarArrays":
         """Truncated view - used by the causality (lookahead) checker."""
         return BarArrays(self.ts_ns[:n], self.open[:n], self.high[:n], self.low[:n],
-                         self.close[:n], self.volume[:n], self.tf_minutes)
+                         self.close[:n], self.volume[:n], self.tf_minutes,
+                         None if self.spread is None else self.spread[:n])
 
     @property
     def ts(self) -> pd.DatetimeIndex:
@@ -109,12 +118,22 @@ class BarArrays:
     def ts_close_ns(self) -> np.ndarray:
         return self.ts_ns + np.int64(self.tf_minutes) * 60_000_000_000
 
+    @property
+    def has_volume(self) -> bool:
+        return bool(len(self.volume)) and bool(np.isfinite(self.volume).all())
+
     def content_hash(self) -> str:
-        return hash_arrays(self.ts_ns, self.open, self.high, self.low, self.close, self.volume)
+        arrays = [self.ts_ns, self.open, self.high, self.low, self.close, self.volume]
+        if self.spread is not None:          # absent spread leaves Phase 1 hashes unchanged
+            arrays.append(self.spread)
+        return hash_arrays(*arrays)
 
     def to_frame(self) -> pd.DataFrame:
-        return pd.DataFrame({"ts": self.ts, "open": self.open, "high": self.high,
-                             "low": self.low, "close": self.close, "volume": self.volume})
+        df = pd.DataFrame({"ts": self.ts, "open": self.open, "high": self.high,
+                           "low": self.low, "close": self.close, "volume": self.volume})
+        if self.spread is not None:
+            df["spread"] = self.spread
+        return df
 
 
 @dataclass
@@ -137,9 +156,50 @@ class DatasetManifest:
     missing_bars: int | None = None
     duplicate_bars: int | None = None
     quality_status: str | None = None
+    # ---- Phase 2 provenance (defaults keep Phase 1 manifests loadable) ----
+    dataset_name: str = ""               # family name, e.g. NAS100_CFD_DUKASCOPY
+    asset_type: str = "unspecified"      # FUTURE | CFD | SYNTHETIC | ...
+    symbol: str = ""                     # provider's own symbol, e.g. USA100IDXUSD
+    source_timezone: str = "unspecified"
+    source_timestamp_convention: str = "unspecified"   # open | close (as delivered)
+    source_file_sha256: str | None = None
+    calendar: str = ""
+    calendar_fingerprint: str = ""
+    volume_type: str = "unknown"         # exchange | tick | none | synthetic | unknown
+    price_basis: str = "unknown"         # bid | ask | mid | last | unknown
+    has_bid_ask: bool = False
+    has_spread: bool = False
+    spread_source: str = "none"          # none | column | bid_ask_close
+    provider_notes: str = ""
+    import_version: str = ""
+    parent_dataset_id: str | None = None  # derived (resampled) datasets point to their source
+    derivation: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def identity(self) -> dict:
+        """Everything that defines the dataset, minus the wall-clock import time."""
+        d = self.to_dict()
+        d.pop("imported_at", None)
+        return d
+
+    def manifest_hash(self) -> str:
+        """Deterministic: re-importing identical input with identical metadata gives the same hash."""
+        from edgelab.core.identity import hash_obj
+        return hash_obj(self.identity())
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DatasetManifest":
+        """Tolerant loader: unknown keys are kept in source_detail, missing keys defaulted."""
+        from dataclasses import fields
+        known = {f.name for f in fields(cls)}
+        kwargs = {k: v for k, v in d.items() if k in known}
+        extra = {k: v for k, v in d.items() if k not in known}
+        if extra:
+            kwargs.setdefault("source_detail", {})
+            kwargs["source_detail"] = {**kwargs["source_detail"], "_unknown_manifest_keys": extra}
+        return cls(**kwargs)
 
 
 def canonicalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -150,6 +210,6 @@ def canonicalize(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"bars missing required columns: {missing}")
     out = df.loc[:, list(BAR_COLUMNS) + [c for c in df.columns if c not in BAR_COLUMNS]].copy()
     out["ts"] = to_utc_ns(out["ts"])
-    for c in PRICE_COLUMNS + ("volume",):
+    for c in PRICE_COLUMNS + ("volume",) + (("spread",) if "spread" in out.columns else ()):
         out[c] = pd.to_numeric(out[c], errors="coerce").astype(np.float64)
     return out.reset_index(drop=True)

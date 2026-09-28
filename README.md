@@ -13,8 +13,8 @@ result under stated assumptions*, not a forecast.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 Foundation | structure, config, logging, data schema + validation gate, synthetic data, store, backtester, tests | **done** |
-| 2 Features | ATR, VWAP, EMA, RSI, volume, sessions, structure, FVG, feature cache | next |
-| 3 Strategy DSL | schema, validator, loader, variations | planned |
+| 2 Features + CFD data | CFD/any-provider import pipeline, dataset metadata/hashes, DST-safe sessions, 14 causal features, multi-timeframe, persistent feature cache, dataset comparison, CFD cost architecture, service layer + CLI | **done** (see CHANGELOG.md for IMPLEMENTED / TESTED / NOT IMPLEMENTED / REQUIRES REAL DATA) |
+| 3 Strategy DSL | schema, validator, loader, variations (Mode A), AI family proposals (Mode B) | next |
 | 4 Research engine | batch/grid/random search, parallelism, benchmarks | planned |
 | 5 Analytics | breakdowns by hour/session/weekday/month/year/event, distributions, rolling | planned |
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
@@ -25,10 +25,12 @@ result under stated assumptions*, not a forecast.
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt          # numpy, pandas, pyyaml (+ duckdb recommended)
-python -m unittest discover -s tests -t .           # 104 tests, ~5 s (DuckDB + slow tests skip unless enabled)
+pip install -r requirements.txt          # numpy, pandas, pyyaml, scipy (+ duckdb recommended)
+python -m unittest discover -s tests -t .           # 219 tests, ~37 s (DuckDB + slow tests skip unless enabled)
 EDGELAB_SLOW_TESTS=1 python -m unittest tests.test_known_answers   # + multi-path bias check (~40 s)
-python scripts/phase1_demo.py                        # end-to-end synthetic demonstration
+python scripts/phase1_demo.py                        # end-to-end synthetic demonstration (Phase 1)
+python scripts/phase2_benchmark.py                   # feature generation / cache benchmark (synthetic)
+python -m edgelab.cli --help                         # data import, datasets, features, feed comparison
 ```
 
 `pytest` also runs the suite unchanged.
@@ -96,6 +98,37 @@ only 69% of 100 rate-matched random-entry controls. Random entries alone produce
 means from −0.5R to +0.5R on different two-month paths. Attractive in-sample numbers are
 cheap, which is why Phases 4–6 exist.
 
+## Phase 2 in one screen
+
+```bash
+# 1. look at a raw provider file (stores nothing): columns, spacing, decimals, hours with data
+python -m edgelab.cli inspect NAS100_M1.csv --profile mt5_export --timeframe 1m \
+    --source-timezone "America/New_York+7h" --spread-multiplier 0.01
+# 2. import: normalize -> validate -> manifest + hashes -> immutable store -> derived TFs -> features
+python -m edgelab.cli import NAS100_M1.csv --profile mt5_export --timeframe 1m \
+    --source-timezone "America/New_York+7h" --spread-multiplier 0.01 \
+    --instrument NAS100_CFD --provider MYBROKER --asset-type CFD --price-basis bid --derive 5m,15m,60m
+python -m edgelab.cli datasets                       # Data Center listing
+python -m edgelab.cli features list                  # Feature Lab catalog (FEATURES.md has the math)
+python -m edgelab.cli compare-feeds <DATASET_A> <DATASET_B>
+```
+
+```python
+from edgelab.features.engine import FeatureEngine
+from edgelab.features.spec import FeatureSpec
+eng = FeatureEngine.for_dataset(ds, sessions, cache)        # ds = a ValidatedDataset
+atr_15m = eng.compute(FeatureSpec.make("atr", {"period": 14}, timeframe="15m")).arrays["atr"]
+```
+
+- Every feature is causal and verified by truncation tests; higher-timeframe values appear only
+  after the higher-timeframe bar is COMPLETE. Definitions, known-at times and edge cases: `FEATURES.md`.
+- Datasets are content-addressed (`NAS100_CFD_MYBROKER_1M_3FA9C1D2E4`) and never merged or
+  overwritten; futures and each CFD feed stay separate. `research/compare.py` runs one strategy on
+  each dataset independently and reports them side by side.
+- CFD cost profiles ship **unconfigured**: the engine refuses to run a CFD backtest until you enter
+  your broker's numbers (`CONFIG.md`). No broker figures are invented.
+- Import guide and expected file schema: `DATA_IMPORT.md`.
+
 ## Environment notes
 
 Built offline with Python 3.12, numpy 2.4, pandas 3.0. `duckdb`, `pyarrow`, `numba`,
@@ -112,6 +145,17 @@ DATA REQUIRED:
   Timeframe:   1m (higher timeframes are built by session-anchored resampling)
   Credentials: vendor API key via environment variable
 Also: CME holiday / early-close calendar; economic-event calendar for event analysis (Phase 5)
+
+DATA REQUIRED (CFD research):
+  Provider:    your CFD broker's history export, or a CFD data vendor
+  Instrument:  e.g. NAS100 / US100 / USTEC (whatever your broker calls it; each is a separate dataset)
+  Date range:  as many years as available
+  Timeframe:   1m preferred
+  Must know:   the file's timezone / server clock, whether timestamps mark bar open or close,
+               whether prices are bid, ask or mid, what the volume column means, spread units
+  Costs:       your broker's spread (or a spread column), commission, financing rates
 ```
+
+No real market data has been imported in this build. All results so far are on synthetic data.
 
 See `ARCHITECTURE.md` for design decisions and `CONFIG.md` for every setting.

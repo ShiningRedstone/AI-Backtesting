@@ -19,7 +19,7 @@ from edgelab.instruments import Instrument
 
 @dataclass(frozen=True)
 class SizingDecision:
-    contracts: int
+    contracts: float          # whole contracts for futures (int-valued), units/lots for CFDs
     risk_per_contract_usd: float
     total_risk_usd: float
     reason: str
@@ -33,19 +33,25 @@ def contracts_for_risk(risk_usd: float, stop_distance_points: float, inst: Instr
     if risk_usd <= 0:
         return SizingDecision(0, math.nan, 0.0, "non-positive risk budget")
     per = stop_distance_points * inst.point_value + cost_per_contract_usd
-    n = int(math.floor(risk_usd / per + 1e-9))
+    step = inst.size_step
+    steps = math.floor(risk_usd / per / step + 1e-9)
+    n = round(steps * step, 10)
+    if step == 1.0:
+        n = int(n)
     reason = "ok"
     if max_contracts is not None and n > max_contracts:
         n, reason = max_contracts, f"capped at max_contracts={max_contracts}"
-    if n == 0:
-        reason = f"1 contract risks ${per:,.2f} > budget ${risk_usd:,.2f}"
+    if n < inst.min_size:
+        n = 0
+        reason = f"{inst.min_size:g} unit(s) risk ${per * inst.min_size:,.2f} > budget ${risk_usd:,.2f}"
     return SizingDecision(n, per, n * per, reason)
 
 
 def size_trade(sizing_cfg: dict, stop_distance_points: float, inst: Instrument) -> SizingDecision:
     mode = sizing_cfg.get("mode", "fixed")
     if mode == "fixed":
-        n = int(sizing_cfg.get("contracts", 1))
+        n = sizing_cfg.get("contracts", 1)
+        n = int(n) if float(n).is_integer() else float(n)
         per = stop_distance_points * inst.point_value
         return SizingDecision(n, per, n * per, "fixed")
     if mode == "risk":

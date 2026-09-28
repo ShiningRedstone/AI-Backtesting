@@ -1,0 +1,58 @@
+EdgeLab Phase 2 feature benchmark (SYNTHETIC data; timings only)
+python 3.12.3, numpy 2.4.4; single process
+
+=== 1m synthetic, 365 calendar days: 360,180 bars (2023-01-03 .. 2024-01-03); data gen+validation 3.0s ===
+feature spec                                     first gen  arrays
+candle()                                              54ms       9
+atr(period=14)                                        22ms       3
+ema(period=20,slope_bars=5)                           18ms       3
+ema(period=50,slope_bars=5)                           18ms       3
+rsi(period=14)                                        22ms       1
+roc(period=10)                                        13ms       2
+vwap(anchor=trading_day)                             183ms       4
+volume_stats(period=20)                              108ms       3
+session(session=NY_RTH)                              477ms      10
+session(session=NY_0930_1030)                        476ms      10
+daily_levels()                                       277ms       9
+swings(left=3,right=3)                               178ms       9
+range_stats(atr_period=14,lookback=20)                87ms       4
+fvg(atr_period=14,fill_rule=wick,max_age_bars=0     3575ms      20
+atr(period=14)@15m                                   814ms       3
+ema(period=20,slope_bars=5)@60m                      796ms       3
+TOTAL first generation (16 specs)                    7.12s      96
+retrieval of all 16 specs:
+  disk, first load in process (cold, verified)     2023 ms
+  disk, checksum-verified (warm, min of 3)          547 ms     13.0x faster than generating
+  disk, no verification  (warm, min of 3)           293 ms     24.3x
+  memory cache, new engine                         43.1 ms      165x
+  same engine (memoized)                           0.01 ms
+feature arrays: 277 MB in memory; 260 MB on disk; process peak RSS so far 774 MB
+per-variant feature fetch (3 specs, warm): 18 us -> 10,000 variants: 0.2s
+
+=== 5m synthetic, 365 calendar days: 72,036 bars (2023-01-03 .. 2024-01-03); data gen+validation 0.9s ===
+feature spec                                     first gen  arrays
+candle()                                              11ms       9
+atr(period=14)                                         6ms       3
+ema(period=20,slope_bars=5)                            5ms       3
+ema(period=50,slope_bars=5)                            4ms       3
+rsi(period=14)                                         5ms       1
+roc(period=10)                                         4ms       2
+vwap(anchor=trading_day)                              40ms       4
+volume_stats(period=20)                               22ms       3
+session(session=NY_RTH)                              106ms      10
+session(session=NY_0930_1030)                         99ms      10
+daily_levels()                                        66ms       9
+swings(left=3,right=3)                                28ms       9
+range_stats(atr_period=14,lookback=20)                15ms       4
+fvg(atr_period=14,fill_rule=wick,max_age_bars=0      589ms      20
+atr(period=14)@15m                                   213ms       3
+ema(period=20,slope_bars=5)@60m                      179ms       3
+TOTAL first generation (16 specs)                    1.39s      96
+retrieval of all 16 specs:
+  disk, first load in process (cold, verified)      537 ms
+  disk, checksum-verified (warm, min of 3)          117 ms     11.9x faster than generating
+  disk, no verification  (warm, min of 3)            65 ms     21.5x
+  memory cache, new engine                          7.8 ms      179x
+  same engine (memoized)                           0.01 ms
+feature arrays: 55 MB in memory; 53 MB on disk; process peak RSS so far 774 MB
+per-variant feature fetch (3 specs, warm): 17 us -> 10,000 variants: 0.2s

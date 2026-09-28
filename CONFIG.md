@@ -36,20 +36,46 @@ A trading date D runs from `session_open` (previous calendar day when it is late
 Per symbol: `tick_size`, `tick_value`, `calendar` (required), plus `exchange`,
 `asset_class`, `currency`, `description`, `contract_months`, `roll_methodology`.
 `point_value` is derived (`tick_value / tick_size`); if stated it must match or loading fails.
-Specs are standard CME values: verify before live use. `NAS100_CFD` is broker-specific.
+Specs are standard CME values: verify before live use.
+
+Phase 2 keys: `min_size` and `size_step` (position granularity; futures `1`/`1` = whole
+contracts, CFDs e.g. `0.01`/`0.01` units; sizing floors to the step and rejects below the
+minimum) and `underlying` (informational grouping, e.g. `NDX`; never used to merge data).
+
+CFD entries (`NAS100_CFD`, `US100_CFD`, `NQ_CFD`) use a convention of 1 unit = 1 currency unit
+per index point on a 0.01 price grid. Your broker's lot size, minimum and step differ: set them.
+Different CFD symbols are different instruments (some track the cash index, some the future).
 
 ## `costs.yaml`
 
-`costs.default` plus per-symbol overrides in `costs.symbols`. All values per contract per side.
+Resolution order: `costs.default` <- `costs.symbols.<SYMBOL>` <- `costs.symbols.<SYMBOL>.providers.<PROVIDER>`.
+All money values are per contract (futures) or per unit (CFDs) per side.
 
 | Key | Meaning |
 |---|---|
+| `status` | `assumed` (your placeholder) / `broker_verified` / `unconfigured` (refuses to build a model) |
 | `commission_per_side` | broker commission $ |
 | `fees_per_side` | exchange + clearing + NFA $ |
-| `slippage_ticks_market` / `_stop` / `_limit` | adverse ticks per fill by order type |
-| `spread_points` | full spread in points (CFDs); half charged per side |
+| `slippage_unit` | `ticks` (default) or `points` (CFD feeds often have 0.01 ticks) |
+| `slippage_ticks_market` / `_stop` / `_limit` | adverse slippage per fill, in `slippage_unit` |
+| `spread_source` | `fixed` (use `spread_points`) or `dataset` (per-bar `spread` column) |
+| `spread_points` | full spread in points; charged once per round trip |
+| `financing_mode` | `none` or `annual_rate` (overnight holding cost) |
+| `financing_long_rate` / `financing_short_rate` | annual rate; + = cost, - = credit |
+| `financing_day_count` | 360 or 365 |
+| `rollover_time` / `rollover_timezone` | when a held position is charged (default 17:00 America/New_York) |
+| `triple_rollover_weekday` | 0=Mon..6=Sun; that rollover counts 3 nights |
 
-The shipped numbers are **assumptions**. Replace them with your broker's or prop firm's schedule.
+Dataset spread charges the average of the entry-bar and exit-bar spread once per round trip,
+which is the correct total whether the feed is bid-, ask- or mid-based. Financing counts
+rollover instants strictly after entry and at or before exit; weekends are not charged except
+via the triple day. Costs never change which bar a stop or target triggers on, so cost
+sensitivity stays exact post hoc (including financing).
+
+The futures numbers are **assumptions** (`status: assumed`). **CFD profiles ship `unconfigured`**:
+a CFD backtest raises `CostConfigError` naming the missing fields until you enter your broker's
+real numbers, per provider if two feeds differ. `allow_unconfigured=True` exists for plumbing
+tests only and yields an all-zero model labelled `zero_for_testing`.
 
 ## `backtest.yaml`
 
@@ -77,8 +103,35 @@ The shipped numbers are **assumptions**. Replace them with your broker's or prop
 `level`, `json_file` (JSON lines with fields timestamp, component, severity, event,
 strategy, signal, account, order, error, run_id, …), `console`.
 
+## `sessions.yaml` (Phase 2)
+
+Named windows: `timezone` (IANA), `start`, `end` (`HH:MM`, local wall clock), optional
+`weekdays` (local weekday on which an instance STARTS; default mon-fri). A bar belongs to a
+window if its OPEN is in `[start, end)`; `end <= start` wraps midnight. Shipped: `NY_0900_1000`,
+`NY_1000_1100`, `NY_0930_1030`, `NY_0930_1100`, `NY_1100_1200`, `NY_AM`, `NY_PM`, `NY_RTH`,
+`LONDON` (Europe/London 08:00-16:30), `ASIA_TOKYO` (Asia/Tokyo 09:00-15:00), `ASIA_NY_EVENING`
+(New York 19:00-02:00, Sun-Thu). All are conventions; edit freely. A feature's cache identity
+includes the resolved window definition, so editing a window invalidates exactly the features
+that use it.
+
+## `features.yaml` (Phase 2)
+
+| Key | Meaning |
+|---|---|
+| `cache_dir` | feature cache directory, relative to `storage.root` |
+| `verify_cache_checksums` | re-hash arrays on every disk load (default true; corruption -> recompute) |
+| `memory_cache_entries` | in-process LRU size |
+| `default_set` | specs built after every import: `{id, params, timeframe}` |
+
+## `import_profiles.yaml` (Phase 2)
+
+File-layout presets (`generic_csv`, `mt5_export`, `dukascopy_csv`): delimiter, column names,
+date/time columns, datetime format, volume/spread columns. A value of `REQUIRED` must be given
+explicitly at import time (e.g. MT5 `source_timezone` and `spread_multiplier`, which vary by
+broker). Profiles never supply provider, instrument, asset type or price basis. See `DATA_IMPORT.md`.
+
 ## Planned (later phases)
 
-`features.yaml` (P2), `search.yaml` (P4), `validation_splits.yaml` / `walk_forward.yaml` (P6),
+`search.yaml` (P4), `validation_splits.yaml` / `walk_forward.yaml` (P6),
 `monte_carlo.yaml` and `prop_rules/*.yaml` (P7), `paper_trading.yaml`, `notifications.yaml`,
 `execution.yaml` with `TRADING_MODE=paper` default (P9–11).
