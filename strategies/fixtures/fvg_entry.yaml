@@ -1,0 +1,22 @@
+# TEST FIXTURE - FVG + structure trend, LIMIT entry into the gap, price stop with a buffer.
+dsl_version: 1
+name: fvg_pullback
+family: {id: fvg_pullback, name: FVG pullback in trend, category: price_action,
+         hypothesis: "In an up-trend, a pullback into a fresh bullish fair value gap is bought."}
+timeframe: 5m
+parameters:
+  buffer: {type: float, value: 1.0, min: 0.0, max: 5.0, step: 0.5}
+entry:
+  direction: long
+  order: {type: limit, long_price: {feature: fvg, output: bull_top}, expiry_bars: 6}
+  long:
+    all:
+      - {left: {feature: fvg, output: bull_new}, op: "==", right: 1}
+      - {left: {feature: swings, output: trend}, op: "==", right: 1}
+exit:
+  stop:
+    type: price
+    long: {arith: sub, args: [{feature: fvg, output: bull_bottom}, $buffer]}
+  target: {type: risk_reward, multiple: 2.0}
+  time_stop_bars: 48
+sizing: {mode: fixed, quantity: 1}

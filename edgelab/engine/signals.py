@@ -59,6 +59,11 @@ class SignalSet:
     entry_price: np.ndarray       # required for stop/limit entries
     stop_price: np.ndarray        # absolute protective stop (else OrderSpec.stop_points)
     target_price: np.ndarray      # absolute target (else OrderSpec.target_points)
+    # Phase 3 (optional): signal exits. True at bar k = "at the close of bar k, exit an open
+    # long/short"; the exit is a market order at the OPEN of bar k+1 (same timing rule as
+    # entries). None = no signal exits (Phase 1 behaviour, unchanged).
+    exit_long: np.ndarray | None = None
+    exit_short: np.ndarray | None = None
 
     @classmethod
     def empty(cls, n: int) -> "SignalSet":
@@ -70,6 +75,10 @@ class SignalSet:
 
     def arrays(self) -> tuple[np.ndarray, ...]:
         return (self.direction, self.entry_price, self.stop_price, self.target_price)
+
+    def exit_arrays(self) -> dict[str, np.ndarray]:
+        return {k: v for k, v in (("exit_long", self.exit_long), ("exit_short", self.exit_short))
+                if v is not None}
 
 
 class Strategy(ABC):
@@ -99,6 +108,9 @@ def validate_signals(sig: SignalSet, n: int, order: OrderSpec) -> None:
     for a in sig.arrays():
         if len(a) != n:
             raise ValueError(f"signal array length {len(a)} != bars {n}")
+    for name, a in sig.exit_arrays().items():
+        if len(a) != n or a.dtype != np.bool_:
+            raise ValueError(f"{name} must be a bool array of length {n}")
     if not np.isin(sig.direction, (-1, 0, 1)).all():
         raise ValueError("direction must be in {-1, 0, 1}")
     active = sig.direction != 0
@@ -135,6 +147,18 @@ def check_causality(strategy: Strategy, bars: BarArrays, n_cuts: int = 20,
             same = (a == b) | (np.isnan(a) & np.isnan(b)) if a.dtype.kind == "f" else (a == b)
             if not np.all(same):
                 bad = int(np.flatnonzero(~same)[0])
+                return CausalityReport(False, cuts, bad, k,
+                                       f"'{name}' at bar {bad} changes when history is cut at {k}: "
+                                       "the strategy uses information from after the decision bar")
+        fx, px = full.exit_arrays(), part.exit_arrays()
+        if set(fx) != set(px):
+            return CausalityReport(False, cuts, None, k, "exit arrays present/absent inconsistently")
+        for name in fx:
+            if len(px[name]) != k:
+                return CausalityReport(False, cuts, None, k, f"{name} length != {k} on truncated history")
+            diff = fx[name][:k] != px[name]
+            if diff.any():
+                bad = int(np.flatnonzero(diff)[0])
                 return CausalityReport(False, cuts, bad, k,
                                        f"'{name}' at bar {bad} changes when history is cut at {k}: "
                                        "the strategy uses information from after the decision bar")

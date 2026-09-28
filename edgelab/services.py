@@ -7,8 +7,13 @@ so the same functions back the CLI today and HTTP endpoints later:
   FEATURE LAB            feature_catalog, feature_detail, feature_cache_status, build_features,
                          feature_values (for charts)
   RESEARCH CONFIGURATION research_config_options
+  STRATEGY LAB (Phase 3)  validate_strategy, preview_strategy, compile_strategy, save_strategy,
+                         edit_strategy, duplicate_strategy, load_strategy, list_strategies,
+                         strategy_families, strategy_lineage, generate_variations,
+                         proposal_menu, ingest_proposals, backtest_strategy
 
-Nothing here fabricates data: when something is unavailable the response says so.
+Nothing here fabricates data: when something is unavailable the response says so. Nothing
+here judges strategies: backtest results are returned with their sample-size labels only.
 """
 from __future__ import annotations
 
@@ -58,6 +63,8 @@ class Services:
                                   memory_entries=fcfg.get("memory_cache_entries", 512))
         self.sessions = load_sessions(self.cfg)
         self.reports_dir = self.root / "reports" / "imports"
+        from edgelab.strategy.lineage import StrategyLibrary
+        self.library = StrategyLibrary(data_root / "strategy_library")
 
     # ============================================================ DATA CENTER
     def list_datasets(self) -> list[dict]:
@@ -173,3 +180,127 @@ class Services:
                          for d in all_defs()],
             "strategies": "NOT IMPLEMENTED (Phase 3: strategy DSL)",
         })
+
+    # ============================================================ STRATEGY LAB (Phase 3)
+    def _definition(self, src: Any) -> dict:
+        """dict / YAML or JSON text / file path / stored strategy id -> raw definition."""
+        from edgelab.strategy.dsl import load_definition
+        if isinstance(src, str) and src.startswith("STR_") and "\n" not in src:
+            return dict(self.library.load(src)["definition"])
+        return load_definition(src)
+
+    def _config_hash(self) -> str:
+        from edgelab.core.config import config_hash
+        return config_hash(self.cfg)
+
+    def validate_strategy(self, src: Any) -> dict:
+        from edgelab.strategy.dsl import identity, validate
+        raw = self._definition(src)
+        res = validate(raw, self.sessions)
+        out = {"valid": res.valid, "errors": [i.to_dict() for i in res.errors],
+               "warnings": [i.to_dict() for i in res.warnings], "report": res.report()}
+        if res.valid:
+            out["identity"] = identity(raw, self._all_sessions(raw)).to_dict()
+        return _jsonable(out)
+
+    def _all_sessions(self, raw: Mapping) -> dict:
+        from edgelab.strategy.dsl import session_from_dict
+        return {**self.sessions, **{n: session_from_dict(n, w) for n, w in (raw.get("sessions") or {}).items()}}
+
+    def compile_strategy(self, src: Any) -> dict:
+        from edgelab.strategy.compiler import compile_definition, explain
+        c = compile_definition(self._definition(src), self.sessions, self._config_hash())
+        return _jsonable({**c.summary(), "explain": explain(c), "logic": c.logic})
+
+    def preview_strategy(self, src: Any) -> dict:
+        from edgelab.strategy.compiler import compile_definition, explain
+        from edgelab.strategy.dsl import canonical_definition
+        raw = self._definition(src)
+        c = compile_definition(raw, self.sessions, self._config_hash())
+        return _jsonable({"identity": c.identity.to_dict(), "explain": explain(c),
+                          "canonical_definition": canonical_definition(raw)})
+
+    def save_strategy(self, src: Any, generation_method: str = "user",
+                      parent_strategy_id: str | None = None) -> dict:
+        from edgelab.strategy.compiler import COMPILER_VERSION, compile_definition
+        from edgelab.strategy.dsl import DSL_VERSION, canonical_definition
+        from edgelab.strategy.lineage import LineageRecord
+        raw = self._definition(src)
+        c = compile_definition(raw, self.sessions, self._config_hash())
+        rec = LineageRecord(c.identity.strategy_id, c.identity.logic_hash, c.identity.definition_hash,
+                            c.family_id, generation_method, parent_strategy_id,
+                            versions={"dsl_version": DSL_VERSION, "compiler_version": COMPILER_VERSION,
+                                      "config_hash": self._config_hash()})
+        created = self.library.save(canonical_definition(raw), c.identity.to_dict(), rec)
+        return _jsonable({**c.identity.to_dict(), "created": created,
+                          "note": None if created else "identical logic already stored; lineage record added"})
+
+    def edit_strategy(self, parent_strategy_id: str, new_src: Any) -> dict:
+        self.library.load(parent_strategy_id)
+        return self.save_strategy(new_src, "manual_edit", parent_strategy_id)
+
+    def duplicate_strategy(self, strategy_id: str, new_name: str) -> dict:
+        """Returns an editable DRAFT copy (not saved: identical logic would be the same strategy)."""
+        d = dict(self.library.load(strategy_id)["definition"])
+        d["name"] = new_name
+        return _jsonable({"draft": d, "duplicated_from": strategy_id})
+
+    def load_strategy(self, strategy_id: str) -> dict:
+        return _jsonable(self.library.load(strategy_id))
+
+    def list_strategies(self, family_id: str | None = None) -> list[dict]:
+        return _jsonable(self.library.list(family_id))
+
+    def strategy_families(self) -> dict:
+        return _jsonable(self.library.families())
+
+    def strategy_lineage(self, strategy_id: str) -> dict:
+        doc = self.library.load(strategy_id)
+        return _jsonable({"strategy_id": strategy_id, "records": doc["lineage"],
+                          "ancestry": self.library.ancestry(strategy_id),
+                          "children": self.library.children(strategy_id)})
+
+    def generate_variations(self, base: Any, spec: Any, save: bool = True) -> dict:
+        from edgelab.strategy.variations import generate_variations
+        raw = self._definition(base)
+        batch = generate_variations(raw, spec, self.sessions, self._config_hash())
+        if save:
+            self.save_strategy(raw)
+            for v in batch.variants:
+                self.library.save(v.definition, v.identity, v.lineage)
+            self.library.save_batch(batch.record)
+        return _jsonable({**batch.summary(), "saved": save})
+
+    def proposal_menu(self, n_families: int = 20, instructions: str = "") -> dict:
+        from edgelab.strategy.proposals import ProposalRequest
+        return _jsonable(ProposalRequest(n_families, instructions).capability_menu(self.sessions))
+
+    def ingest_proposals(self, batch: Any, save: bool = True) -> dict:
+        from edgelab.strategy.proposals import ingest_proposals
+        rep = ingest_proposals(self._definition(batch) if not isinstance(batch, Mapping) else batch,
+                               self.sessions, self._config_hash())
+        if save:
+            for rec in rep.lineage:
+                self.library.save(rep.definitions[rec.strategy_id], rep.identities[rec.strategy_id], rec)
+        return _jsonable({**rep.to_dict(), "saved": save})
+
+    def backtest_strategy(self, src: Any, dataset_id: str) -> dict:
+        """One backtest through the existing engine (causality-checked). Returns measurements with
+        sample-size labels; draws no conclusions. CFD datasets need configured broker costs."""
+        from edgelab.analytics.metrics import compute_metrics
+        from edgelab.engine.backtester import run_backtest
+        from edgelab.engine.costs import cost_model_from_config
+        from edgelab.features.strategy_api import FeatureContext
+        from edgelab.strategy.compiler import compile_strategy
+        ds = self.load_dataset(dataset_id)
+        strat = compile_strategy(self._definition(src), self.sessions, self._config_hash())
+        costs = cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
+        bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
+        res = run_backtest(ds, bound, costs, self.cfg["backtest"], sizing=strat.sizing)
+        met = compute_metrics(res.trades, sample_thresholds=self.cfg.get("sample_size"))
+        return _jsonable({"strategy_id": strat.strategy_id, "dataset_id": dataset_id,
+                          "dataset": {k: getattr(ds.manifest, k) for k in ("provider", "asset_type", "instrument",
+                                                                           "timeframe", "start", "end")},
+                          "cost_status": costs.status, "metrics": met, "signal_diagnostics": bound.last_diagnostics,
+                          "skipped": dict(res.skipped),
+                          "note": "historical result under the stated assumptions; not a conclusion"})

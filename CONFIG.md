@@ -130,6 +130,19 @@ date/time columns, datetime format, volume/spread columns. A value of `REQUIRED`
 explicitly at import time (e.g. MT5 `source_timezone` and `spread_multiplier`, which vary by
 broker). Profiles never supply provider, instrument, asset type or price basis. See `DATA_IMPORT.md`.
 
+## Strategy library and DSL sessions (Phase 3)
+
+- Strategies are **not** configuration: they are DSL documents (`STRATEGY_DSL.md`), stored
+  canonically in `data/strategy_library/` (next to the data store; git-ignored).
+- Every window in `sessions.yaml` can be named by a strategy (`entry.session`, session-based
+  features). A strategy may also declare its own windows under `sessions:`. Using a configured
+  name with a different definition is refused.
+- A referenced session's **resolved definition is part of the strategy identity**: editing a
+  window in `sessions.yaml` gives every strategy that uses it a new `strategy_id`.
+- The compile provenance records the hash of the loaded configuration.
+- Single backtests through `strategy backtest` use `costs.yaml` exactly like Phase 1/2. CFD
+  datasets are refused until a broker cost profile is configured.
+
 ## Planned (later phases)
 
 `search.yaml` (P4), `validation_splits.yaml` / `walk_forward.yaml` (P6),

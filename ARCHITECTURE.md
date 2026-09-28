@@ -92,6 +92,26 @@ edgelab/services.py             JSON contracts: Data Center, Feature Lab, Resear
 edgelab/cli.py                  command line over services.py
 ```
 
+## Module map (Phase 3 additions)
+
+```
+edgelab/strategy/dsl.py          schema, loading, parameters, $references, resolve, validation with
+                                 paths/suggestions, UNSUPPORTED map, canonical form, logic/definition hashes
+edgelab/strategy/compiler.py     definition -> OrderSpec + sizing + FeatureSpecs -> DSLStrategy
+                                 (FeatureStrategy); Kleene evaluation; diagnostics; explain()
+edgelab/strategy/lineage.py      StrategyFamily, Change, LineageRecord, StrategyLibrary (JSON files)
+edgelab/strategy/variations.py   Mode A: spec validation, grid / one_at_a_time / seeded random_sample,
+                                 cap-before-generate, dedupe, batch records
+edgelab/strategy/proposals.py    Mode B: ProposalRequest.capability_menu, StrategyProposer protocol,
+                                 StaticProposer, ingest_proposals gate (no LLM calls)
+edgelab/engine/signals.py        + optional SignalSet.exit_long / exit_short; causality check covers them
+edgelab/engine/fills.py          + simulate_exit(signal_exit_bar=...)
+edgelab/engine/backtester.py     + first exit flag at/after entry -> exit at next open; "SIGNAL" = market
+edgelab/features/library/session_levels.py  + time_of_day feature (weekday, trading_weekday, hour, minute)
+edgelab/services.py, cli.py      + Strategy Lab contracts and `strategy` command group
+strategies/fixtures/             8 strategy fixtures, a variation spec, a proposal batch (tests only)
+```
+
 ## Decision records
 
 ### ADR-1 Storage backend
@@ -264,6 +284,76 @@ edgelab/cli.py                  command line over services.py
   Data Center, Feature Lab and Research Configuration; the CLI is a thin client of it, so a web
   API later exposes the same calls. No UI was built in Phase 2.
 
+### ADR-20 Strategies are data, compiled into the existing interfaces (Phase 3)
+- **Problem:** strategies must be serializable, versioned, hashable and AI-proposable, yet run on
+  the Phase 1 engine without a second execution path.
+- **Options:** (a) Python strategy classes; (b) an expression language evaluated by the DSL;
+  (c) a declarative document compiled into `FeatureStrategy` + `OrderSpec` + `SignalSet`.
+- **Chosen:** (c). The compiler maps every operand onto a Phase 2 feature output, a bar field or a
+  constant, and every rule onto existing order/exit/sizing contracts.
+- **Why:** one engine, one causality check and one feature cache. The compiler contains no
+  indicator math, so nothing is computed twice or differently.
+- **Tradeoffs:** anything not expressible as a feature needs a new feature (with docs and causality
+  tests) rather than an inline formula. Only `add/sub/mul/div` are available inline.
+
+### ADR-21 Signal exits as an opt-in engine extension (Phase 3; Phase 1 engine modified)
+- **Problem:** signal exits were required, but the engine only supported stop, target, time, max-hold,
+  session and end-of-data exits.
+- **Options:** (a) refuse signal exits in the DSL; (b) emulate them in the compiler (impossible:
+  exits depend on the fill, which only the engine knows); (c) extend the engine minimally.
+- **Chosen:** (c). `SignalSet` gains optional `exit_long`/`exit_short` bool arrays. A flag at
+  bar k exits at the open of k+1 as a market order (reason `SIGNAL`). Earlier exits win, and a gap
+  through the stop or target at that open uses the existing `_gap` policy.
+- **Why:** the same timing rule as entries (decide at the close, act at the next open), so there is no
+  new lookahead surface. The causality check compares the exit arrays too.
+- **Tradeoffs:** a Phase 1 module changed. Absent arrays leave behaviour unchanged: all 219
+  Phase 1/2 tests and the Phase 1 demo give identical results. A signal exit cannot fill at the signal
+  bar's close (market-on-close), by design.
+
+### ADR-22 Three-valued (Kleene) condition logic (Phase 3)
+- **Problem:** with NumPy booleans, NaN comparisons are False, so `not(x > ema)` is True during warm-up
+  and `x != y` is True for NaN. Both would fire on data that does not exist yet.
+- **Chosen:** each condition evaluates to (value, known). `all/any/not` follow Kleene logic, and
+  signals fire only where the condition is known-true.
+- **Tradeoffs:** `any[unknown, true]` fires (correctly) while `all[unknown, true]` does not. Users
+  must read unknown as "no signal".
+
+### ADR-23 Two hashes: logic identity vs document identity (Phase 3)
+- **Problem:** reordered keys, renamed strategies or `$param` vs literal must not create "new"
+  strategies (that would inflate the count of strategies tested), but every real rule change must.
+- **Chosen:** `logic_hash` covers the canonical *resolved* logic, including referenced session
+  definitions, and gives the `strategy_id`. `definition_hash` covers the whole canonical document.
+  Canonicalization flips `<`, rewrites `crosses_below`, sorts `all/any`, fills feature defaults and
+  pins feature versions.
+- **Tradeoffs:** equivalence detection is syntactic plus a few algebraic rules, not full logical
+  equivalence (e.g. `x > 5 and x > 3` is not reduced to `x > 5`).
+
+### ADR-24 File-based strategy library with append-only lineage (Phase 3)
+- **Problem:** instances, their parents, exact changes and generating batches must be durable and
+  inspectable, without committing to a database schema before Phase 4.
+- **Chosen:** one JSON file per instance (canonical definition plus lineage records), one per batch,
+  written atomically. The same logic from two parents keeps both records.
+- **Tradeoffs:** `list`/`children` scan the directory (fine for thousands; Phase 4 can index).
+
+### ADR-25 Mode A varies only declared parameters inside declared domains (Phase 3)
+- **Problem:** "controlled variations" must not become unbounded data mining, and the count of
+  generated instances must be honest.
+- **Chosen:** the base strategy declares domains, and the variation spec can only select inside them.
+  The count is checked before generation (loud failure), random sampling requires a seed, any invalid
+  child fails the batch, and logic duplicates are removed and reported. Batch ids are
+  content-derived.
+- **Tradeoffs:** structural variations must be parameterized in the base strategy (`enabled: $flag`,
+  `choice` sessions, `timeframe` parameters).
+
+### ADR-26 Mode B is an interface plus a gate, with no AI calls (Phase 3)
+- **Problem:** AI proposals must never carry or imply performance, and must never bypass validation.
+- **Chosen:** a strict proposal schema (unknown keys rejected, so there is no place for performance
+  numbers), claim-language rejection, the same validator and compiler, duplicate and structure checks,
+  and a `StrategyProposer` protocol with a `StaticProposer`.
+- **Tradeoffs:** claim detection is a pattern list and can miss creative phrasing, but the schema, not
+  the pattern list, is the primary barrier. Proposal quality ("genuinely different") beyond hashes
+  needs human review.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and
@@ -287,3 +377,18 @@ edgelab/cli.py                  command line over services.py
 - Loading a stored dataset re-runs validation (seconds for multi-year 1m data).
 - The feature cache has no size limit or garbage collection yet.
 - `rvol_tod` averages the previous k occurrences of a slot, not k calendar days.
+
+## Known limitations (Phase 3)
+
+- `lag` counts strategy-timeframe bars. On a higher-timeframe operand it does not step back one
+  HTF bar.
+- `entry.cooldown_bars` is measured between signals, not from trade exits (exits exist only inside the
+  backtest).
+- Stops and targets are fixed at signal time. There are no trailing stops, breakeven, partial exits or pyramiding
+  (refused by name).
+- The bid/ask trigger asymmetry on bid-based CFD feeds remains unmodelled (Phase 2).
+- Canonical equivalence is syntactic plus a few algebraic rules; logically equivalent but
+  differently written conditions can hash differently.
+- Mode B claim detection is pattern-based. No AI model is called anywhere.
+- No batch execution of variations or proposals yet (Phase 4). `strategy backtest` runs one
+  strategy on one dataset.

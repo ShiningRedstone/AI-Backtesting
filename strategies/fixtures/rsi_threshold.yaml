@@ -1,0 +1,20 @@
+# TEST FIXTURE - exercises a signal exit, a time stop and "no target".
+dsl_version: 1
+name: rsi_threshold
+family: {id: rsi_mean_reversion, name: RSI oversold mean reversion, category: mean_reversion,
+         hypothesis: "After a short-term oversold reading, price tends to revert toward its mean."}
+timeframe: 5m
+parameters:
+  oversold: {type: float, value: 25, min: 10, max: 40, step: 5}
+  exit_level: {type: float, value: 50, min: 40, max: 70, step: 5}
+entry:
+  direction: long
+  session: NY_RTH
+  long: {left: {feature: rsi, params: {period: 14}, output: rsi}, op: "<", right: $oversold}
+exit:
+  stop: {type: atr, multiple: 2.0}
+  target: {type: none}
+  time_stop_bars: 24
+  signal:
+    long: {left: {feature: rsi, params: {period: 14}, output: rsi}, op: ">", right: $exit_level}
+sizing: {mode: fixed, quantity: 1}

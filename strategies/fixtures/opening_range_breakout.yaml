@@ -1,0 +1,42 @@
+# TEST FIXTURE - strategy-local session windows, previous-session levels, optional filter,
+# price stop, R-multiple target, weekday filter.
+dsl_version: 1
+name: ny_orb_breakout
+family: {id: ny_opening_range_breakout, name: NY opening-range breakout, category: breakout,
+         hypothesis: "A break of the New York opening range continues in the break direction."}
+timeframe: 5m
+sessions:
+  OR_0930_0945: {timezone: America/New_York, start: "09:30", end: "09:45"}
+  OR_0930_1000: {timezone: America/New_York, start: "09:30", end: "10:00"}
+  OR_0930_1030: {timezone: America/New_York, start: "09:30", end: "10:30"}
+parameters:
+  or_window: {type: choice, value: OR_0930_1000, choices: [OR_0930_0945, OR_0930_1000, OR_0930_1030]}
+  rr: {type: float, value: 2.0, min: 1.0, max: 3.0, step: 0.5}
+  use_volume_filter: {type: boolean, value: false}
+  min_rvol: {type: float, value: 1.2, min: 1.0, max: 2.0, step: 0.1}
+entry:
+  direction: long
+  session: NY_0930_1100
+  trading_weekdays: [mon, tue, wed, thu, fri]
+  long:
+    all:
+      - label: opening range is complete
+        left: {feature: session, params: {session: $or_window}, output: in_session}
+        op: "=="
+        right: 0
+      - label: close breaks above the opening-range high
+        left: {bar: close}
+        op: crosses_above
+        right: {feature: session, params: {session: $or_window}, output: prev_high}
+      - label: optional relative-volume confirmation
+        enabled: $use_volume_filter
+        left: {feature: volume_stats, params: {period: 20}, output: rel_volume}
+        op: ">="
+        right: $min_rvol
+exit:
+  stop:
+    type: price
+    long: {feature: session, params: {session: $or_window}, output: prev_low}
+  target: {type: risk_reward, multiple: $rr}
+  time_stop_bars: 36
+sizing: {mode: fixed, quantity: 1}

@@ -275,12 +275,20 @@ def first_event_bar(A: MarketArrays, start: int, limit: int, direction: int, sto
 
 def simulate_exit(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, entry: Entry,
                   direction: int, stop: float, target: float, time_bars: int | None,
-                  max_hold: int | None, entry_type: str, entry_level: float) -> dict:
+                  max_hold: int | None, entry_type: str, entry_level: float,
+                  signal_exit_bar: int | None = None) -> dict:
+    """``signal_exit_bar`` (Phase 3, optional): bar m at whose OPEN a signal exit executes
+    (the exit condition was true at the close of m-1). Earlier stop/target/session/time exits
+    take precedence; if the open of m gaps through the stop or target, the resting order
+    fills there (STOP_GAP / TARGET_GAP, existing gap policy); otherwise exit reason SIGNAL."""
     f = entry.bar
     last = A.n - 1
     time_idx = f + time_bars - 1 if time_bars else last
     hold_idx = f + max_hold - 1 if max_hold else last
     limit = min(last, time_idx, hold_idx)
+    sx = signal_exit_bar if (signal_exit_bar is not None and f < signal_exit_bar <= limit) else None
+    if sx is not None:
+        limit = sx - 1
 
     def close_reason(k: int) -> str | None:
         if A.force_close[k]:
@@ -297,10 +305,18 @@ def simulate_exit(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, ent
     out, px, reason, conflict = resolve_bar(A, ib, f, direction, stop, target, pol, entry,
                                             entry_type, entry_level)
     k = f
+    def signal_exit() -> tuple[int, float, str]:
+        g = _gap(direction, float(A.o[sx]), stop, target, pol)
+        if g is not None:
+            return sx, float(g[1]), g[2]
+        return sx, float(A.o[sx]), "SIGNAL"
+
     if out == NONE:
         cr = close_reason(f)
         if cr:
             reason, px = cr, float(A.c[f])
+        elif sx is not None and f + 1 > limit:           # exit signal on the entry bar itself
+            k, px, reason = signal_exit()
         else:
             k = first_event_bar(A, f + 1, limit, direction, stop, target)
             out, px, reason, conflict2 = resolve_bar(A, ib, k, direction, stop, target, pol,
@@ -308,9 +324,12 @@ def simulate_exit(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, ent
             conflict = conflict2 or conflict
             if out == NONE:
                 cr = close_reason(k)
-                if cr is None:  # defensive: first_event_bar guarantees an event at k
+                if cr is None and sx is not None and k == limit:
+                    k, px, reason = signal_exit()
+                elif cr is None:  # defensive: first_event_bar guarantees an event at k
                     raise AssertionError(f"no exit event at bar {k}")
-                reason, px = cr, float(A.c[k])
+                else:
+                    reason, px = cr, float(A.c[k])
     # Bar-resolution excursions. Close-based exits held the whole exit bar; touch
     # exits only held it until the level, so the exit bar is capped at the exit price.
     k_full = k + 1 if reason in ("SESSION_CLOSE", "TIME", "MAX_HOLD", "END_OF_DATA") else k

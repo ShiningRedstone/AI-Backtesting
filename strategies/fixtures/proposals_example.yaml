@@ -1,0 +1,87 @@
+# Mode B proposal batch (TEST FIXTURE). Mixed on purpose: some proposals must be rejected.
+proposal_batch_version: 1
+request: {n_families: 8, notes: "demo batch"}
+source: {kind: ai, model: "example-model (offline)", notes: "hand-written stand-in for an AI proposer"}
+proposals:
+  - family: {id: gap_fade, name: Overnight gap fade, category: mean_reversion,
+             hypothesis: "Large opening gaps versus the prior close partially retrace in the first hour."}
+    rationale: "Tests whether liquidity-driven overnight moves revert once the cash session opens."
+    strategy:
+      dsl_version: 1
+      name: gap_fade_short
+      timeframe: 5m
+      entry:
+        direction: short
+        session: NY_0930_1030
+        short: {left: {feature: daily_levels, output: gap}, op: ">", right: 30}
+      exit:
+        stop: {type: atr, multiple: 1.5}
+        target: {type: price, short: {feature: daily_levels, output: prev_day_close}}
+        time_stop_bars: 12
+  - family: {id: london_range_break, name: London range continuation, category: breakout,
+             hypothesis: "Breaks of the London session range during New York hours continue."}
+    strategy:
+      dsl_version: 1
+      name: london_break_long
+      timeframe: 5m
+      entry:
+        direction: long
+        session: NY_AM
+        long: {left: {bar: close}, op: crosses_above, right: {feature: session, params: {session: LONDON}, output: prev_high}}
+      exit: {stop: {type: atr, multiple: 1.0}, target: {type: risk_reward, multiple: 2.0}}
+  - family: {id: gap_fade_bigger, name: Bigger gap fade, category: mean_reversion,
+             hypothesis: "Same as gap fade with a larger gap threshold."}
+    strategy:
+      dsl_version: 1
+      name: gap_fade_short_60
+      timeframe: 5m
+      entry:
+        direction: short
+        session: NY_0930_1030
+        short: {left: {feature: daily_levels, output: gap}, op: ">", right: 60}
+      exit:
+        stop: {type: atr, multiple: 1.5}
+        target: {type: price, short: {feature: daily_levels, output: prev_day_close}}
+        time_stop_bars: 12
+  - family: {id: claims_perf, name: RSI bounce, hypothesis: "RSI bounces are highly profitable with a 70% win rate."}
+    strategy:
+      dsl_version: 1
+      name: rsi_bounce
+      timeframe: 5m
+      entry: {direction: long, long: {left: {feature: rsi, output: rsi}, op: "<", right: 20}}
+      exit: {stop: {type: points, points: 15}}
+  - family: {id: with_numbers, name: VWAP fade, hypothesis: "Extended moves away from VWAP revert."}
+    expected_win_rate: 0.62
+    strategy:
+      dsl_version: 1
+      name: vwap_fade
+      timeframe: 5m
+      entry: {direction: short, short: {left: {feature: vwap, output: dist_std}, op: ">", right: 2}}
+      exit: {stop: {type: points, points: 15}}
+  - family: {id: bad_feature, name: Supertrend, hypothesis: "Supertrend flips mark trend changes."}
+    strategy:
+      dsl_version: 1
+      name: supertrend_flip
+      timeframe: 5m
+      entry: {direction: long, long: {left: {feature: supertrend, output: dir}, op: "==", right: 1}}
+      exit: {stop: {type: points, points: 15}}
+  - family: {id: trailing_idea, name: Trend ride, hypothesis: "Trends persist; trail the stop."}
+    strategy:
+      dsl_version: 1
+      name: trend_ride
+      timeframe: 5m
+      entry: {direction: long, long: {left: {feature: swings, output: bos_up}, op: "==", right: 1}}
+      exit: {stop: {type: points, points: 15}, trailing_stop: {atr: 2}}
+  - family: {id: gap_fade_copy, name: Gap fade again, hypothesis: "Opening gaps retrace."}
+    strategy:
+      dsl_version: 1
+      name: gap_fade_short_copy
+      timeframe: 5m
+      entry:
+        direction: short
+        session: NY_0930_1030
+        short: {left: {feature: daily_levels, output: gap}, op: ">", right: 30}
+      exit:
+        stop: {type: atr, multiple: 1.5}
+        target: {type: price, short: {feature: daily_levels, output: prev_day_close}}
+        time_stop_bars: 12

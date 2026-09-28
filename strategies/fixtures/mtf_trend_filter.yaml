@@ -1,0 +1,23 @@
+# TEST FIXTURE - higher-timeframe filter (last COMPLETED 60m bar), point stop/target,
+# weekday filter, signal cooldown, max hold.
+dsl_version: 1
+name: mtf_trend_pullback
+family: {id: mtf_trend_pullback, name: 5m pullback with 1h trend filter, category: trend,
+         hypothesis: "Pullbacks that resume while the hourly trend is up tend to continue."}
+timeframe: 5m
+parameters:
+  htf: {type: timeframe, value: 1h, choices: [30m, 1h, 2h]}
+entry:
+  direction: long
+  trading_weekdays: [mon, tue, wed, thu]
+  cooldown_bars: 6
+  long:
+    all:
+      - {left: {bar: close}, op: crosses_above, right: {feature: ema, params: {period: 20}, output: ema}}
+      - {left: {feature: ema, params: {period: 50}, timeframe: $htf, output: slope}, op: ">", right: 0}
+      - {left: {bar: close}, op: ">", right: {feature: ema, params: {period: 50}, timeframe: $htf, output: ema}}
+exit:
+  stop: {type: points, points: 20}
+  target: {type: points, points: 40}
+  max_hold_bars: 36
+sizing: {mode: fixed, quantity: 1}

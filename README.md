@@ -14,8 +14,8 @@ result under stated assumptions*, not a forecast.
 |---|---|---|
 | 1 Foundation | structure, config, logging, data schema + validation gate, synthetic data, store, backtester, tests | **done** |
 | 2 Features + CFD data | CFD/any-provider import pipeline, dataset metadata/hashes, DST-safe sessions, 14 causal features, multi-timeframe, persistent feature cache, dataset comparison, CFD cost architecture, service layer + CLI | **done** (see CHANGELOG.md for IMPLEMENTED / TESTED / NOT IMPLEMENTED / REQUIRES REAL DATA) |
-| 3 Strategy DSL | schema, validator, loader, variations (Mode A), AI family proposals (Mode B) | next |
-| 4 Research engine | batch/grid/random search, parallelism, benchmarks | planned |
+| 3 Strategy DSL | versioned YAML/JSON DSL, validator with path errors, canonical identity, deterministic compiler into the existing Strategy interface, lineage library, Mode A controlled variations, Mode B proposal interface (no AI calls), opt-in signal exits in the engine, `time_of_day` feature | **done** (see STRATEGY_DSL.md, STRATEGY_GENERATION.md, CHANGELOG.md) |
+| 4 Research engine | batch/grid/random search, parallelism, benchmarks | next |
 | 5 Analytics | breakdowns by hour/session/weekday/month/year/event, distributions, rolling | planned |
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
 | 7 Prop simulator | evaluation, funded, payout, multi-account | planned |
@@ -26,7 +26,7 @@ result under stated assumptions*, not a forecast.
 
 ```bash
 pip install -r requirements.txt          # numpy, pandas, pyyaml, scipy (+ duckdb recommended)
-python -m unittest discover -s tests -t .           # 219 tests, ~37 s (DuckDB + slow tests skip unless enabled)
+python -m unittest discover -s tests -t .           # 298 tests, ~45 s (DuckDB + slow tests skip unless enabled)
 EDGELAB_SLOW_TESTS=1 python -m unittest tests.test_known_answers   # + multi-path bias check (~40 s)
 python scripts/phase1_demo.py                        # end-to-end synthetic demonstration (Phase 1)
 python scripts/phase2_benchmark.py                   # feature generation / cache benchmark (synthetic)
@@ -128,6 +128,31 @@ atr_15m = eng.compute(FeatureSpec.make("atr", {"period": 14}, timeframe="15m")).
 - CFD cost profiles ship **unconfigured**: the engine refuses to run a CFD backtest until you enter
   your broker's numbers (`CONFIG.md`). No broker figures are invented.
 - Import guide and expected file schema: `DATA_IMPORT.md`.
+
+## Phase 3 in one screen
+
+```bash
+F=strategies/fixtures        # test fixtures - rules to exercise the machinery, not claims of edge
+python -m edgelab.cli strategy validate $F/opening_range_breakout.yaml     # every issue, with its path
+python -m edgelab.cli strategy explain  $F/opening_range_breakout.yaml     # plain-language rules
+python -m edgelab.cli strategy variations $F/opening_range_breakout.yaml $F/orb_variations.yaml
+#   batch VB_...: 48 combinations -> 35 variants (11 logic duplicates removed, 2 identical to base)
+python -m edgelab.cli strategy proposals $F/proposals_example.yaml        # Mode B gate: 3 accepted, 5 rejected
+python -m edgelab.cli strategy lineage STR_...                             # parent, exact changes, batch
+python -m edgelab.cli strategy backtest $F/ema_crossover.yaml <DATASET_ID> # one causality-checked run
+```
+
+- A strategy is data. It compiles into the Phase 1/2 interfaces, and every indicator comes from the
+  feature cache (no math in the compiler).
+- Signals use three-valued logic: warm-up NaNs never fire, even under `not`.
+- Unsupported engine concepts (trailing stops, partial exits, pyramiding, exit-based cooldown) are
+  refused by name, never approximated.
+- Identity is a hash of the resolved logic. Key order, formatting, names and `a < b` vs `b > a` do not
+  change it; any rule, parameter, session-window or sizing change does.
+- Mode A varies only declared parameters inside declared domains, caps the count before generating,
+  de-duplicates identical logic, and records lineage. Batches regenerate identically.
+- Mode B accepts proposals as data only. Performance fields and claim language are rejected, and
+  every strategy passes the same validator and compiler.
 
 ## Environment notes
 

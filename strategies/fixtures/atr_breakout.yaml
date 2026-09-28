@@ -1,0 +1,26 @@
+# TEST FIXTURE - derived reference (SMA + k*ATR), STOP entry orders, ATR target.
+dsl_version: 1
+name: atr_band_breakout
+family: {id: atr_band_breakout, name: ATR band breakout, category: volatility,
+         hypothesis: "Closes outside an ATR band around the mean mark volatility expansion."}
+timeframe: 5m
+parameters:
+  band_k: {type: float, value: 1.5, min: 0.5, max: 3.0, step: 0.5}
+entry:
+  direction: both
+  order: {type: stop, long_price: {bar: high}, short_price: {bar: low}, expiry_bars: 2}
+  long:
+    left: {bar: close}
+    op: ">"
+    right: {arith: add, args: [{feature: sma, params: {period: 20}, output: sma},
+                               {arith: mul, args: [$band_k, {feature: atr, params: {period: 14}, output: atr}]}]}
+  short:
+    left: {bar: close}
+    op: "<"
+    right: {arith: sub, args: [{feature: sma, params: {period: 20}, output: sma},
+                               {arith: mul, args: [$band_k, {feature: atr, params: {period: 14}, output: atr}]}]}
+exit:
+  stop: {type: atr, multiple: 1.0}
+  target: {type: atr, multiple: 2.0}
+  max_hold_bars: 48
+sizing: {mode: risk, risk_usd: 500, max_quantity: 5}

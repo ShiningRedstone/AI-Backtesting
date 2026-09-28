@@ -7,3 +7,4 @@ data/processed/parquet/
 reports/output/
 data/feature_cache/
 reports/imports/
+data/strategy_library/

@@ -1,0 +1,12 @@
+# Mode A variation spec for opening_range_breakout.yaml (TEST FIXTURE).
+# Varies only parameters the base strategy declares, within their declared domains.
+variation_spec_version: 1
+name: orb_structural_grid
+description: Opening-range length x reward multiple x optional volume confirmation.
+mode: grid
+max_variants: 100
+dimensions:
+  - {parameter: or_window, values: [OR_0930_0945, OR_0930_1000, OR_0930_1030], category: opening_range}
+  - {parameter: rr, range: {min: 1.5, max: 3.0, step: 0.5}, category: target}
+  - {parameter: use_volume_filter, values: [false, true], category: confirmation}
+  - {parameter: min_rvol, values: [1.2, 1.5], category: confirmation}

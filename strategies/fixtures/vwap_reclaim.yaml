@@ -1,0 +1,17 @@
+# TEST FIXTURE - VWAP (needs volume) + trend slope filter.
+dsl_version: 1
+name: vwap_reclaim
+family: {id: vwap_reclaim, name: VWAP reclaim, category: mean_reversion,
+         hypothesis: "Reclaiming session VWAP in an up-sloping market leads to continuation."}
+timeframe: 5m
+entry:
+  direction: long
+  session: NY_RTH
+  long:
+    all:
+      - {left: {bar: close}, op: crosses_above, right: {feature: vwap, params: {anchor: NY_RTH}, output: vwap}}
+      - {left: {feature: ema, params: {period: 50}, output: slope}, op: ">", right: 0}
+exit:
+  stop: {type: atr, multiple: 1.0}
+  target: {type: risk_reward, multiple: 1.5}
+sizing: {mode: fixed, quantity: 1}

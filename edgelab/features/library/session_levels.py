@@ -108,3 +108,29 @@ register(FeatureDef(
     edge_cases="Depends on the calendar (holidays/early closes must be configured). For CFD feeds the "
                "calendar is whatever you assigned at import - check bars_outside_session in validation.",
     warmup="one completed trading date for prev_*"))
+
+
+def _time_of_day(inp, p):
+    b = inp.bars
+    loc = b.ts.tz_convert(p["timezone"])
+    td = inp.calendar.trading_dates(b.ts)
+    td_wd = ((td.astype("datetime64[D]").astype(np.int64) + 3) % 7).astype(float)   # 1970-01-01 = Thu
+    return {"weekday": np.asarray(loc.dayofweek, float),
+            "trading_weekday": td_wd,
+            "hour": np.asarray(loc.hour, float),
+            "minute_of_day": np.asarray(loc.hour * 60 + loc.minute, float)}
+
+
+register(FeatureDef(
+    feature_id="time_of_day", version=1, category="session",
+    params=(Param("timezone", "America/New_York", str, "IANA zone for the local clock outputs"),),
+    outputs=(("weekday", "local weekday of the bar OPEN in `timezone`: 0=Mon .. 6=Sun"),
+             ("trading_weekday", "weekday of the calendar TRADING DATE (e.g. CME Sunday 18:00 -> Monday = 0)"),
+             ("hour", "local hour of the bar open"),
+             ("minute_of_day", "local minutes since midnight of the bar open")),
+    compute=_time_of_day, known_at="bar_open",
+    summary="Local clock and weekday of each bar (for trading windows and weekday filters).",
+    calculation="Bar open converted to `timezone` (DST-safe); trading_weekday from the dataset calendar.",
+    edge_cases="Uses the bar OPEN time. For sessions starting the previous evening, use trading_weekday "
+               "to mean 'the Monday session'.",
+    warmup="0 bars"))

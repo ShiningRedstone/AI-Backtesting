@@ -1,0 +1,24 @@
+# TEST FIXTURE - exercises cross-overs, both directions, ATR stop, R-multiple target.
+# Not a claim that this strategy has an edge.
+dsl_version: 1
+name: ema_crossover
+description: Fast EMA crossing slow EMA during New York regular hours.
+family: {id: ema_crossover, name: EMA crossover, category: trend,
+         hypothesis: "Short-term momentum shifts marked by EMA crossings persist for a few bars."}
+timeframe: 5m
+parameters:
+  fast: {type: integer, value: 9, min: 5, max: 20, step: 1}
+  slow: {type: integer, value: 21, min: 15, max: 60, step: 3}
+  stop_atr: {type: float, value: 1.5, min: 0.5, max: 3.0, step: 0.25}
+  rr: {type: float, value: 2.0, min: 1.0, max: 4.0, step: 0.5}
+entry:
+  direction: both
+  session: NY_RTH
+  long:  {left: {feature: ema, params: {period: $fast}, output: ema}, op: crosses_above,
+          right: {feature: ema, params: {period: $slow}, output: ema}}
+  short: {left: {feature: ema, params: {period: $fast}, output: ema}, op: crosses_below,
+          right: {feature: ema, params: {period: $slow}, output: ema}}
+exit:
+  stop: {type: atr, multiple: $stop_atr, period: 14}
+  target: {type: risk_reward, multiple: $rr}
+sizing: {mode: fixed, quantity: 1}

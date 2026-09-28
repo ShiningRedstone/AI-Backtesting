@@ -24,6 +24,7 @@ Conventions for every feature:
 | `session` | 1 | session | - | bar_close | yes | Session window membership, running session levels, previous session levels. |
 | `sma` | 1 | trend | - | bar_close | yes | Simple moving average of close. |
 | `swings` | 1 | structure | - | bar_close | yes | Fractal swings (confirmed only), break of structure, liquidity sweeps, structure trend. |
+| `time_of_day` | 1 | session | - | bar_open | yes | Local clock and weekday of each bar (for trading windows and weekday filters). |
 | `volume_stats` | 1 | volume | volume | bar_close | yes | Relative volume, z-score and percentile rank versus recent bars. |
 | `vwap` | 1 | volume | volume | bar_close | yes | Anchored volume-weighted average price with standard deviation. |
 
@@ -363,6 +364,32 @@ Fractal swings (confirmed only), break of structure, liquidity sweeps, structure
 | `sweep_high` | 1 if H_t > prior swing high but C_t < it (wick through, close back) |
 | `sweep_low` | 1 if L_t < prior swing low but C_t > it |
 | `trend` | +1 after the latest bos_up, -1 after the latest bos_down, 0 before any |
+
+## `time_of_day` (version 1)
+
+Local clock and weekday of each bar (for trading windows and weekday filters).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_open   **Causal:** yes
+- **Warm-up:** 0 bars
+- **Depends on:** -
+- **Implementation hash:** `19158b10cf23e428`
+
+**Calculation.** Bar open converted to `timezone` (DST-safe); trading_weekday from the dataset calendar.
+
+**Edge cases.** Uses the bar OPEN time. For sessions starting the previous evening, use trading_weekday to mean 'the Monday session'.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `timezone` | str | `America/New_York` |  | IANA zone for the local clock outputs |
+
+| output | meaning |
+|---|---|
+| `weekday` | local weekday of the bar OPEN in `timezone`: 0=Mon .. 6=Sun |
+| `trading_weekday` | weekday of the calendar TRADING DATE (e.g. CME Sunday 18:00 -> Monday = 0) |
+| `hour` | local hour of the bar open |
+| `minute_of_day` | local minutes since midnight of the bar open |
 
 ## `volume_stats` (version 1)
 

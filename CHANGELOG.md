@@ -3,6 +3,57 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 3: Strategy DSL, compiler, lineage, controlled variations, proposal interface
+
+### DSL and validation (`edgelab/strategy/dsl.py`, STRATEGY_DSL.md)
+| Item | Status |
+|---|---|
+| Versioned DSL v1 (YAML/JSON/dict): family, timeframe, local sessions, parameters, entry, exit, sizing | IMPLEMENTED, TESTED |
+| Operands: constants, `$param`, bar fields with lag, feature outputs (params/output/HTF/lag/pinned version), add/sub/mul/div | IMPLEMENTED, TESTED |
+| Conditions: all/any/not, `> >= < <= == !=`, crosses_above/below, per-condition `enabled` and `label` | IMPLEMENTED, TESTED |
+| Typed parameters (integer/float/boolean/choice/timeframe) with strict domain and grid checks | IMPLEMENTED, TESTED |
+| Validator: schema, parameter, feature, logic, architecture and causality rules; all issues reported with paths and suggestions; CLI exit code 2 | IMPLEMENTED, TESTED |
+| Unsupported concepts refused by name: trailing stop, breakeven, partial exits, pyramiding, exit-based cooldown, lead/future | IMPLEMENTED, TESTED |
+| Canonical form; `logic_hash` (strategy_id) vs `definition_hash`; session definitions part of identity | IMPLEMENTED, TESTED |
+
+### Compiler (`edgelab/strategy/compiler.py`)
+| Item | Status |
+|---|---|
+| Deterministic compile into `OrderSpec` + sizing config + de-duplicated `FeatureSpec`s -> `DSLStrategy` (FeatureStrategy / Strategy) | IMPLEMENTED, TESTED |
+| Entries: market / stop / limit with expiry; long / short / both; trading window; trading-date weekdays; signal cooldown | IMPLEMENTED, TESTED |
+| Exits: points / ATR / price stops; none / points / ATR / price / R-multiple targets; time stop; max hold; signal exits | IMPLEMENTED, TESTED |
+| Sizing: fixed quantity (checked against instrument size rules at bind) and risk-based | IMPLEMENTED, TESTED |
+| Kleene three-valued evaluation; ambiguous both-direction bars dropped; invalid stop/target sides dropped and counted | IMPLEMENTED, TESTED |
+| Causality: static rules + Phase 1 truncation check (incl. exit arrays) on every run; MTF cut inside unfinished HTF bars | IMPLEMENTED, TESTED |
+| Provenance (DSL/compiler versions, compiler source hash, feature spec ids + impl hashes, sessions, config hash); `explain()` | IMPLEMENTED, TESTED |
+| Same definition on futures and CFD datasets; CFD runs refused while broker costs are unconfigured | IMPLEMENTED, TESTED (synthetic) |
+
+### Engine and features (Phase 1/2 modules changed)
+| Item | Status |
+|---|---|
+| **Engine change:** optional `SignalSet.exit_long/exit_short`; exit at next open, reason `SIGNAL` (market costs); earlier exits win; gap at that open uses the existing gap policy. Absent arrays = unchanged behaviour (219 prior tests + Phase 1 demo identical) | IMPLEMENTED, TESTED |
+| New feature `time_of_day` v1 (weekday, trading_weekday, hour, minute_of_day; known at bar open); FEATURES.md regenerated | IMPLEMENTED, TESTED |
+
+### Lineage, Mode A, Mode B, services
+| Item | Status |
+|---|---|
+| Families vs instances; `LineageRecord` (method, parent, exact changes, batch, timestamp, versions); file-based `StrategyLibrary` (atomic, idempotent, multi-parent, ancestry/children) | IMPLEMENTED, TESTED |
+| Mode A: grid / one_at_a_time / seeded random_sample; declared-domain enforcement; cap before generation; invalid child fails batch; logic dedupe reported; reproducible batch ids and records | IMPLEMENTED, TESTED |
+| Mode B: capability menu, `StrategyProposer` protocol, `StaticProposer`, ingestion gate (strict schema, claim-language rejection, same validator/compiler, duplicate/structure checks, lineage) | IMPLEMENTED, TESTED |
+| Services (strict JSON) + CLI `strategy validate/compile/explain/save/variations/proposals/list/show/lineage/menu/backtest` | IMPLEMENTED, TESTED |
+| 8 strategy fixtures, variation spec, proposal batch (test fixtures, not claims of edge) | IMPLEMENTED, TESTED |
+
+### Not implemented (deliberately)
+| Item | Status |
+|---|---|
+| Trailing stops, breakeven, partial exits, pyramiding, exit-based cooldown (engine does not support them) | NOT IMPLEMENTED (refused by the validator) |
+| Batch execution / ranking of variations and proposals | NOT IMPLEMENTED (Phase 4) |
+| Any AI model call | NOT IMPLEMENTED (interface only) |
+| UI, live trading, broker execution | NOT IMPLEMENTED (out of scope) |
+| Performance of any fixture strategy on real data | REQUIRES REAL DATA |
+
+Tests: 298 (4 skipped: DuckDB unavailable, slow tests opt-in); Phase 3 added 79.
+
 ## Phase 2: Features + CFD-ready data foundation
 
 ### Data foundation

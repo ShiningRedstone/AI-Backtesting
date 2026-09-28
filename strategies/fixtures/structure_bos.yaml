@@ -1,0 +1,17 @@
+# TEST FIXTURE - market structure, SHORT side, stop at the last confirmed swing high.
+dsl_version: 1
+name: bos_short
+family: {id: bos_continuation, name: Break-of-structure continuation, category: structure,
+         hypothesis: "A downside break of structure below the prior day's low tends to continue."}
+timeframe: 5m
+entry:
+  direction: short
+  session: NY_RTH
+  short:
+    all:
+      - {left: {feature: swings, params: {left: 3, right: 3}, output: bos_down}, op: "==", right: 1}
+      - {left: {bar: close}, op: "<", right: {feature: daily_levels, output: prev_day_low}}
+exit:
+  stop: {type: price, short: {feature: swings, params: {left: 3, right: 3}, output: swing_high}}
+  target: {type: risk_reward, multiple: 2.0}
+sizing: {mode: fixed, quantity: 1}

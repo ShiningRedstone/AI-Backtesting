@@ -8,6 +8,11 @@
     python -m edgelab.cli features list | docs | build DATASET_ID | cache DATASET_ID
     python -m edgelab.cli compare-feeds DATASET_A DATASET_B
     python -m edgelab.cli sessions
+    python -m edgelab.cli strategy validate|compile|explain|save FILE
+    python -m edgelab.cli strategy variations BASE_FILE SPEC_FILE [--no-save]
+    python -m edgelab.cli strategy proposals BATCH_FILE [--no-save]
+    python -m edgelab.cli strategy list [--family ID] | show ID | lineage ID | menu
+    python -m edgelab.cli strategy backtest FILE_OR_ID DATASET_ID
 
 Add --json to any command for machine-readable output.
 """
@@ -117,9 +122,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("b")
     sub.add_parser("sessions", help="configured session windows")
 
+    p = sub.add_parser("strategy", help="Strategy DSL: validate, compile, variations, proposals, lineage")
+    p.add_argument("action", choices=("validate", "compile", "explain", "save", "variations", "proposals",
+                                      "list", "show", "lineage", "menu", "backtest"))
+    p.add_argument("args", nargs="*", help="files / ids for the action")
+    p.add_argument("--family")
+    p.add_argument("--no-save", action="store_true")
+    p.add_argument("--n-families", type=int, default=20)
+
     a = ap.parse_args(argv)
     from edgelab.data.importer import ImportFailed
+    from edgelab.engine.costs import CostConfigError
     from edgelab.services import Services
+    from edgelab.strategy.compiler import StrategyCompileError
+    from edgelab.strategy.dsl import StrategyValidationError
+    from edgelab.strategy.variations import VariationError
     svc = Services(root=a.root)
     try:
         if a.cmd == "inspect":
@@ -157,6 +174,14 @@ def main(argv: list[str] | None = None) -> int:
             _print(svc.compare_feeds(a.a, a.b), a.json)
         elif a.cmd == "sessions":
             _print([v.definition() for v in svc.sessions.values()], a.json)
+        elif a.cmd == "strategy":
+            return _strategy(svc, a, ap)
+    except StrategyValidationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except (VariationError, StrategyCompileError, CostConfigError) as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
     except ImportFailed as exc:
         print(f"IMPORT FAILED {exc}", file=sys.stderr)
         if exc.report is not None:
@@ -165,6 +190,71 @@ def main(argv: list[str] | None = None) -> int:
     except KeyError as exc:
         print(f"not found: {exc}", file=sys.stderr)
         return 3
+    return 0
+
+
+def _strategy(svc, a, ap) -> int:
+    need = {"validate": 1, "compile": 1, "explain": 1, "save": 1, "variations": 2, "proposals": 1,
+            "list": 0, "show": 1, "lineage": 1, "menu": 0, "backtest": 2}[a.action]
+    if len(a.args) != need:
+        ap.error(f"strategy {a.action} takes {need} argument(s)")
+    x = a.args
+    if a.action == "validate":
+        r = svc.validate_strategy(x[0])
+        if a.json:
+            _print(r, True)
+        else:
+            print(r["report"])
+            if r["valid"]:
+                print(f"\nstrategy_id: {r['identity']['strategy_id']}\nlogic_hash: {r['identity']['logic_hash']}"
+                      f"\ndefinition_hash: {r['identity']['definition_hash']}")
+        return 0 if r["valid"] else 2
+    if a.action == "explain":
+        r = svc.preview_strategy(x[0])
+        print(r["explain"]) if not a.json else _print(r, True)
+    elif a.action == "compile":
+        r = svc.compile_strategy(x[0])
+        if a.json:
+            _print(r, True)
+        else:
+            print(r["explain"])
+            print(f"\norder: {r['order']}\ncompiler: {r['provenance']['compiler_version']}  "
+                  f"dsl: v{r['provenance']['dsl_version']}")
+    elif a.action == "save":
+        _print(svc.save_strategy(x[0]), a.json)
+    elif a.action == "variations":
+        r = svc.generate_variations(x[0], x[1], save=not a.no_save)
+        if a.json:
+            _print(r, True)
+        else:
+            print(f"batch {r['batch_id']}: {r['combinations']} combinations -> {r['generated']} variants "
+                  f"({r['duplicates_removed']} logic duplicates removed, {r['same_as_base']} identical to base)"
+                  f"{'; saved to the strategy library' if r['saved'] else '; not saved'}")
+            for v in r["variants"]:
+                ch = ", ".join(f"{c['parameter']}: {c['old']} -> {c['new']}" for c in v["changes"])
+                print(f"  {v['strategy_id']}  {ch}")
+    elif a.action == "proposals":
+        r = svc.ingest_proposals(x[0], save=not a.no_save)
+        if a.json:
+            _print(r, True)
+        else:
+            print(f"proposal batch {r['batch_id']}: {r['n_accepted']} accepted, {r['n_rejected']} rejected")
+            for acc in r["accepted"]:
+                print(f"  ACCEPTED [{acc['index']}] {acc['family_id']} -> {acc['strategy_id']}")
+            for rej in r["rejected"]:
+                print(f"  REJECTED [{rej['index']}] {rej['family_id']}: " + "; ".join(rej["errors"]))
+            for w in r["warnings"]:
+                print(f"  WARNING {w}")
+    elif a.action == "list":
+        _print(svc.list_strategies(a.family), a.json)
+    elif a.action == "show":
+        _print(svc.load_strategy(x[0]), a.json)
+    elif a.action == "lineage":
+        _print(svc.strategy_lineage(x[0]), a.json)
+    elif a.action == "menu":
+        _print(svc.proposal_menu(a.n_families), True)
+    elif a.action == "backtest":
+        _print(svc.backtest_strategy(x[0], x[1]), a.json)
     return 0
 
 

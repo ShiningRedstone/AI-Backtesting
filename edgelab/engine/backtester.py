@@ -38,7 +38,7 @@ log = get_logger("backtester")
 NS_PER_MIN = 60_000_000_000
 EXIT_ORDER_TYPE = {"STOP": "stop", "STOP_GAP": "stop", "TARGET": "limit", "TARGET_GAP": "limit",
                    "TIME": "market", "SESSION_CLOSE": "market", "MAX_HOLD": "market",
-                   "END_OF_DATA": "market"}
+                   "END_OF_DATA": "market", "SIGNAL": "market"}
 
 
 class BacktestError(RuntimeError):
@@ -143,6 +143,8 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
     busy_until = -1
     per_day: Counter = Counter()
     sig_idx = np.flatnonzero(sig.direction)
+    exit_idx = {1: None if sig.exit_long is None else np.flatnonzero(sig.exit_long),
+                -1: None if sig.exit_short is None else np.flatnonzero(sig.exit_short)}
     for i in sig_idx:
         i = int(i)
         d = int(sig.direction[i])
@@ -180,8 +182,14 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
         if not math.isnan(target) and not d * (target - e.price) > 0:
             skipped["TARGET_BEYOND_FILL"] += 1
             continue
+        sx = None
+        flags = exit_idx[d]
+        if flags is not None and len(flags):
+            j = int(np.searchsorted(flags, e.bar))        # first exit flag at/after the entry bar
+            if j < len(flags):
+                sx = int(flags[j]) + 1                    # executes at the next bar's open
         x = simulate_exit(A, ib, pol, e, d, stop, target, order.time_exit_bars,
-                          order.max_hold_bars, order.entry_type, level)
+                          order.max_hold_bars, order.entry_type, level, signal_exit_bar=sx)
         busy_until = x["exit_bar"] - 1
         per_day[A.td[i]] += 1
 
