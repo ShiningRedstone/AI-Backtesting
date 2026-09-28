@@ -1,0 +1,105 @@
+
+==============================================================================
+1. ENVIRONMENT & CONFIG
+==============================================================================
+  python=3.12.3  numpy=2.4.4  pandas=3.0.2  duckdb=None  numba=None  polars=None  pyarrow=None
+  code: git f9dc78aa72  source sha256 8ca0bcdbcf4a
+  config hash b2db96febca3   same-bar policy: intrabar
+  NQ: tick 0.25 = $5.0, point value $20; costs/side: comm $1.5 + fees $0.7, slippage 1.0 tick market/stop
+
+==============================================================================
+2. SYNTHETIC DATA + VALIDATION GATE
+==============================================================================
+  generated 178,020 1m bars in 0.22s  (driftless walk, sigma 3 pts/min, overnight gaps, seed 20240101)
+  validated in 1.17s
+DATA QUALITY REPORT - NQ 1m  [INFO]
+  bars=178,020  range=2024-01-02 05:00:00+00:00 -> 2024-07-01 03:59:00+00:00
+  PASS  non_empty                  n=178,020  
+  PASS  finite_prices              n=0        NaN/inf OHLC values
+  PASS  timestamp_order            n=0        timestamps going backwards (run clean_bars to sort)
+  PASS  exact_duplicates           n=0        identical repeated rows (clean_bars removes these)
+  PASS  conflicting_duplicates     n=0        same timestamp, different values - cannot resolve automatically
+  PASS  ohlc_integrity             n=0        high < max(open,close) or low > min(open,close) or high < low
+  PASS  positive_prices            n=0        non-positive prices (set allow_nonpositive_prices for e.g. CL 2020)
+  PASS  volume_non_negative        n=0        negative volume
+  PASS  tick_alignment             n=0        prices not on 0.25 tick grid (0.00%; expected for adjusted continuous or CFD data)
+  PASS  bars_outside_session       n=0        bars where calendar 'CME_EQUITY' says market closed (0.000%); a cluster after a DST change means a timezone error
+  PASS  grid_alignment             n=0        in-session bars not on the session-anchored 1m grid (wrong timestamp convention or timeframe?)
+  PASS  missing_bars               n=0        expected in-session bars absent (0.000% of 178,020); never auto-filled
+  PASS  missing_trading_days       n=0        entire trading days absent - add to calendar holidays if exchange was closed
+  PASS  range_spikes               n=0        bar range > 25x median (3.75); inspect for bad ticks
+  INFO  dst_transitions            n=1        America/New_York UTC offsets present: [-5.0, -4.0]; sessions computed in local time
+  INFO  contract_rolls             n=0        no 'contract' column: roll behaviour unverifiable from data; see manifest.adjustment
+
+  corrupted copy REFUSED as expected -> FAIL checks: ['timestamp_order', 'conflicting_duplicates', 'ohlc_integrity']
+  resampled to 35,604 5m bars (session-anchored) -> validation INFO
+
+==============================================================================
+3. STORAGE
+==============================================================================
+WARNING [store] store_fallback error=duckdb not installed; using SQLite fallback
+  backend=sqlite; datasets saved; reload hash matches manifest: True
+
+==============================================================================
+4. LOOKAHEAD GATE
+==============================================================================
+ERROR   [backtester] causality_failed strategy=PEEK_NEXT_CLOSE_36cbd918a1 error='direction' at bar 8988 changes when history is cut at 8989: the strategy uses information from after the decision bar
+  peeking strategy REFUSED: LOOKAHEAD DETECTED: 'direction' at bar 8988 changes when history is cut at 8989: the strategy uses information...
+
+==============================================================================
+5. BREAKOUT BACKTEST - NQ 5m, NY AM decision window 09:30-11:00 ET
+==============================================================================
+  strategy BREAKOUT_21a796ffed; signals 485, skipped {'BUSY_IN_POSITION_OR_ORDER': 319}
+  causality: passed on 21 truncation cuts; intrabar data reliable on 100.0% of bars
+  trades=166 [MODERATE SAMPLE]  trades/week=6.5
+  expectancy=+0.086R  (95% CI -0.135..+0.306, se 0.113)
+  profit factor=1.133 (gross 1.188)  win rate=38.0% (CI 30.9%..45.5%)
+  avg win=+1.92R  avg loss=-1.04R  median=-1.04R
+  gross=+19.4R  costs=5.2R  net=+14.2R  ($5,680)
+  maxDD=11.6R ($4,621)  streaks W4/L9  hold med 72m
+  exit reasons: {'STOP': 103, 'TARGET': 61, 'SESSION_CLOSE': 2}
+  same-bar conflicts: 0 -> {}
+
+  cost sensitivity (exact, post hoc):
+     0.5x costs: expectancy +0.101R  PF 1.160  net +16.8R
+     1.0x costs: expectancy +0.086R  PF 1.133  net +14.2R
+     1.5x costs: expectancy +0.070R  PF 1.107  net +11.6R
+     2.0x costs: expectancy +0.054R  PF 1.081  net +9.0R
+     3.0x costs: expectancy +0.023R  PF 1.033  net +3.8R
+  breakeven cost multiple: 3.72x
+
+  reading: CI includes 0: NOT statistically distinguishable from zero expectancy.
+
+==============================================================================
+6. NULL MODEL - 100 random-entry controls, same window / order / costs / trade rate
+==============================================================================
+  100 controls in 8.6s; signal prob 0.209/eligible bar
+  control trades: median 180 (range 168-200)  vs breakout 166
+  control net expectancy percentiles 5/25/50/75/95: -0.139 / -0.025 / +0.048 / +0.116 / +0.235 R
+  breakout +0.086R beats 69% of random controls (one-sided empirical p ~ 0.31)
+  reading: NOT distinguishable from random entries.
+  note: all controls trade the SAME realized path, so their centre reflects this path,
+  not zero. Engine unbiasedness across independent paths is checked separately
+  (EDGELAB_SLOW_TESTS=1: 40 paths, mean gross R consistent with 0).
+  Ground truth: the data is a driftless random walk, so no edge exists. A positive
+  net P&L on ~170 trades is exactly what chance produces - hence the gates.
+
+==============================================================================
+7. KNOWN-ANSWER CHECK - gambler's ruin on the 1m walk (no costs, no gaps)
+==============================================================================
+  998 trades. P(target first): observed 0.3170, theory 0.3333 (z = -1.10)
+  mean gross R: -0.0497 (theory 0; z = -1.13)  -> PASS
+
+==============================================================================
+8. RUN REGISTRY + REPRODUCTION
+==============================================================================
+  recorded RUN_2026_00001 (status IN_SAMPLE); stored trades: 166
+  re-run trades hash 54d28fddf31dc09c == stored 54d28fddf31dc09c: True
+
+==============================================================================
+9. BENCHMARK (single process, pure NumPy; numba not installed)
+==============================================================================
+  18 variants x 35,604 bars -> 21,641 trades in 2.02s (112 ms/variant, 10,698 trades/s)
+  (single demo backtest incl. 20-cut causality check: 0.46s)
+
+Artifacts: /home/claude/ai_trading_research/reports/output/data_quality_1m.txt, data store in data/, JSON logs in logs/edgelab.jsonl

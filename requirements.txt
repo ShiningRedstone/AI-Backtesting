@@ -1,0 +1,10 @@
+# Core (required)
+numpy>=2.0
+pandas>=2.2
+pyyaml>=6.0
+# Recommended (auto-detected; the system runs without them)
+duckdb>=1.0        # DuckDB + Parquet storage backend (else SQLite fallback)
+# Optional, later phases
+# numba>=0.60      # JIT for the fill kernel (Phase 4 performance)
+# scipy, matplotlib, jinja2, reportlab   # analytics / HTML / PDF (Phases 5-8)
+# pytest           # alternative test runner; stdlib unittest works out of the box

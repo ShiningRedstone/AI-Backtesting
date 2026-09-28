@@ -5,6 +5,7 @@ For a driftless random walk with fills exactly at stop/target:
   E[gross R]            = 0                             (optional stopping, martingale)
 Any bias beyond sampling error means the engine is leaking or distorting fills.
 """
+import os
 import unittest
 
 import numpy as np
@@ -106,6 +107,30 @@ class TestConflictPolicyOrdering(unittest.TestCase):
         # conservative understates, optimistic overstates the intrabar truth
         self.assertLess(a.gross_r.sum(), b.gross_r.sum())
         self.assertLess(b.gross_r.sum(), c.gross_r.sum())
+
+
+@unittest.skipUnless(os.environ.get("EDGELAB_SLOW_TESTS"), "slow: set EDGELAB_SLOW_TESTS=1")
+class TestUnbiasedUnderProductionConfig(unittest.TestCase):
+    """Full production settings (5m, NY-AM window, overnight gaps, 16:00 flatten, intrabar
+    policy): mean gross R across INDEPENDENT paths must be ~0. A single path is not enough:
+    random entries on one 2-month path showed per-trade means from -0.5R to +0.5R."""
+
+    def test_zero_expectancy_across_independent_paths(self):
+        from edgelab.core.config import load_config
+        cfg = {**load_config(environ={})["backtest"], "require_causality_check": False}
+        order = OrderSpec("market", stop_points=20, target_points=40)
+        allr = []
+        for s in range(40):
+            df1, _ = generate_bars(CME, "2024-01-02", "2024-03-01", tf_minutes=1, sigma_per_bar=3.0,
+                                   session_gap_sigma=8.0, seed=1000 + s)
+            d1 = validate_and_freeze(df1, NQ, CME, "1m", 1, "s", "a")
+            d5 = validate_and_freeze(resample_bars(df1, CME, 5), NQ, CME, "5m", 5, "s", "b")
+            strat = RandomEntry(order, p=0.2, seed=s, window=("09:30", "11:00"))
+            allr.append(run_backtest(d5, strat, ZERO_COSTS, cfg, ltf=d1).trades.gross_r.to_numpy())
+        r = np.concatenate(allr)
+        se = r.std(ddof=1) / np.sqrt(len(r))
+        self.assertGreater(len(r), 2000)
+        self.assertLess(abs(r.mean()), Z * se, f"mean={r.mean():+.4f} se={se:.4f}")
 
 
 if __name__ == "__main__":
