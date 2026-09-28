@@ -8,7 +8,8 @@ load -> [period restriction] -> compile -> costs -> bind -> run_backtest(sizing=
 
 Durable cell states: `ineligible` (readiness reasons, never executed, no run), `pending`,
 `completed` (a normal run in the `runs` table, zero-trade results included) and `failed`
-(the error; no run). Runs keep status IN_SAMPLE; nothing is labelled validated.
+(the error; no run) and `cancelled` (a job was cancelled before the cell started; runs again on
+resume). Runs keep status IN_SAMPLE; nothing is labelled validated.
 
 Resume: the same search (same search_id and config) skips cells already `completed` whose run
 still exists; they are counted as `skipped_resume`, never as new trials. Failed and pending
@@ -22,8 +23,9 @@ earlier plan (e.g. a family that has since changed) are kept as `historical_cell
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from edgelab.research.search import SearchPlan, SearchSpecError, canonical_search_spec, plan_search
 
@@ -55,31 +57,34 @@ def cumulative_counts(cells: list[dict]) -> dict:
     return {**n, "trials": n["completed"] + n["failed"]}
 
 
-def run_search(services, spec: Mapping, workers: int = 1) -> dict:
+def run_search(services, spec: Mapping, workers: int = 1, *, lock=None,
+               cancel: Callable[[], bool] | None = None) -> dict:
+    """Plan and run a search. Optional hooks for the background job manager (both default to
+    the plain synchronous behaviour):
+      lock   - the service lock; held ONLY around store/library operations, never while a cell's
+               backtest runs (`_run_cell` takes it around its own dataset load and run record).
+      cancel - checked before each cell; once it returns True no new cell starts, the remaining
+               pending cells become `cancelled` and the batch ends `cancelled`."""
+    guard = lock if lock is not None else nullcontext()
     canon = canonical_search_spec(spec)                    # refuses an invalid spec before anything else
     if workers != 1 or canon["workers"] != 1:
         raise SearchSpecError("parallel search workers are not implemented yet; use workers: 1")
     store = services.store
     store._require_search_storage()
-    plan: SearchPlan = plan_search(spec, services)          # references, eligibility, max_cells refusal
-    sid = plan.search_id
-    existing = store.get_search_batch(sid)
-    if existing and existing["config_hash"] != plan.config_hash:
-        raise SearchSpecError(
-            f"{sid} was stored under config {existing['config_hash'][:12]} but the current config is "
-            f"{plan.config_hash[:12]}; its cells cannot be resumed under a different config")
-    prior = {c["cell_id"]: c for c in store.list_search_cells(sid)} if existing else {}
+    with guard:
+        plan: SearchPlan = plan_search(spec, services)      # references, eligibility, max_cells refusal
+        sid = plan.search_id
+        existing = store.get_search_batch(sid)
+        if existing and existing["config_hash"] != plan.config_hash:
+            raise SearchSpecError(
+                f"{sid} was stored under config {existing['config_hash'][:12]} but the current config is "
+                f"{plan.config_hash[:12]}; its cells cannot be resumed under a different config")
+        prior = {c["cell_id"]: c for c in store.list_search_cells(sid)} if existing else {}
 
     from edgelab.core.identity import code_version
     counts = {"n_planned": plan.counts["planned"], "n_eligible": plan.counts["eligible"],
               "n_ineligible": plan.counts["ineligible"], "n_evaluated": 0, "n_skipped_resume": 0,
               "n_failed": 0, "n_cancelled": 0, "n_trials": 0}
-    store.upsert_search_batch({
-        "search_id": sid, "search_hash": plan.search_hash, "config_hash": plan.config_hash,
-        "code_version": _dumps(code_version()), "created_at": existing["created_at"] if existing else _now(),
-        "finished_at": None, "status": "running", "spec_json": _dumps(plan.spec),
-        "shortlist_json": existing["shortlist_json"] if existing else None,
-        "warnings_json": _dumps(plan.warnings), **counts})
 
     def done(c: dict | None) -> bool:
         return bool(c and c["status"] == "completed" and c["run_id"] and store.has_run(c["run_id"]))
@@ -90,42 +95,68 @@ def run_search(services, spec: Mapping, workers: int = 1) -> dict:
                 "dataset_content_hash": c["dataset_content_hash"], "run_id": None, "trades_hash": None,
                 "reasons_json": _dumps(c["reasons"]), "error": None, "headline_json": None, "current": 1, **kw}
 
-    for c in plan.cells:                                   # every planned cell is durable before execution
-        if not done(prior.get(c["cell_id"])):
-            store.upsert_search_cell(cell_row(c, status="pending" if c["eligible"] else "ineligible"))
-    store.mark_current_search_cells(sid, [c["cell_id"] for c in plan.cells])   # older rows stay, as history
+    with guard:
+        store.upsert_search_batch({
+            "search_id": sid, "search_hash": plan.search_hash, "config_hash": plan.config_hash,
+            "code_version": _dumps(code_version()), "created_at": existing["created_at"] if existing else _now(),
+            "finished_at": None, "status": "running", "spec_json": _dumps(plan.spec),
+            "shortlist_json": existing["shortlist_json"] if existing else None,
+            "warnings_json": _dumps(plan.warnings), **counts})
+        for c in plan.cells:                               # every planned cell is durable before execution
+            if not done(prior.get(c["cell_id"])):
+                store.upsert_search_cell(cell_row(c, status="pending" if c["eligible"] else "ineligible"))
+        store.mark_current_search_cells(sid, [c["cell_id"] for c in plan.cells])   # older rows stay, as history
 
     sources = {s["strategy_id"]: s["sources"] for s in plan.strategies}
     period = None if plan.period is None else (plan.period["start"], plan.period["end"])
+    eligible = plan.eligible_cells()
+    status = "completed"
     try:
-        for c in plan.eligible_cells():
-            if done(prior.get(c["cell_id"])):
-                counts["n_skipped_resume"] += 1
-                store.update_search_batch(sid, n_skipped_resume=counts["n_skipped_resume"])
+        for k, c in enumerate(eligible):
+            if cancel is not None and cancel():             # cooperative: between cells only
+                with guard:
+                    for rest in eligible[k:]:
+                        if not done(prior.get(rest["cell_id"])):
+                            store.upsert_search_cell(cell_row(rest, status="cancelled"))
+                            counts["n_cancelled"] += 1
+                    store.update_search_batch(sid, n_cancelled=counts["n_cancelled"])
+                status = "cancelled"
+                break
+            with guard:
+                skip = done(prior.get(c["cell_id"]))
+                if skip:
+                    counts["n_skipped_resume"] += 1
+                    store.update_search_batch(sid, n_skipped_resume=counts["n_skipped_resume"])
+                else:
+                    parent, mutation = _lineage(services.library, c["strategy_id"], sources[c["strategy_id"]])
+            if skip:
                 continue
-            parent, mutation = _lineage(services.library, c["strategy_id"], sources[c["strategy_id"]])
-            try:
+            try:                                            # the backtest runs WITHOUT the service lock
                 out = services._run_cell(c["strategy_id"], c["dataset_id"], record=True,
                                          parent_strategy_id=parent, mutation=mutation,
-                                         notes=f"search {sid} cell {c['cell_id']}", period=period)
+                                         notes=f"search {sid} cell {c['cell_id']}", period=period,
+                                         **({} if lock is None else {"lock": lock}))
             except Exception as exc:                        # recorded per cell, never silently dropped
-                store.upsert_search_cell(cell_row(c, status="failed", error=f"{type(exc).__name__}: {exc}"))
+                row = cell_row(c, status="failed", error=f"{type(exc).__name__}: {exc}")
                 counts["n_failed"] += 1
             else:
                 met = out["metrics"]
                 headline = {k: v for k, v in met.items() if not isinstance(v, (dict, tuple, list))}
-                store.upsert_search_cell(cell_row(c, status="completed", run_id=out["run_id"],
-                                                  trades_hash=out["result"].trades_hash,
-                                                  headline_json=_dumps(headline)))
+                row = cell_row(c, status="completed", run_id=out["run_id"],
+                               trades_hash=out["result"].trades_hash, headline_json=_dumps(headline))
             counts["n_evaluated"] += 1
             counts["n_trials"] += 1
-            store.update_search_batch(sid, n_evaluated=counts["n_evaluated"], n_failed=counts["n_failed"],
-                                      n_trials=counts["n_trials"])
+            with guard:
+                store.upsert_search_cell(row)
+                store.update_search_batch(sid, n_evaluated=counts["n_evaluated"], n_failed=counts["n_failed"],
+                                          n_trials=counts["n_trials"])
     except Exception:
-        store.update_search_batch(sid, status="failed", finished_at=_now())
+        with guard:
+            store.update_search_batch(sid, status="failed", finished_at=_now())
         raise
-    store.update_search_batch(sid, status="completed", finished_at=_now())
-    return search_summary(store, sid)
+    with guard:
+        store.update_search_batch(sid, status=status, finished_at=_now())
+        return search_summary(store, sid)
 
 
 def search_summary(store, search_id: str) -> dict:

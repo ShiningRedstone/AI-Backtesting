@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import dataclasses
 import re
-import threading
 import traceback
 from pathlib import Path
 from typing import Any, Callable
@@ -61,7 +60,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     root = Path(root).resolve()
     web = web or load_web_config(root)
     svc = Services(root=root)
-    lock = threading.RLock()
+    lock = svc.lock                  # the one service lock (shared with the Phase 4 job manager)
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = int(web.max_request_mb * 1024 * 1024)
     app.config["EDGELAB"] = {"root": root, "demo": demo, "services": svc, "web": web}

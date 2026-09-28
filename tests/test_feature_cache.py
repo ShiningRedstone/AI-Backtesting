@@ -6,6 +6,7 @@ or a dependency -> a different key."""
 import dataclasses
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -185,6 +186,109 @@ class TestCacheStorage(unittest.TestCase):
         self.assertEqual(a.cache_key, b.cache_key)
         for k in a.arrays:
             self.assertEqual(a.arrays[k].tobytes(), b.arrays[k].tobytes())
+
+
+def _arrays(i: int) -> dict:
+    """Deterministic arrays for cache key i (what two threads computing the same feature produce)."""
+    rng = np.random.default_rng(i)
+    return {"value": rng.normal(size=2000), "ts": np.arange(2000, dtype=np.int64) + i}
+
+
+def _run_threads(n: int, target) -> list:
+    """Start n threads together (Barrier) and collect every exception they raise."""
+    barrier, errors = threading.Barrier(n), []
+
+    def run(t):
+        try:
+            barrier.wait(timeout=30)
+            target(t)
+        except BaseException as exc:            # noqa: BLE001 - surfaced by the test
+            errors.append(exc)
+    threads = [threading.Thread(target=run, args=(t,)) for t in range(n)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(60)
+    assert not any(th.is_alive() for th in threads), "cache threads did not finish"
+    return errors
+
+
+class TestCacheConcurrency(unittest.TestCase):
+    """A background search job and a web request may use one FeatureCache at the same time."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def assert_same(self, got: dict, i: int):
+        want = _arrays(i)
+        self.assertEqual(sorted(got), sorted(want))
+        for k in want:
+            self.assertEqual(got[k].tobytes(), want[k].tobytes())
+            self.assertFalse(got[k].flags.writeable)                     # still read-only
+
+    def test_concurrent_get_put_with_a_tiny_memory_cache(self):
+        c = FeatureCache(None, memory_entries=2)                         # constant LRU eviction
+        data = {i: _arrays(i) for i in range(12)}
+        seen = []
+
+        def work(t):
+            for n in range(400):
+                i = (t * 7 + n) % 12
+                c.put("DS", f"k{i}", data[i], {})
+                got, _ = c.get("DS", f"k{(i + 5) % 12}")
+                if got is not None:
+                    seen.append(((i + 5) % 12, got))
+                c.get("DS", f"k{i}")
+        self.assertEqual(_run_threads(8, work), [])
+        self.assertLessEqual(len(c._mem), 2)
+        for i, got in seen[:200]:
+            self.assert_same(got, i)
+        s = c.stats
+        self.assertEqual(s["writes"], 0)                                 # memory-only cache
+        self.assertEqual(s["memory_hits"] + s["misses"], 8 * 400 * 2)    # no lost stats updates
+
+    def test_concurrent_writes_of_the_same_key(self):
+        c = FeatureCache(self.tmp)
+        for rnd in range(15):
+            key = f"same{rnd:02d}"
+            errs = _run_threads(8, lambda t: c.put("DS", key, _arrays(rnd), {"feature": "x"}))
+            self.assertEqual(errs, [], f"round {rnd}")
+        self.assertEqual(c.stats["writes"], 15 * 8)
+        self.assertEqual(list(self.tmp.rglob("*.tmp*")), [])            # no stray temp files
+        fresh = FeatureCache(self.tmp)                                   # disk only: verify checksums
+        for rnd in range(15):
+            got, src = fresh.get("DS", f"same{rnd:02d}")
+            self.assertEqual(src, "disk")
+            self.assert_same(got, rnd)
+        self.assertEqual(fresh.stats["corrupt"], 0)
+        self.assertEqual(len(fresh.entries("DS")), 15)
+
+    def test_readers_never_see_a_half_written_entry(self):
+        writer = FeatureCache(self.tmp, memory_entries=1)
+        readers = [FeatureCache(self.tmp, memory_entries=1) for _ in range(4)]   # shared disk
+        keys = 40
+
+        def work(t):
+            if t < 4:                                                    # writers
+                for i in range(keys):
+                    writer.put("DS", f"k{i:03d}", _arrays(i), {"feature": "x"})
+            else:                                                        # readers poll every key
+                r = readers[t - 4]
+                for _ in range(6):
+                    for i in range(keys):
+                        got, _ = r.get("DS", f"k{i:03d}")
+                        if got is not None:
+                            self.assert_same(got, i)
+                        r.clear_memory()
+        self.assertEqual(_run_threads(8, work), [])
+        self.assertEqual([r.stats["corrupt"] for r in readers], [0, 0, 0, 0])        # no false discards
+        final = FeatureCache(self.tmp)
+        for i in range(keys):
+            self.assert_same(final.get("DS", f"k{i:03d}")[0], i)
+        self.assertEqual(final.stats["corrupt"], 0)
 
 
 if __name__ == "__main__":

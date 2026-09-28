@@ -11,6 +11,13 @@ Storage: <root>/<dataset_id>/<key[:2]>/<key>.npz (+ .json metadata), written ato
 (configurable), and a corrupted entry is discarded and recomputed, never trusted.
 Layer 1 is an in-memory LRU; layer 2 is disk. Entries are immutable: a new definition
 always produces a new key.
+
+Thread safety (a background search job computes features while a web request may too): the
+in-memory LRU and the stats are guarded by a private lock, taken only for those dictionary
+operations (never for disk I/O or feature computation). On disk every file is written to a
+unique temp file and moved into place with os.replace, and the metadata is written BEFORE the
+arrays, so a reader that finds an .npz always finds its metadata. Two threads missing the same
+key may both compute it; the values are deterministic, so the second write is identical.
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +54,7 @@ class FeatureCache:
         self.verify = verify
         self.memory_entries = memory_entries
         self._mem: OrderedDict[str, dict] = OrderedDict()
+        self._lock = threading.RLock()       # in-memory LRU + stats only
         self.stats = {"memory_hits": 0, "disk_hits": 0, "misses": 0, "writes": 0, "corrupt": 0}
         if self.root:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -53,11 +62,17 @@ class FeatureCache:
     def _path(self, dataset_id: str, key: str) -> Path:
         return self.root / _safe(dataset_id) / key[:2] / f"{key}.npz"
 
+    def _count(self, name: str) -> None:
+        with self._lock:
+            self.stats[name] += 1
+
     def get(self, dataset_id: str, key: str) -> tuple[dict | None, str | None]:
-        if key in self._mem:
-            self._mem.move_to_end(key)
-            self.stats["memory_hits"] += 1
-            return self._mem[key], "memory"
+        with self._lock:                                      # lookup + LRU touch in one step
+            hit = self._mem.get(key)
+            if hit is not None:
+                self._mem.move_to_end(key)
+                self.stats["memory_hits"] += 1
+                return hit, "memory"
         if self.root:
             p = self._path(dataset_id, key)
             if p.exists():
@@ -68,7 +83,7 @@ class FeatureCache:
                     if meta.get("key") != key or (self.verify and _arrays_hash(arrays) != meta["arrays_sha256"]):
                         raise ValueError("checksum/key mismatch")
                 except Exception as exc:              # corrupted or partial entry: never trust it
-                    self.stats["corrupt"] += 1
+                    self._count("corrupt")
                     log.event("cache_entry_discarded", severity="WARNING", error=str(exc), key=key)
                     p.unlink(missing_ok=True)
                     p.with_suffix(".json").unlink(missing_ok=True)
@@ -76,9 +91,9 @@ class FeatureCache:
                     for a in arrays.values():
                         a.flags.writeable = False
                     self._remember(key, arrays)
-                    self.stats["disk_hits"] += 1
+                    self._count("disk_hits")
                     return arrays, "disk"
-        self.stats["misses"] += 1
+        self._count("misses")
         return None, None
 
     def put(self, dataset_id: str, key: str, arrays: dict, meta: dict) -> None:
@@ -97,6 +112,15 @@ class FeatureCache:
                      "created_at": datetime.now(timezone.utc).isoformat(),
                      "n": int(len(next(iter(arrays.values())))) if arrays else 0,
                      "cache_schema": CACHE_SCHEMA_VERSION, "dataset_id": dataset_id}
+        # metadata first, then arrays; each via its own unique temp file + atomic os.replace
+        fd, tmp_meta = tempfile.mkstemp(dir=p.parent, suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(json.dumps(full_meta, default=str, sort_keys=True))
+            os.replace(tmp_meta, p.with_suffix(".json"))
+        finally:
+            if os.path.exists(tmp_meta):
+                os.remove(tmp_meta)
         fd, tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp.npz")
         os.close(fd)
         try:
@@ -105,19 +129,18 @@ class FeatureCache:
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
-        tmp_meta = p.with_suffix(".json.tmp")
-        tmp_meta.write_text(json.dumps(full_meta, default=str, sort_keys=True))
-        os.replace(tmp_meta, p.with_suffix(".json"))
-        self.stats["writes"] += 1
+        self._count("writes")
 
     def _remember(self, key: str, arrays: dict) -> None:
-        self._mem[key] = arrays
-        self._mem.move_to_end(key)
-        while len(self._mem) > self.memory_entries:
-            self._mem.popitem(last=False)
+        with self._lock:
+            self._mem[key] = arrays
+            self._mem.move_to_end(key)
+            while len(self._mem) > self.memory_entries:
+                self._mem.popitem(last=False)
 
     def clear_memory(self) -> None:
-        self._mem.clear()
+        with self._lock:
+            self._mem.clear()
 
     def entries(self, dataset_id: str | None = None) -> list[dict]:
         """Metadata of stored entries (Feature Lab 'cache status')."""
@@ -135,7 +158,7 @@ class FeatureCache:
         return out
 
     def clear(self, dataset_id: str | None = None) -> None:
-        self._mem.clear()
+        self.clear_memory()
         if self.root:
             target = self.root / _safe(dataset_id) if dataset_id else self.root
             if target.exists():

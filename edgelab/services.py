@@ -22,6 +22,8 @@ here judges strategies: backtest results are returned with their sample-size lab
 from __future__ import annotations
 
 import math
+import threading
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -69,6 +71,10 @@ class Services:
         self.reports_dir = self.root / "reports" / "imports"
         from edgelab.strategy.lineage import StrategyLibrary
         self.library = StrategyLibrary(data_root / "strategy_library")
+        # THE service lock: the web app serializes every service call with it and the Phase 4 job
+        # manager takes it only around short store operations (never during a backtest).
+        self.lock = threading.RLock()
+        self._jobs = None
 
     # ============================================================ DATA CENTER
     def list_datasets(self) -> list[dict]:
@@ -291,19 +297,22 @@ class Services:
 
     def _run_cell(self, src: Any, dataset_id: str, record: bool = False, *,
                   parent_strategy_id: str | None = None, mutation: str | None = None,
-                  notes: str | None = None, period: tuple | None = None) -> dict:
+                  notes: str | None = None, period: tuple | None = None, lock=None) -> dict:
         """One (strategy, dataset) cell through the existing engine: load (re-validated) ->
         [optional period restriction, re-validated] -> compile -> cost model (CFD refusal) ->
         bind -> causality-checked backtest with the strategy's OWN sizing -> metrics ->
         optional run record. Returns the internal objects (not JSON); `backtest_strategy` and
         Phase 4 batch search both use this one path. `notes=None` keeps the Strategy Lab note;
-        synthetic data is always labelled first."""
+        synthetic data is always labelled first. `lock` (background jobs) is held only around the
+        store reads/writes (dataset load, run record), never around the backtest itself."""
         from edgelab.analytics.metrics import compute_metrics
         from edgelab.engine.backtester import run_backtest
         from edgelab.engine.costs import cost_model_from_config
         from edgelab.features.strategy_api import FeatureContext
         from edgelab.strategy.compiler import compile_strategy
-        ds = self.load_dataset(dataset_id)
+        guard = lock if lock is not None else nullcontext()
+        with guard:
+            ds = self.load_dataset(dataset_id)
         if period is not None:
             from edgelab.research.compare import restrict_to_period
             ds = restrict_to_period(ds, period[0], period[1], self.cfg.get("validation"))
@@ -321,8 +330,9 @@ class Services:
                 notes = label if notes is None else f"{label} | {notes}"
             elif notes is None:
                 notes = "single backtest (Strategy Lab)"
-            run_id = record_run(self.store, self.cfg, res, met, notes=notes,
-                                parent_strategy_id=parent_strategy_id, mutation=mutation)
+            with guard:
+                run_id = record_run(self.store, self.cfg, res, met, notes=notes,
+                                    parent_strategy_id=parent_strategy_id, mutation=mutation)
         return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
                 "metrics": met, "synthetic": synthetic, "run_id": run_id}
 
@@ -332,6 +342,26 @@ class Services:
         Results are in-sample measurements only."""
         from edgelab.research.batch import run_search
         return run_search(self, spec if isinstance(spec, Mapping) else self._definition(spec), workers)
+
+    @property
+    def jobs(self):
+        """The background search job manager (created on first use; creating it marks searches a
+        previous process left `running` as `interrupted`)."""
+        if self._jobs is None:
+            from edgelab.research.jobs import JobManager
+            self._jobs = JobManager(self, self.lock)
+        return self._jobs
+
+    def start_search_job(self, spec: Any) -> dict:
+        """Run a search in the background (one job at a time; JobConflict otherwise)."""
+        return _jsonable(self.jobs.start(spec if isinstance(spec, Mapping) else self._definition(spec)))
+
+    def job_status(self, job_id: str) -> dict:
+        return _jsonable(self.jobs.status(job_id))
+
+    def cancel_job(self, job_id: str) -> dict:
+        """Request cooperative cancellation: the running cell finishes, no new cell starts."""
+        return _jsonable(self.jobs.cancel(job_id))
 
     def rank_search(self, search_id: str, metric: str | None = None, min_sample_label: str | None = None) -> dict:
         """In-sample ranking of a stored search's current cells (never validation)."""
