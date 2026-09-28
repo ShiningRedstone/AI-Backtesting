@@ -79,6 +79,28 @@ class ComparisonResult:
                          for r in self.runs]}
 
 
+def comparison_warnings(manifests: Sequence, check_periods: bool = True) -> list[str]:
+    """Caveats for reading results side by side (identical content, mixed timeframes,
+    different periods). `check_periods=False` when a common period is imposed anyway."""
+    warnings = []
+    by_hash: dict[str, list[str]] = {}
+    for m in manifests:
+        by_hash.setdefault(m.content_hash, []).append(m.dataset_id)
+    for h, same in by_hash.items():
+        if len(same) > 1:
+            warnings.append(f"datasets {same} have IDENTICAL bar content - agreement between them is "
+                            "not independent evidence")
+    tfs = {m.timeframe for m in manifests}
+    if len(tfs) > 1:
+        warnings.append(f"datasets have different timeframes {sorted(tfs)}; bar-count parameters mean "
+                        "different durations")
+    periods = {(m.start[:10], m.end[:10]) for m in manifests}
+    if check_periods and len(periods) > 1:
+        warnings.append("datasets cover different periods; use restrict_to_period(common_period(...)) "
+                        "for a like-for-like comparison")
+    return warnings
+
+
 def run_across_datasets(strategy: Strategy, datasets: Sequence[ValidatedDataset],
                         costs_for: Callable[[ValidatedDataset], CostModel], cfg: Mapping,
                         sessions: Mapping[str, SessionWindow] | None = None,
@@ -91,22 +113,7 @@ def run_across_datasets(strategy: Strategy, datasets: Sequence[ValidatedDataset]
     ids = [d.manifest.dataset_id for d in datasets]
     if len(set(ids)) != len(ids):
         raise ValueError(f"duplicate dataset ids in comparison: {ids}")
-    warnings = []
-    by_hash: dict[str, list[str]] = {}
-    for d in datasets:
-        by_hash.setdefault(d.manifest.content_hash, []).append(d.manifest.dataset_id)
-    for h, same in by_hash.items():
-        if len(same) > 1:
-            warnings.append(f"datasets {same} have IDENTICAL bar content - agreement between them is "
-                            "not independent evidence")
-    tfs = {d.manifest.timeframe for d in datasets}
-    if len(tfs) > 1:
-        warnings.append(f"datasets have different timeframes {sorted(tfs)}; bar-count parameters mean "
-                        "different durations")
-    periods = {(d.manifest.start[:10], d.manifest.end[:10]) for d in datasets}
-    if len(periods) > 1:
-        warnings.append("datasets cover different periods; use restrict_to_period(common_period(...)) "
-                        "for a like-for-like comparison")
+    warnings = comparison_warnings([d.manifest for d in datasets])
     bt_cfg = cfg["backtest"]
     sizing_cfg = sizing_cfg if sizing_cfg is not None else bt_cfg.get("sizing")
     runs = []
