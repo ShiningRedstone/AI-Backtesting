@@ -266,11 +266,14 @@ class TestBatchRunner(unittest.TestCase):
         self.assertEqual(c["historical_cells"], [])
         self.assertEqual({x["cell_id"]: x["run_id"] for x in c["cells"]}, {x["cell_id"]: x["run_id"] for x in a["cells"]})
 
-    def test_parallel_workers_are_refused_for_now(self):
+    def test_invalid_worker_counts_are_refused(self):
+        for bad in (0, -1, True, "2", 1.5):
+            with self.subTest(workers=bad):
+                with self.assertRaises(SearchSpecError):
+                    self.svc.run_search(self.spec, workers=bad)
         with self.assertRaises(SearchSpecError):
-            self.svc.run_search(self.spec, workers=2)
-        with self.assertRaises(SearchSpecError):
-            self.svc.run_search({**self.spec, "workers": 4})
+            self.svc.run_search({**self.spec, "workers": 0})
+        self.assertEqual(self.first["execution"], {"workers": 1, "mode": "sequential", "worker_processes": 0})
 
     def test_reproducible_in_a_fresh_workspace(self):
         root2 = Path(tempfile.mkdtemp())

@@ -324,21 +324,29 @@ class Services:
         synthetic = self._is_synthetic(ds.manifest)
         run_id = None
         if record:
-            from edgelab.research.runs import record_run
-            if synthetic:
-                label = "SYNTHETIC DEMONSTRATION - not evidence of trading performance"
-                notes = label if notes is None else f"{label} | {notes}"
-            elif notes is None:
-                notes = "single backtest (Strategy Lab)"
-            with guard:
-                run_id = record_run(self.store, self.cfg, res, met, notes=notes,
-                                    parent_strategy_id=parent_strategy_id, mutation=mutation)
+            run_id = self._record_cell(res, met, synthetic, notes=notes, parent_strategy_id=parent_strategy_id,
+                                       mutation=mutation, lock=lock)
         return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
                 "metrics": met, "synthetic": synthetic, "run_id": run_id}
 
-    def run_search(self, spec: Any, workers: int = 1) -> dict:
-        """Phase 4: plan and run a strategy x dataset search synchronously (workers=1), storing
-        every cell durably; re-running the same search resumes (completed cells are skipped).
+    def _record_cell(self, res, met: Mapping, synthetic: bool, *, notes: str | None = None,
+                     parent_strategy_id: str | None = None, mutation: str | None = None, lock=None) -> str:
+        """The run-record step of `_run_cell` (also used by the parallel search parent, which records
+        results computed in worker processes). Synthetic data is always labelled first."""
+        from edgelab.research.runs import record_run
+        if synthetic:
+            label = "SYNTHETIC DEMONSTRATION - not evidence of trading performance"
+            notes = label if notes is None else f"{label} | {notes}"
+        elif notes is None:
+            notes = "single backtest (Strategy Lab)"
+        with (lock if lock is not None else nullcontext()):
+            return record_run(self.store, self.cfg, res, met, notes=notes,
+                              parent_strategy_id=parent_strategy_id, mutation=mutation)
+
+    def run_search(self, spec: Any, workers: int | None = None) -> dict:
+        """Phase 4: plan and run a strategy x dataset search, storing every cell durably;
+        re-running the same search resumes (completed cells are skipped). `workers` (default: the
+        spec's `workers`, 1) > 1 computes cells in worker processes; this process alone writes.
         Results are in-sample measurements only."""
         from edgelab.research.batch import run_search
         return run_search(self, spec if isinstance(spec, Mapping) else self._definition(spec), workers)
