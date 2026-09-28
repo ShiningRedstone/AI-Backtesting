@@ -332,6 +332,16 @@ class Services:
         from edgelab.research.batch import run_search
         return run_search(self, spec if isinstance(spec, Mapping) else self._definition(spec), workers)
 
+    def rank_search(self, search_id: str, metric: str | None = None, min_sample_label: str | None = None) -> dict:
+        """In-sample ranking of a stored search's current cells (never validation)."""
+        from edgelab.research.ranking import rank_search
+        return _jsonable(rank_search(self.store, search_id, metric, min_sample_label))
+
+    def select_shortlist(self, search_id: str, strategy_ids: list[str]) -> dict:
+        """Tag strategies of a search as a shortlist; run status is never changed."""
+        from edgelab.research.ranking import select_shortlist
+        return _jsonable(select_shortlist(self.store, search_id, strategy_ids))
+
     def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False) -> dict:
         """One backtest through the existing engine (causality-checked). Returns measurements with
         sample-size labels; draws no conclusions. CFD datasets need configured broker costs."""
