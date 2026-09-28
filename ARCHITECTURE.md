@@ -112,6 +112,24 @@ edgelab/services.py, cli.py      + Strategy Lab contracts and `strategy` command
 strategies/fixtures/             8 strategy fixtures, a variation spec, a proposal batch (tests only)
 ```
 
+## Module map (Phase 3.5 additions)
+
+```
+edgelab/web/app.py         Flask API: routes -> Services, strict inputs, error mapping, SPA serving
+edgelab/web/__main__.py    `python -m edgelab.web [--demo] [--root] [--host --port --allow-remote]`
+edgelab/web/config.py      optional configs/web.yaml (outside the research config and its hash)
+edgelab/web/demo.py        separate demo workspace: synthetic CSVs -> normal import pipeline + fixtures
+edgelab/web/bundle.py      recomputes the frontend source hash (stale-bundle detection)
+edgelab/web/static/        built frontend (committed): index.html, app.js, styles.css, build-info.json
+edgelab/services.py        + system_status, builder_options, render_strategy, variation_preview,
+                           archive/restore, batches, family_detail, backtest_readiness,
+                           backtest_strategy(record=True) -> run registry, list_runs, get_run
+edgelab/strategy/lineage.py  + reversible archive, richer listing, batch listing
+edgelab/data/store.py      SQLite connection opened with check_same_thread=False (see ADR-30)
+web/                       React + TypeScript sources, esbuild build script, tsconfig, React type shim
+scripts/run_tests.py       full suite + reports/last_test_run.txt for the dashboard
+```
+
 ## Decision records
 
 ### ADR-1 Storage backend
@@ -354,6 +372,34 @@ strategies/fixtures/             8 strategy fixtures, a variation spec, a propos
   the pattern list, is the primary barrier. Proposal quality ("genuinely different") beyond hashes
   needs human review.
 
+### ADR-27 Web stack: React + TypeScript bundled with esbuild, served by the Python backend (Phase 3.5)
+- **Problem:** a real GUI was required, preferably React + TypeScript + Vite, but the build environment had no network access.
+- **Options:** (a) Vite (not installable offline); (b) dependency-free vanilla JS; (c) React + TypeScript bundled by esbuild (available offline; it is also the bundler Vite uses internally).
+- **Chosen:** (c). The built bundle is committed under `edgelab/web/static`, so running the app needs only Python. `build.mjs` records a source hash that a Python test checks for staleness. A small React type shim replaces `@types/react`, which was unavailable offline.
+- **Tradeoffs:** there is no Vite dev server or hot module reloading (`npm run watch` rebuilds instead), and the typings are narrower until `@types/react` is installed.
+
+### ADR-28 One strategy format: the UI edits the DSL document; the backend renders and judges it
+- **Problem:** a visual builder tempts a second, UI-specific model with its own serializer and validation rules.
+- **Chosen:** the builder's state is the DSL document itself. `/api/strategies/render` (debounced on every edit) returns the backend YAML, validation issues, the canonical form and identity. Feature pickers, operators, parameter types, valid higher-timeframe multiples, sessions and unsupported concepts all come from `/api/options`.
+- **Why:** there is exactly one source of truth for validity and identity, the same as the CLI.
+- **Tradeoffs:** live validation costs one small request per edit burst (around 300 ms debounce).
+
+### ADR-29 Thin HTTP layer with data-only inputs
+- **Problem:** the service layer accepts file paths and YAML text, which is convenient for the CLI but unsafe from a browser.
+- **Chosen:** HTTP accepts only JSON objects or well-formed IDs. Imports read only from configured folders, with whitelisted options. YAML parsing is a separate parse-only endpoint (`yaml.safe_load`). The server binds to loopback unless `--allow-remote` is given. Errors map to stable kinds, with tracebacks only in `details`.
+- **Tradeoffs:** there is no authentication, so the app is a local single-user tool, as documented.
+
+### ADR-30 SQLite connection usable from the web server's worker threads (Phase 1 store modified)
+- **Problem:** the threaded web server handles requests on worker threads, and `sqlite3` refuses a connection created on another thread. The browser tests found this: `/api/status` returned 500 on a real server.
+- **Options:** (a) run the server single-threaded, so a long backtest would block even health checks; (b) open one connection per request; (c) keep one connection, allow cross-thread use, and serialize access.
+- **Chosen:** (c). `check_same_thread=False`, with every service call behind one lock in the API layer.
+- **Tradeoffs:** requests are serialized. CLI and test behaviour is unchanged: the Phase 1 demo gives identical results and all 298 prior tests pass.
+
+### ADR-31 Demo workspace is a separate root; single backtests use the existing run registry
+- **Problem:** a demo must show the whole flow without fabricating data and without mixing with real research results.
+- **Chosen:** `--demo` creates a separate root, marked by `DEMO_WORKSPACE`. Synthetic bars go through the normal import pipeline with `SYNTHETIC*` providers, which the system flags everywhere. Single backtests are recorded by the Phase 1 run registry (status `IN_SAMPLE`, notes marking synthetic data), and the Results page lists synthetic runs separately.
+- **Tradeoffs:** a second workspace directory. No new results store was added.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and
@@ -392,3 +438,10 @@ strategies/fixtures/             8 strategy fixtures, a variation spec, a propos
 - Mode B claim detection is pattern-based. No AI model is called anywhere.
 - No batch execution of variations or proposals yet (Phase 4). `strategy backtest` runs one
   strategy on one dataset.
+
+## Known limitations (Phase 3.5)
+
+- The development server and the lock serialize requests. Long backtests and variation batches are synchronous, with busy states but no progress reporting (Phase 4).
+- No authentication: the app is a local, single-user tool bound to loopback by default.
+- No dataset deletion (datasets are immutable) and no browser file upload (files are imported from `web.import_dirs`).
+- React typings come from a local shim (offline build); `npm install` restores `@types/react`.

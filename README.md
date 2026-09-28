@@ -15,6 +15,7 @@ result under stated assumptions*, not a forecast.
 | 1 Foundation | structure, config, logging, data schema + validation gate, synthetic data, store, backtester, tests | **done** |
 | 2 Features + CFD data | CFD/any-provider import pipeline, dataset metadata/hashes, DST-safe sessions, 14 causal features, multi-timeframe, persistent feature cache, dataset comparison, CFD cost architecture, service layer + CLI | **done** (see CHANGELOG.md for IMPLEMENTED / TESTED / NOT IMPLEMENTED / REQUIRES REAL DATA) |
 | 3 Strategy DSL | versioned YAML/JSON DSL, validator with path errors, canonical identity, deterministic compiler into the existing Strategy interface, lineage library, Mode A controlled variations, Mode B proposal interface (no AI calls), opt-in signal exits in the engine, `time_of_day` feature | **done** (see STRATEGY_DSL.md, STRATEGY_GENERATION.md, CHANGELOG.md) |
+| 3.5 Web UI | Strategy Builder & research application foundation: visual DSL editor with live backend validation, library, families, lineage, Mode A variations, datasets, single backtests, demo workspace | **done** (see WEB_UI.md) |
 | 4 Research engine | batch/grid/random search, parallelism, benchmarks | next |
 | 5 Analytics | breakdowns by hour/session/weekday/month/year/event, distributions, rolling | planned |
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
@@ -26,7 +27,7 @@ result under stated assumptions*, not a forecast.
 
 ```bash
 pip install -r requirements.txt          # numpy, pandas, pyyaml, scipy (+ duckdb recommended)
-python -m unittest discover -s tests -t .           # 298 tests, ~45 s (DuckDB + slow tests skip unless enabled)
+python -m unittest discover -s tests -t .           # 318 tests, ~60 s (DuckDB + slow tests skip unless enabled; browser tests need Playwright)
 EDGELAB_SLOW_TESTS=1 python -m unittest tests.test_known_answers   # + multi-path bias check (~40 s)
 python scripts/phase1_demo.py                        # end-to-end synthetic demonstration (Phase 1)
 python scripts/phase2_benchmark.py                   # feature generation / cache benchmark (synthetic)
@@ -128,6 +129,18 @@ atr_15m = eng.compute(FeatureSpec.make("atr", {"period": 14}, timeframe="15m")).
 - CFD cost profiles ship **unconfigured**: the engine refuses to run a CFD backtest until you enter
   your broker's numbers (`CONFIG.md`). No broker figures are invented.
 - Import guide and expected file schema: `DATA_IMPORT.md`.
+
+## Web application (Phase 3.5)
+
+```bash
+python -m edgelab.web            # http://127.0.0.1:8765 - your workspace
+python -m edgelab.web --demo     # separate synthetic demo workspace (./demo_workspace)
+```
+
+Build strategies visually, validate them against the backend, save them, generate controlled
+variations, inspect lineage and run single causality-checked backtests. The browser edits the DSL
+document itself; validation, hashing, compilation and backtesting stay in Python. No Node.js is
+needed to run it (the built frontend is committed). Details: WEB_UI.md.
 
 ## Phase 3 in one screen
 

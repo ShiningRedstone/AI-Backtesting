@@ -112,6 +112,7 @@ class FeatureDef:
                 "edge_cases": self.edge_cases, "warmup": self.warmup, "known_at": self.known_at,
                 "causal": self.causal, "requires": list(self.requires),
                 "params": [p.describe() for p in self.params],
+                "session_params": list(self.session_params),
                 "outputs": [{"name": n, "doc": d} for n, d in self.outputs],
                 "depends_on": sorted({s.feature_id for s in (self.depends({p.name: p.default for p in self.params})
                                                             if self.depends else [])}),

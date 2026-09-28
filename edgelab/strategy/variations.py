@@ -169,8 +169,10 @@ class VariationBatch:
         return {"batch_id": self.batch_id, "base_strategy_id": self.base_strategy_id,
                 "generated": len(self.variants), "duplicates_removed": len(self.duplicates),
                 "same_as_base": len(self.same_as_base), "combinations": self.record.get("combinations"),
-                "variants": [{"strategy_id": v.strategy_id, "name": v.name,
-                              "changes": [c.__dict__ for c in v.lineage.changes]} for v in self.variants]}
+                "varied_parameters": [d["parameter"] for d in self.record.get("spec", {}).get("dimensions", [])],
+                "variants": [{"strategy_id": v.strategy_id, "name": v.name, "overrides": dict(v.overrides),
+                              "changes": [c.__dict__ for c in v.lineage.changes]} for v in self.variants],
+                "duplicates": list(self.duplicates), "same_as_base_combinations": list(self.same_as_base)}
 
 
 def _fmt(v: Any) -> str:

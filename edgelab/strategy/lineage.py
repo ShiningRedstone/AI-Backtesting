@@ -8,6 +8,8 @@ Lineage  = how an instance came to exist: from a user, from a Mode A variation o
 The library is a directory of JSON files (one per instance), easy to inspect, diff and back up:
     <root>/instances/<STRATEGY_ID>.json   canonical definition + identity + lineage records
     <root>/batches/<BATCH_ID>.json        generation batch records (reproducibility)
+    <root>/archived/<STRATEGY_ID>.json    archived instances (reversible; still loadable, so
+                                          lineage that points at them never breaks)
 An instance file is written once; later lineage records for the same logic are appended
 (the same logic can be reached from two parents - both paths are kept).
 """
@@ -82,15 +84,21 @@ class StrategyLibrary:
         self.root = Path(root)
         (self.root / "instances").mkdir(parents=True, exist_ok=True)
         (self.root / "batches").mkdir(parents=True, exist_ok=True)
+        (self.root / "archived").mkdir(parents=True, exist_ok=True)
 
     def _path(self, strategy_id: str) -> Path:
         return self.root / "instances" / f"{strategy_id}.json"
+
+    def _archived_path(self, strategy_id: str) -> Path:
+        return self.root / "archived" / f"{strategy_id}.json"
 
     def save(self, definition: Mapping, identity: Mapping, lineage: LineageRecord) -> bool:
         """Store an instance (canonical definition). Returns False if the logic already existed;
         the new lineage record is still appended (and the first definition is kept)."""
         p = self._path(identity["strategy_id"])
         rec = lineage.to_dict()
+        if self._archived_path(identity["strategy_id"]).exists():
+            raise ValueError(f"{identity['strategy_id']} is archived; restore it before saving it again")
         if p.exists():
             doc = json.loads(p.read_text())
             if doc["logic_hash"] != identity["logic_hash"]:
@@ -106,24 +114,63 @@ class StrategyLibrary:
         return True
 
     def load(self, strategy_id: str) -> dict:
+        """Active or archived instance (archived ones carry ``archived: true``)."""
+        p = self._path(strategy_id)
+        if p.exists():
+            return json.loads(p.read_text())
+        a = self._archived_path(strategy_id)
+        if a.exists():
+            return {**json.loads(a.read_text()), "archived": True}
+        raise KeyError(strategy_id)
+
+    def exists(self, strategy_id: str) -> bool:
+        return self._path(strategy_id).exists() or self._archived_path(strategy_id).exists()
+
+    @staticmethod
+    def _row(d: dict, archived: bool) -> dict:
+        first = d["lineage"][0]
+        definition = d.get("definition") or {}
+        return {"strategy_id": d["strategy_id"], "name": d.get("name"), "family_id": d.get("family_id"),
+                "generation_method": first["generation_method"],
+                "parent_strategy_id": first.get("parent_strategy_id"),
+                "generation_batch_id": first.get("generation_batch_id"),
+                "created_at": first.get("generation_timestamp"),
+                "timeframe": definition.get("timeframe"),
+                "n_parameters": len(definition.get("parameters") or {}),
+                "n_lineage_records": len(d["lineage"]), "archived": archived}
+
+    def list(self, family_id: str | None = None, include_archived: bool = False) -> list[dict]:
+        dirs = [("instances", False)] + ([("archived", True)] if include_archived else [])
+        out = []
+        for sub, archived in dirs:
+            for p in sorted((self.root / sub).glob("*.json")):
+                d = json.loads(p.read_text())
+                if family_id is None or d.get("family_id") == family_id:
+                    out.append(self._row(d, archived))
+        return out
+
+    def archive(self, strategy_id: str) -> None:
+        """Reversible removal from the active library (never deletes files)."""
         p = self._path(strategy_id)
         if not p.exists():
             raise KeyError(strategy_id)
-        return json.loads(p.read_text())
+        os.replace(p, self._archived_path(strategy_id))
 
-    def exists(self, strategy_id: str) -> bool:
-        return self._path(strategy_id).exists()
+    def restore(self, strategy_id: str) -> None:
+        a = self._archived_path(strategy_id)
+        if not a.exists():
+            raise KeyError(strategy_id)
+        os.replace(a, self._path(strategy_id))
 
-    def list(self, family_id: str | None = None) -> list[dict]:
+    def list_batches(self) -> list[dict]:
         out = []
-        for p in sorted((self.root / "instances").glob("*.json")):
-            d = json.loads(p.read_text())
-            if family_id is None or d.get("family_id") == family_id:
-                first = d["lineage"][0]
-                out.append({"strategy_id": d["strategy_id"], "name": d.get("name"), "family_id": d.get("family_id"),
-                            "generation_method": first["generation_method"],
-                            "parent_strategy_id": first.get("parent_strategy_id"),
-                            "generation_batch_id": first.get("generation_batch_id")})
+        for p in sorted((self.root / "batches").glob("*.json")):
+            b = json.loads(p.read_text())
+            out.append({"batch_id": b["batch_id"], "created_at": b.get("created_at"),
+                        "base_strategy_id": b["base"]["strategy_id"], "base_name": b["base"]["definition"].get("name"),
+                        "spec_name": b["spec"].get("name"), "mode": b["spec"].get("mode"),
+                        "combinations": b.get("combinations"), "generated": b.get("generated"),
+                        "duplicates": len(b.get("duplicates", [])), "same_as_base": len(b.get("same_as_base", []))})
         return out
 
     def families(self) -> dict[str, int]:
@@ -148,7 +195,7 @@ class StrategyLibrary:
 
     def _all_lineage(self) -> list[dict]:
         out = []
-        for p in (self.root / "instances").glob("*.json"):
+        for p in list((self.root / "instances").glob("*.json")) + list((self.root / "archived").glob("*.json")):
             d = json.loads(p.read_text())
             for r in d["lineage"]:
                 out.append({"strategy_id": d["strategy_id"], "parent": r.get("parent_strategy_id")})

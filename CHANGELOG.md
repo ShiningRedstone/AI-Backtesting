@@ -3,6 +3,30 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 3.5: Strategy Builder & research UI
+
+| Item | Status |
+|---|---|
+| Web app: `python -m edgelab.web` (Flask API over `services`, committed React + TypeScript bundle); `--demo` separate synthetic workspace | IMPLEMENTED, TESTED |
+| App shell: sidebar, top bar with strategy search, backend status and Settings; mobile drawer; demo banner | IMPLEMENTED, TESTED (browser) |
+| Dashboard: status, version, frontend build, last test run, counts, quick actions gated on prerequisites | IMPLEMENTED, TESTED |
+| Strategy Builder: general/family, timeframe, trading window, weekdays, local sessions, 5 parameter types, ALL/ANY/NOT condition trees with all DSL operators, operands (constant/parameter/bar/feature/arithmetic), registry-driven feature picker, higher-timeframe operands, market/stop/limit entries with expiry, stops, targets, time and signal exits, sizing | IMPLEMENTED, TESTED (browser) |
+| Live backend validation with section badges; Validate; Compile & Explain; backend DSL preview (draft/canonical/JSON), copy, download, load | IMPLEMENTED, TESTED |
+| Save / Save As New / Duplicate / Edit with lineage methods; unchanged logic saves nothing; invalid strategies refused | IMPLEMENTED, TESTED |
+| Library (filters, archive/restore with confirmation), strategy page, families with lineage tree and accessible table, variation batches | IMPLEMENTED, TESTED |
+| Mode A in the UI: grid / one-at-a-time / seeded random, backend combination preview and cap, results with duplicates, batch ID and compare | IMPLEMENTED, TESTED (browser) |
+| Datasets: library, metadata and validation report, import over the Phase 2 pipeline (import folders only) | IMPLEMENTED, TESTED (API) |
+| Single backtest: readiness per dataset (validation, timeframe, cost reasons), explicit selection, run recorded in the Phase 1 run registry; synthetic runs labelled and listed separately; CFD refused while costs are unconfigured | IMPLEMENTED, TESTED (browser + API) |
+| Results page (single runs only), Research and AI Discovery placeholders, read-only Settings | IMPLEMENTED |
+| Service additions (system_status, builder_options, render_strategy, variation_preview, archive/restore, batches, family_detail, backtest_readiness, list_runs, get_run); `backtest_strategy(record=)` | IMPLEMENTED, TESTED |
+| **Phase 1 store change:** SQLite `check_same_thread=False` (ADR-30); Phase 1 demo identical | IMPLEMENTED, TESTED |
+| Lineage library: reversible archive, richer listing, batch listing; variation summaries include overrides; feature `describe()` exposes session parameters | IMPLEMENTED, TESTED |
+| Optional `configs/web.yaml`, outside the research config hash | IMPLEMENTED, TESTED |
+| `scripts/run_tests.py` (dashboard test status); stale-bundle test; TypeScript type-check test | IMPLEMENTED, TESTED |
+| Batch research, analytics, OOS, walk-forward, Monte Carlo, prop simulation, reports, paper/live trading, AI model calls | NOT IMPLEMENTED (Phase 4+) |
+
+Tests: 318 (20 new: 15 API, 5 browser end-to-end); 4 skipped (DuckDB x3, slow opt-in).
+
 ## Phase 3: Strategy DSL, compiler, lineage, controlled variations, proposal interface
 
 ### DSL and validation (`edgelab/strategy/dsl.py`, STRATEGY_DSL.md)

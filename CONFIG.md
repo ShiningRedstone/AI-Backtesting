@@ -143,6 +143,20 @@ broker). Profiles never supply provider, instrument, asset type or price basis. 
 - Single backtests through `strategy backtest` use `costs.yaml` exactly like Phase 1/2. CFD
   datasets are refused until a broker cost profile is configured.
 
+## Web application settings (Phase 3.5): `configs/web.yaml` (optional)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `web.host` | `127.0.0.1` | bind address; non-loopback addresses need `--allow-remote` (no authentication exists) |
+| `web.port` | `8765` | HTTP port |
+| `web.builder_timeframes` | `1m … 4h` | strategy timeframes offered by the builder (plus those of imported datasets); each must parse as a DSL timeframe |
+| `web.import_dirs` | `[data/import]` | folders (relative to the root) the UI may import files from |
+| `web.max_request_mb` | `5` | request size limit |
+
+This file is deliberately **not** part of the research configuration: it is not in
+`CONFIG_FILES`, not validated with it, and not included in `config_hash`, so changing a port
+or a menu can never change a research result or its provenance. Unknown keys are refused.
+
 ## Planned (later phases)
 
 `search.yaml` (P4), `validation_splits.yaml` / `walk_forward.yaml` (P6),

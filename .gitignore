@@ -8,3 +8,6 @@ reports/output/
 data/feature_cache/
 reports/imports/
 data/strategy_library/
+reports/last_test_run.txt
+demo_workspace/
+web/node_modules/

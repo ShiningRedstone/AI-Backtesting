@@ -11,6 +11,10 @@ so the same functions back the CLI today and HTTP endpoints later:
                          edit_strategy, duplicate_strategy, load_strategy, list_strategies,
                          strategy_families, strategy_lineage, generate_variations,
                          proposal_menu, ingest_proposals, backtest_strategy
+  WEB UI (Phase 3.5)     system_status, builder_options, render_strategy, variation_preview,
+                         archive_strategy, restore_strategy, list_variation_batches,
+                         get_variation_batch, family_detail, backtest_readiness, list_runs,
+                         get_run, list_import_files
 
 Nothing here fabricates data: when something is unavailable the response says so. Nothing
 here judges strategies: backtest results are returned with their sample-size labels only.
@@ -284,7 +288,7 @@ class Services:
                 self.library.save(rep.definitions[rec.strategy_id], rep.identities[rec.strategy_id], rec)
         return _jsonable({**rep.to_dict(), "saved": save})
 
-    def backtest_strategy(self, src: Any, dataset_id: str) -> dict:
+    def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False) -> dict:
         """One backtest through the existing engine (causality-checked). Returns measurements with
         sample-size labels; draws no conclusions. CFD datasets need configured broker costs."""
         from edgelab.analytics.metrics import compute_metrics
@@ -298,9 +302,216 @@ class Services:
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
         res = run_backtest(ds, bound, costs, self.cfg["backtest"], sizing=strat.sizing)
         met = compute_metrics(res.trades, sample_thresholds=self.cfg.get("sample_size"))
-        return _jsonable({"strategy_id": strat.strategy_id, "dataset_id": dataset_id,
+        synthetic = self._is_synthetic(ds.manifest)
+        run_id = None
+        if record:
+            from edgelab.research.runs import record_run
+            run_id = record_run(self.store, self.cfg, res, met,
+                                notes="SYNTHETIC DEMONSTRATION - not evidence of trading performance"
+                                if synthetic else "single backtest (Strategy Lab)")
+        exits = res.trades["exit_reason"].value_counts().to_dict() if len(res.trades) else {}
+        return _jsonable({"strategy_id": strat.strategy_id, "dataset_id": dataset_id, "run_id": run_id,
+                          "synthetic": synthetic, "exit_reasons": exits, "n_signals": res.n_signals,
+                          "trades_hash": res.trades_hash,
                           "dataset": {k: getattr(ds.manifest, k) for k in ("provider", "asset_type", "instrument",
                                                                            "timeframe", "start", "end")},
                           "cost_status": costs.status, "metrics": met, "signal_diagnostics": bound.last_diagnostics,
                           "skipped": dict(res.skipped),
                           "note": "historical result under the stated assumptions; not a conclusion"})
+
+    # ============================================================ WEB UI (Phase 3.5)
+    @staticmethod
+    def _is_synthetic(m) -> bool:
+        return m.asset_type == "SYNTHETIC" or str(m.provider).lower().startswith("synthetic")
+
+    def system_status(self) -> dict:
+        from edgelab.core.identity import code_version
+        runs = self.store.list_runs()
+        return _jsonable({"backend": "ok", "code_version": code_version(), "config_hash": self._config_hash(),
+                          "store_backend": self.store.backend,
+                          "datasets": len(self.store.list_datasets()),
+                          "strategies": len(self.library.list()),
+                          "archived_strategies": len(self.library.list(include_archived=True)) - len(self.library.list()),
+                          "families": len(self.library.families()),
+                          "variation_batches": len(self.library.list_batches()),
+                          "runs": len(runs),
+                          "last_run": None if runs.empty else runs.iloc[-1].to_dict()})
+
+    def builder_options(self, timeframes: list[str] | None = None) -> dict:
+        """Everything the visual builder may offer, straight from the backend's own tables."""
+        from edgelab.data.schema import timeframe_minutes
+        from edgelab.strategy import dsl
+        tfs = sorted({f"{timeframe_minutes(t)}m" for t in (timeframes or ["1m", "5m", "15m", "30m", "60m"])}
+                     | {d["timeframe"] for d in self.list_datasets() if d.get("timeframe")},
+                     key=timeframe_minutes)
+        htf = {t: [h for h in tfs if timeframe_minutes(h) >= timeframe_minutes(t)
+                   and timeframe_minutes(h) % timeframe_minutes(t) == 0] for t in tfs}
+        return _jsonable({
+            "dsl_version": dsl.DSL_VERSION, "timeframes": tfs, "htf_options": htf,
+            "comparison_operators": list(dsl.OPERATORS), "bar_fields": list(dsl.BAR_FIELDS),
+            "arithmetic": list(dsl.ARITH_OPS), "directions": list(dsl.DIRECTIONS),
+            "entry_order_types": list(dsl.ENTRY_ORDER_TYPES), "stop_types": list(dsl.STOP_TYPES),
+            "target_types": list(dsl.TARGET_TYPES), "sizing_modes": list(dsl.SIZING_MODES),
+            "parameter_types": list(dsl.PARAM_TYPES), "weekdays": list(dsl.WEEKDAY_NAMES),
+            "unsupported": dict(dsl.UNSUPPORTED),
+            "sessions": {k: v.definition() for k, v in self.sessions.items()},
+            "features": [{**d.describe(), "session_params": list(d.session_params)}
+                         for d in all_defs() if not d.feature_id.startswith("_")],
+            "session_flatten": dict(self.cfg["backtest"].get("session", {})),
+            "variation_modes": ["grid", "one_at_a_time", "random_sample"]})
+
+    def render_strategy(self, src: Any) -> dict:
+        """Live DSL preview: the draft as YAML/JSON (exactly what will be validated) plus, when
+        valid, the backend canonical form and identity. Never raises on an invalid draft."""
+        import yaml
+        from edgelab.strategy.dsl import canonical_definition, validate
+        raw = self._definition(src)
+        res = validate(raw, self.sessions)
+        out = {"yaml": yaml.safe_dump(raw, sort_keys=False, allow_unicode=True),
+               "valid": res.valid, "errors": [i.to_dict() for i in res.errors],
+               "warnings": [i.to_dict() for i in res.warnings], "canonical": None, "canonical_yaml": None,
+               "identity": None}
+        if res.valid:
+            from edgelab.strategy.dsl import identity
+            canon = canonical_definition(raw)
+            out.update(canonical=canon, canonical_yaml=yaml.safe_dump(canon, sort_keys=False, allow_unicode=True),
+                       identity=identity(raw, self._all_sessions(raw)).to_dict())
+        return _jsonable(out)
+
+    def variation_preview(self, base: Any, spec: Any) -> dict:
+        """Count combinations and check the spec against the base WITHOUT generating."""
+        from edgelab.strategy.dsl import load_definition, validate
+        from edgelab.strategy.variations import MAX_GRID, _dim_values, combination_count, validate_spec
+        raw = self._definition(base)
+        base_res = validate(raw, self.sessions)
+        if not base_res.valid:
+            return _jsonable({"ok": False, "errors": [{"path": "base." + i.path, "message": i.message,
+                                                       "hint": i.hint} for i in base_res.errors]})
+        sp = load_definition(spec)
+        res = validate_spec(sp, raw)
+        out = {"ok": res.valid, "errors": [i.to_dict() for i in res.errors],
+               "warnings": [i.to_dict() for i in res.warnings],
+               "max_variants": sp.get("max_variants", 1000), "mode": sp.get("mode", "grid")}
+        if res.valid:
+            n = combination_count(sp)
+            grid = 1
+            for d in sp["dimensions"]:
+                grid *= len(_dim_values(d))
+            out.update(combinations=n, full_grid=grid,
+                       values={d["parameter"]: _dim_values(d) for d in sp["dimensions"]})
+            if n > out["max_variants"] or grid > MAX_GRID:
+                out["ok"] = False
+                out["errors"].append({"path": "max_variants", "severity": "error", "hint": "",
+                                      "message": f"{n:,} combinations exceed max_variants {out['max_variants']:,}; "
+                                                 "generation would be refused (never truncated)"})
+        return _jsonable(out)
+
+    def archive_strategy(self, strategy_id: str) -> dict:
+        self.library.archive(strategy_id)
+        return {"strategy_id": strategy_id, "archived": True}
+
+    def restore_strategy(self, strategy_id: str) -> dict:
+        self.library.restore(strategy_id)
+        return {"strategy_id": strategy_id, "archived": False}
+
+    def list_variation_batches(self) -> list[dict]:
+        return _jsonable(self.library.list_batches())
+
+    def get_variation_batch(self, batch_id: str) -> dict:
+        b = self.library.load_batch(batch_id)
+        children = []
+        for sid in b.get("children", []):
+            try:
+                rec = self.library.load(sid)
+            except KeyError:
+                children.append({"strategy_id": sid, "missing": True})
+                continue
+            lin = next((r for r in rec["lineage"] if r.get("generation_batch_id") == batch_id), rec["lineage"][0])
+            children.append({"strategy_id": sid, "name": rec.get("name"), "archived": rec.get("archived", False),
+                             "overrides": (lin.get("generation_parameters") or {}).get("overrides", {}),
+                             "changes": lin.get("changes", [])})
+        return _jsonable({**b, "children_detail": children})
+
+    def family_detail(self, family_id: str) -> dict:
+        rows = self.library.list(family_id, include_archived=True)
+        if not rows:
+            raise KeyError(family_id)
+        fam = {}
+        for r in rows:
+            fam = (self.library.load(r["strategy_id"])["definition"].get("family") or {})
+            if fam.get("hypothesis"):
+                break
+        ids = {r["strategy_id"] for r in rows}
+        nodes = []
+        for r in rows:
+            recs = self.library.load(r["strategy_id"])["lineage"]
+            nodes.append({**r, "parents": sorted({x.get("parent_strategy_id") for x in recs
+                                                  if x.get("parent_strategy_id")}),
+                          "changes": recs[0].get("changes", [])})
+        return _jsonable({"family_id": family_id, "family": fam, "instances": nodes,
+                          "roots": [n["strategy_id"] for n in nodes if not (set(n["parents"]) & ids)]})
+
+    def backtest_readiness(self, strategy_src: Any = None) -> dict:
+        """Every dataset with the reasons it can or cannot run the given strategy (nothing invented)."""
+        from edgelab.engine.costs import CostConfigError, cost_model_from_config
+        from edgelab.data.schema import timeframe_minutes
+        tf = None
+        if strategy_src is not None:
+            raw = self._definition(strategy_src)
+            try:
+                tf = timeframe_minutes(str(raw.get("timeframe")))
+            except ValueError:
+                tf = None
+        out = []
+        for d in self.list_datasets():
+            m = self.store.get_manifest(d["dataset_id"])
+            reasons = []
+            try:
+                cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)
+                cost = {"status": cm.status, "profile": getattr(cm, "profile", None)}
+            except CostConfigError as exc:
+                cost = {"status": "unconfigured", "reason": str(exc)}
+                reasons.append("broker/provider cost profile is unconfigured - configure verified costs first")
+            except KeyError as exc:
+                cost = {"status": "unconfigured", "reason": f"no cost profile for {exc}"}
+                reasons.append("no cost profile for this instrument")
+            if d.get("quality_status") == "FAIL":
+                reasons.append("dataset failed validation")
+            if tf is not None and timeframe_minutes(d["timeframe"]) != tf:
+                reasons.append(f"timeframe {d['timeframe']} does not match the strategy timeframe {tf}m")
+            out.append({**d, "cost": cost, "synthetic": self._is_synthetic(m),
+                        "limitations": self._limitations(m), "runnable": not reasons, "reasons": reasons})
+        return _jsonable({"strategy_timeframe": None if tf is None else f"{tf}m", "datasets": out})
+
+    def list_runs(self) -> list[dict]:
+        rows = []
+        for r in self.store.list_runs().to_dict("records"):
+            rec, _ = self.store.load_run(r["run_id"])
+            ds = rec.get("dataset", {})
+            rows.append({**r, "strategy_name": rec.get("strategy", {}).get("dsl", {}).get("name"),
+                         "notes": rec.get("notes"), "synthetic": str(rec.get("notes", "")).startswith("SYNTHETIC"),
+                         "instrument": ds.get("instrument"), "timeframe": ds.get("timeframe"),
+                         "headline_metrics": rec.get("headline_metrics", {})})
+        return _jsonable(rows)
+
+    def get_run(self, run_id: str, max_trades: int = 500) -> dict:
+        rec, trades = self.store.load_run(run_id)
+        rec = {k: v for k, v in rec.items() if k not in ("config", "environment")}
+        t = trades.head(max_trades)
+        for c in t.columns:
+            if str(t[c].dtype).startswith("datetime"):
+                t[c] = t[c].astype(str)
+        return _jsonable({"record": rec, "synthetic": str(rec.get("notes", "")).startswith("SYNTHETIC"),
+                          "n_trades": len(trades), "trades_shown": len(t),
+                          "trades": t.to_dict("records")})
+
+    def list_import_files(self, import_dirs: list[str]) -> list[dict]:
+        out = []
+        for d in import_dirs:
+            base = (self.root / d).resolve()
+            if not base.is_dir():
+                continue
+            for p in sorted(base.rglob("*")):
+                if p.is_file() and p.suffix.lower() in (".csv", ".txt"):
+                    out.append({"path": str(p.relative_to(self.root.resolve())), "bytes": p.stat().st_size})
+        return out

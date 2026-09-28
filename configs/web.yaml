@@ -1,0 +1,12 @@
+# Web application settings (Phase 3.5). NOT part of the research configuration:
+# nothing here changes a strategy, a backtest, or the research config hash.
+web:
+  host: 127.0.0.1        # loopback only by default. There is no authentication:
+                         # binding to another address requires --allow-remote.
+  port: 8765
+  # Strategy timeframes the builder offers (the backend also adds the timeframes of
+  # imported datasets). Any Nm / Nh value the DSL accepts is valid here.
+  builder_timeframes: [1m, 2m, 3m, 5m, 10m, 15m, 30m, 1h, 2h, 4h]
+  # The UI can import only files inside these folders (relative to the project root).
+  import_dirs: [data/import]
+  max_request_mb: 5

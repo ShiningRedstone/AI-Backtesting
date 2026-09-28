@@ -185,7 +185,10 @@ class SQLiteStore(ResultStore):
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(self.path)
+        # check_same_thread=False: the web app (Phase 3.5) serves requests on worker threads and
+        # serializes every store access behind one lock, so the connection is never shared
+        # concurrently. Single-threaded callers (CLI, tests) are unaffected.
+        self.con = sqlite3.connect(self.path, check_same_thread=False)
         for s in SCHEMA:
             self.con.execute(s.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER"))
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_bars ON bars(dataset_id, ts_ns)")
