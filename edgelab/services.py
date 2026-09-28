@@ -288,9 +288,14 @@ class Services:
                 self.library.save(rep.definitions[rec.strategy_id], rep.identities[rec.strategy_id], rec)
         return _jsonable({**rep.to_dict(), "saved": save})
 
-    def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False) -> dict:
-        """One backtest through the existing engine (causality-checked). Returns measurements with
-        sample-size labels; draws no conclusions. CFD datasets need configured broker costs."""
+    def _run_cell(self, src: Any, dataset_id: str, record: bool = False, *,
+                  parent_strategy_id: str | None = None, mutation: str | None = None,
+                  notes: str | None = None) -> dict:
+        """One (strategy, dataset) cell through the existing engine: load (re-validated) ->
+        compile -> cost model (CFD refusal) -> bind -> causality-checked backtest with the
+        strategy's OWN sizing -> metrics -> optional run record. Returns the internal objects
+        (not JSON); `backtest_strategy` and Phase 4 batch search both use this one path.
+        `notes=None` keeps the Strategy Lab note (synthetic data is always labelled)."""
         from edgelab.analytics.metrics import compute_metrics
         from edgelab.engine.backtester import run_backtest
         from edgelab.engine.costs import cost_model_from_config
@@ -306,16 +311,28 @@ class Services:
         run_id = None
         if record:
             from edgelab.research.runs import record_run
-            run_id = record_run(self.store, self.cfg, res, met,
-                                notes="SYNTHETIC DEMONSTRATION - not evidence of trading performance"
-                                if synthetic else "single backtest (Strategy Lab)")
+            if synthetic:
+                notes = "SYNTHETIC DEMONSTRATION - not evidence of trading performance"
+            elif notes is None:
+                notes = "single backtest (Strategy Lab)"
+            run_id = record_run(self.store, self.cfg, res, met, notes=notes,
+                                parent_strategy_id=parent_strategy_id, mutation=mutation)
+        return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
+                "metrics": met, "synthetic": synthetic, "run_id": run_id}
+
+    def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False) -> dict:
+        """One backtest through the existing engine (causality-checked). Returns measurements with
+        sample-size labels; draws no conclusions. CFD datasets need configured broker costs."""
+        cell = self._run_cell(src, dataset_id, record)
+        ds, res, met = cell["ds"], cell["result"], cell["metrics"]
         exits = res.trades["exit_reason"].value_counts().to_dict() if len(res.trades) else {}
-        return _jsonable({"strategy_id": strat.strategy_id, "dataset_id": dataset_id, "run_id": run_id,
-                          "synthetic": synthetic, "exit_reasons": exits, "n_signals": res.n_signals,
-                          "trades_hash": res.trades_hash,
+        return _jsonable({"strategy_id": cell["strategy"].strategy_id, "dataset_id": dataset_id,
+                          "run_id": cell["run_id"], "synthetic": cell["synthetic"], "exit_reasons": exits,
+                          "n_signals": res.n_signals, "trades_hash": res.trades_hash,
                           "dataset": {k: getattr(ds.manifest, k) for k in ("provider", "asset_type", "instrument",
                                                                            "timeframe", "start", "end")},
-                          "cost_status": costs.status, "metrics": met, "signal_diagnostics": bound.last_diagnostics,
+                          "cost_status": cell["costs"].status, "metrics": met,
+                          "signal_diagnostics": cell["bound"].last_diagnostics,
                           "skipped": dict(res.skipped),
                           "note": "historical result under the stated assumptions; not a conclusion"})
 
@@ -453,7 +470,6 @@ class Services:
 
     def backtest_readiness(self, strategy_src: Any = None) -> dict:
         """Every dataset with the reasons it can or cannot run the given strategy (nothing invented)."""
-        from edgelab.engine.costs import CostConfigError, cost_model_from_config
         from edgelab.data.schema import timeframe_minutes
         tf = None
         if strategy_src is not None:
@@ -462,26 +478,32 @@ class Services:
                 tf = timeframe_minutes(str(raw.get("timeframe")))
             except ValueError:
                 tf = None
-        out = []
-        for d in self.list_datasets():
-            m = self.store.get_manifest(d["dataset_id"])
-            reasons = []
-            try:
-                cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)
-                cost = {"status": cm.status, "profile": getattr(cm, "profile", None)}
-            except CostConfigError as exc:
-                cost = {"status": "unconfigured", "reason": str(exc)}
-                reasons.append("broker/provider cost profile is unconfigured - configure verified costs first")
-            except KeyError as exc:
-                cost = {"status": "unconfigured", "reason": f"no cost profile for {exc}"}
-                reasons.append("no cost profile for this instrument")
-            if d.get("quality_status") == "FAIL":
-                reasons.append("dataset failed validation")
-            if tf is not None and timeframe_minutes(d["timeframe"]) != tf:
-                reasons.append(f"timeframe {d['timeframe']} does not match the strategy timeframe {tf}m")
-            out.append({**d, "cost": cost, "synthetic": self._is_synthetic(m),
-                        "limitations": self._limitations(m), "runnable": not reasons, "reasons": reasons})
+        out = [self._dataset_eligibility(d, tf) for d in self.list_datasets()]
         return _jsonable({"strategy_timeframe": None if tf is None else f"{tf}m", "datasets": out})
+
+    def _dataset_eligibility(self, d: Mapping, tf_minutes: int | None = None) -> dict:
+        """Whether one dataset (a `list_datasets` row) can run a strategy on `tf_minutes` bars
+        (None = timeframe not checked), with every reason it cannot. Nothing is invented: an
+        unconfigured cost profile makes the dataset ineligible."""
+        from edgelab.engine.costs import CostConfigError, cost_model_from_config
+        from edgelab.data.schema import timeframe_minutes
+        m = self.store.get_manifest(d["dataset_id"])
+        reasons = []
+        try:
+            cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)
+            cost = {"status": cm.status, "profile": getattr(cm, "profile", None)}
+        except CostConfigError as exc:
+            cost = {"status": "unconfigured", "reason": str(exc)}
+            reasons.append("broker/provider cost profile is unconfigured - configure verified costs first")
+        except KeyError as exc:
+            cost = {"status": "unconfigured", "reason": f"no cost profile for {exc}"}
+            reasons.append("no cost profile for this instrument")
+        if d.get("quality_status") == "FAIL":
+            reasons.append("dataset failed validation")
+        if tf_minutes is not None and timeframe_minutes(d["timeframe"]) != tf_minutes:
+            reasons.append(f"timeframe {d['timeframe']} does not match the strategy timeframe {tf_minutes}m")
+        return {**d, "cost": cost, "synthetic": self._is_synthetic(m),
+                "limitations": self._limitations(m), "runnable": not reasons, "reasons": reasons}
 
     def list_runs(self) -> list[dict]:
         rows = []
