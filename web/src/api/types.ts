@@ -94,3 +94,63 @@ export interface SystemStatus {
   config_hash: string; store_backend: string; datasets: number; strategies: number; archived_strategies: number;
   families: number; variation_batches: number; runs: number; last_run: Record<string, unknown> | null; test_status: string | null;
 }
+
+// ------------------------------------------------------------------ research (Phase 4: /api/research)
+export type RankingMetric = "expectancy_r" | "profit_factor" | "net_r";
+export type SampleLabel = "LOW SAMPLE SIZE" | "MODERATE SAMPLE" | "ADEQUATE SAMPLE";
+export interface SearchSpec {
+  search_spec_version?: number;
+  strategies: { ids?: string[]; variation_batches?: string[]; proposal_batches?: string[]; families?: string[] };
+  datasets: string[];
+  period?: "common" | { start: string; end: string } | null;
+  ranking?: { metric?: RankingMetric; min_sample_label?: SampleLabel };
+  max_cells?: number; seed?: number | null; workers?: number;
+}
+export interface SearchValidation { valid: boolean; errors: Issue[]; warnings: Issue[]; canonical?: SearchSpec; search_hash?: string }
+export interface PlanCell {
+  cell_id: string; plan_index: number; strategy_id: string; dataset_id: string; dataset_content_hash: string;
+  strategy_timeframe: string | null; cost_status: string; synthetic: boolean; eligible: boolean; reasons: string[];
+}
+export interface SearchPlan {
+  search_id: string; search_hash: string; config_hash: string; plan_hash: string; spec: SearchSpec;
+  strategies: { strategy_id: string; timeframe: string | null; sources: string[] }[];
+  period: { mode: string; start: string; end: string } | null; cells: PlanCell[];
+  counts: { strategy_references: number; strategies: number; duplicate_references_collapsed: number;
+            excluded_archived: number; datasets: number; planned: number; eligible: number; ineligible: number };
+  excluded: { strategy_id: string; reason: string; sources: string[] }[]; warnings: string[]; note: string;
+}
+export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
+export interface JobProgress {
+  stored: boolean; batch_status?: string; planned?: number; eligible?: number; ineligible?: number; evaluated?: number;
+  failed?: number; skipped_resume?: number; cancelled?: number; trials?: number; pending?: number;
+  cell_status?: Record<string, number>; fraction_done?: number | null;
+}
+export interface JobStatus {
+  job_id: string; search_id: string; state: JobState; history: string[]; created_at: string; started_at: string | null;
+  finished_at: string | null; error: string | null; cancel_requested: boolean; progress: JobProgress;
+}
+export interface SearchBatch {
+  search_id: string; search_hash: string; config_hash: string; created_at: string; finished_at: string | null;
+  status: string; spec: SearchSpec; shortlist: Shortlist | null; warnings: string[];
+  n_planned: number; n_eligible: number; n_ineligible: number; n_evaluated: number; n_skipped_resume: number;
+  n_failed: number; n_cancelled: number; n_trials: number;
+}
+export interface SearchCell {
+  search_id: string; cell_id: string; plan_index: number; strategy_id: string; dataset_id: string;
+  dataset_content_hash: string; status: string; run_id: string | null; trades_hash: string | null;
+  reasons: string[] | null; error: string | null; headline: Record<string, unknown> | null; current: boolean;
+}
+export interface SearchDetail extends SearchBatch {
+  cells: SearchCell[]; historical_cells: SearchCell[];
+  cumulative: Record<string, number>; note: string;
+}
+export interface RankedRow {
+  rank: number; strategy_id: string; dataset_id: string; cell_id: string; run_id: string | null; trades_hash: string | null;
+  value: number | null; value_infinite: boolean; metrics: Record<string, unknown>;
+}
+export interface Ranking {
+  search_id: string; search_status: string; metric: RankingMetric; direction: string; min_sample_label: SampleLabel;
+  n_trials: number; n_current_cells: number; n_ranked: number; excluded: Record<string, number>;
+  in_sample: boolean; status: string; validated: boolean; ranked: RankedRow[]; label: string; note: string;
+}
+export interface Shortlist { strategy_ids: string[]; selected_at: string; in_sample: boolean; validated: boolean; note: string }

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { DatasetRow } from "../api/types";
-import { href, useRoute } from "../app/router";
+import { useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt } from "../components/ui";
@@ -126,29 +126,6 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 }
 
 // =========================================================================== placeholders
-export function ResearchPage() {
-  return (
-    <div className="page" data-testid="research-page">
-      <header className="page-head"><h1>Research Engine</h1><Badge tone="info">planned · Phase 4</Badge></header>
-      <Banner tone="info">Batch research is coming in Phase 4. Nothing on this page runs yet.</Banner>
-      <div className="flow" aria-label="planned research flow">
-        <div className="flow-step done">Strategy / Variation batch<span>available now</span></div>
-        <div className="flow-arrow">→</div>
-        <div className="flow-step">Research configuration<span>Phase 4</span></div>
-        <div className="flow-arrow">→</div>
-        <div className="flow-step">Run research<span>Phase 4</span></div>
-        <div className="flow-arrow">→</div>
-        <div className="flow-step">Results<span>Phases 5–6</span></div>
-      </div>
-      <Card title="Planned">
-        <ul><li>Grid research</li><li>Random research</li><li>Parallel execution</li><li>Large strategy batches</li><li>Result comparison</li></ul>
-        <p className="muted small">Today: generate controlled variations in <a href={href("/variations")}>Variation Batches</a> and run
-          single causality-checked backtests from a strategy page.</p>
-      </Card>
-    </div>
-  );
-}
-
 export function DiscoveryPage() {
   return (
     <div className="page" data-testid="discovery-page">

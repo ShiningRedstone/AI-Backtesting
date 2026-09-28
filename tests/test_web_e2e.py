@@ -235,6 +235,192 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertLessEqual(width, 390 + 1)                                # no sideways page scroll
         self.tid(pg, "demo-banner").wait_for()
 
+    # ------------------------------------------------------------------ Phase 4 research page
+    def _research_ids(self):
+        strategies = {s["name"]: s["strategy_id"] for s in _get(self.base + "/api/strategies")}
+        datasets = {d["instrument"]: d["dataset_id"] for d in _get(self.base + "/api/datasets")}
+        return strategies, datasets
+
+    def _setup_search(self, pg, names=("ema_crossover", "rsi_threshold"), instruments=("NQ", "NAS100_CFD")):
+        strategies, datasets = self._research_ids()
+        pg.goto(self.base + "/#/research")
+        self.tid(pg, "search-setup").wait_for()
+        for n in names:
+            self.tid(pg, f"rs-ids-{strategies[n]}").check()
+        for i in instruments:
+            self.tid(pg, f"rs-datasets-{datasets[i]}").check()
+        return strategies, datasets
+
+    def _unexpected_errors(self):
+        """Page errors, ignoring the browser's own log line for an HTTP error the test asked for."""
+        return [e for e in self.errors if "Failed to load resource" not in e]
+
+    def test_6_research_setup_check_plan_and_refusals(self):
+        pg = self.page()
+        self._setup_search(pg)
+        self.assertNotIn("planned", self.tid(pg, "nav-research").inner_text())
+        self.assertIn("NOT VALIDATED", self.tid(pg, "research-in-sample").inner_text())
+        self.tid(pg, "rs-validate").click()
+        self.assertIn("well formed", self.tid(pg, "rs-validation").inner_text())
+        self.tid(pg, "rs-period").select_option("explicit")                  # naive time: refused, never guessed
+        self.tid(pg, "rs-start").fill("2024-01-02")
+        self.tid(pg, "rs-end").fill("2024-02-01T00:00:00Z")
+        self.tid(pg, "rs-validate").click()
+        pg.wait_for_function("() => /problem/.test(document.querySelector(\"[data-testid='rs-validation']\")?.innerText)")
+        self.assertIn("never guessed", self.tid(pg, "rs-validation-issues").inner_text())
+        self.tid(pg, "rs-period").select_option("none")
+        self.tid(pg, "rs-max-cells").fill("1")                              # 2 eligible cells > 1: refused (422)
+        self.tid(pg, "rs-plan").click()
+        err = self.tid(pg, "rs-error")
+        err.wait_for()
+        self.assertIn("never truncated", err.inner_text())
+        self.tid(pg, "rs-max-cells").fill("100")
+        self.tid(pg, "rs-plan").click()
+        plan = self.tid(pg, "rs-plan-result")
+        plan.wait_for()
+        self.assertIn("4 planned · 2 eligible · 2 ineligible", plan.inner_text())
+        self.assertIn("cost profile is unconfigured", self.tid(pg, "rs-plan-cells").inner_text())
+        self.assertEqual(self.tid(pg, "rs-error").count(), 0)
+        self.assertEqual(self._unexpected_errors(), [])
+
+    def test_7_research_job_results_ranking_and_shortlist(self):
+        pg = self.page()
+        strategies, _ = self._setup_search(pg)
+        self.tid(pg, "rs-seed").fill("7")                                    # a search of its own
+        self.tid(pg, "rs-start-job").click()
+        pg.wait_for_url("**/#/research?job=JOB_*")
+        pg.wait_for_function("() => document.querySelector(\"[data-testid='rs-job-state']\")?.innerText === 'completed'",
+                             timeout=120000)                                  # reached through polling
+        self.assertIn("Trials", self.tid(pg, "rs-progress").inner_text())
+        sid = self.tid(pg, "rs-job-search").inner_text().strip()
+        self.assertIn(sid, self.tid(pg, "rs-searches").inner_text())         # the list refreshed
+        self.tid(pg, "rs-open-results").click()
+        self.tid(pg, "rs-search-page").wait_for()
+        self.assertIn("NOT VALIDATED", self.tid(pg, "rs-search-in-sample").inner_text())
+        statuses = pg.locator("[data-testid='rs-cells'] tbody tr").evaluate_all("rs => rs.map(r => r.dataset.status)")
+        self.assertEqual(sorted(statuses), ["completed", "completed", "ineligible", "ineligible"])
+        self.assertIn("None.", self.tid(pg, "rs-historical").inner_text())
+        self.assertEqual(self.tid(pg, "rs-trials").inner_text(), "2")
+        self.tid(pg, "rk-min-sample").select_option("LOW SAMPLE SIZE")
+        pg.wait_for_function("() => /LOW SAMPLE SIZE/.test(document.querySelector(\"[data-testid='rk-meta']\")?.innerText)")
+        self.assertIn("NOT VALIDATED", self.tid(pg, "rk-label").inner_text())
+        self.assertIn("2 trial(s)", self.tid(pg, "rk-meta").inner_text())
+        ema = strategies["ema_crossover"]
+        self.tid(pg, f"sl-{ema}").check()
+        self.tid(pg, "sl-save").click()
+        pg.wait_for_function(f"() => document.querySelector(\"[data-testid='sl-current']\")?.innerText.includes('{ema}')")
+        self.assertIn("implies no validation", self.tid(pg, "rs-shortlist").inner_text())
+        detail = _get(f"{self.base}/api/research/searches/{sid}")
+        self.assertEqual(detail["shortlist"]["strategy_ids"], [ema])
+        runs = [c["run_id"] for c in detail["cells"] if c["run_id"]]
+        self.assertTrue(all(r["status"] == "IN_SAMPLE" for r in _get(self.base + "/api/results") if r["run_id"] in runs))
+        self.assertEqual(self._unexpected_errors(), [])
+
+    def test_8_research_polling_and_cancel(self):
+        """The job endpoints are intercepted so the running state lasts exactly as long as the test needs."""
+        pg = self.page()
+        job_id, sid = "JOB_AAAAAAAAAAAA", "SRCH_AAAAAAAAAAAA"
+        state = {"polls": 0, "cancel": False}
+
+        def job(st, cancel_requested=False, evaluated=1):
+            return {"job_id": job_id, "search_id": sid, "state": st, "history": ["queued", st], "created_at": "2024-01-01T00:00:00",
+                    "started_at": "2024-01-01T00:00:01", "finished_at": None if st == "running" else "2024-01-01T00:00:09",
+                    "error": None, "cancel_requested": cancel_requested,
+                    "progress": {"stored": True, "batch_status": st, "planned": 4, "eligible": 3, "ineligible": 1,
+                                 "evaluated": evaluated, "failed": 0, "skipped_resume": 0, "cancelled": 2 if st == "cancelled" else 0,
+                                 "trials": evaluated, "pending": 0 if st == "cancelled" else 3 - evaluated,
+                                 "cell_status": {}, "fraction_done": evaluated / 3}}
+
+        def start(route):
+            if route.request.method != "POST":
+                return route.fallback()
+            route.fulfill(status=202, content_type="application/json", body=json.dumps({**job("queued", evaluated=0)}))
+
+        def status(route):
+            state["polls"] += 1
+            body = job("cancelled") if state["cancel"] else job("running")
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+        def cancel(route):
+            state["cancel"] = True
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(job("running", cancel_requested=True)))
+        pg.route("**/api/research/jobs", start)
+        pg.route(f"**/api/research/jobs/{job_id}", status)
+        pg.route(f"**/api/research/jobs/{job_id}/cancel", cancel)
+        self._setup_search(pg, names=("ema_crossover",), instruments=("NQ",))
+        self.tid(pg, "rs-start-job").click()
+        pg.wait_for_url(f"**/#/research?job={job_id}")
+        pg.wait_for_function("() => document.querySelector(\"[data-testid='rs-job-state']\")?.innerText === 'running'")
+        self.assertIn("Evaluated", self.tid(pg, "rs-progress").inner_text())
+        deadline = time.monotonic() + 20
+        while state["polls"] < 2:                                             # polling continues while running
+            self.assertLess(time.monotonic(), deadline, "the page did not poll the running job")
+            pg.wait_for_timeout(250)
+        self.tid(pg, "rs-cancel").click()
+        pg.wait_for_function("() => document.querySelector(\"[data-testid='rs-job-state']\")?.innerText === 'cancelled'")
+        self.assertEqual(self.tid(pg, "rs-cancel").count(), 0)                # no cancel once final
+        self.tid(pg, "rs-open-results").wait_for()
+        polls = state["polls"]
+        pg.wait_for_timeout(4500)                                             # > 2 poll intervals
+        self.assertEqual(state["polls"], polls)                               # polling stopped at the final state
+        self.assertEqual(self._unexpected_errors(), [])
+
+    def test_9_research_error_display_and_historical_cells(self):
+        pg = self.page()
+        conflict = {"error": {"kind": "job_conflict", "message": "Another search job is still active; one runs at a time.",
+                              "reason": "search job JOB_BBBBBBBBBBBB (SRCH_BBBBBBBBBBBB) is still running"}}
+        pg.route("**/api/research/jobs", lambda r: r.fulfill(status=409, content_type="application/json", body=json.dumps(conflict))
+                 if r.request.method == "POST" else r.fallback())
+        self._setup_search(pg, names=("ema_crossover",), instruments=("NQ",))
+        self.tid(pg, "rs-start-job").click()
+        err = self.tid(pg, "rs-error")
+        err.wait_for()
+        self.assertIn("one runs at a time", err.inner_text())
+        self.assertIn("still running", err.inner_text())
+        pg.goto(self.base + "/#/research/SRCH_000000000000")                  # unknown search: 404 from the backend
+        self.assertIn("Could not load search", self.tid(pg, "rs-search-error").inner_text())
+        pg.goto(self.base + "/#/research?job=JOB_000000000000")               # unknown job: 404, polling stops
+        self.assertIn("not known to the running server", self.tid(pg, "rs-job-error").inner_text())
+
+        sid = "SRCH_CCCCCCCCCCCC"                                            # current vs historical cells
+        cell = lambda cid, st, cur, rid=None: {"search_id": sid, "cell_id": cid, "plan_index": int(cid[-1]),  # noqa: E731
+                                              "strategy_id": f"STR_{cid[-1] * 12}", "dataset_id": "DS_X", "dataset_content_hash": "h",
+                                              "status": st, "run_id": rid, "trades_hash": "t" if rid else None,
+                                              "reasons": ["no cost profile"] if st == "ineligible" else [], "error": None,
+                                              "headline": {"trade_count": 150, "sample_label": "MODERATE SAMPLE", "expectancy_r": 0.1}
+                                              if rid else None, "current": cur}
+        detail = {"search_id": sid, "search_hash": "a" * 64, "config_hash": "b" * 64, "created_at": "2024-01-01T00:00:00",
+                  "finished_at": "2024-01-01T00:01:00", "status": "completed", "spec": {"strategies": {}, "datasets": ["DS_X"]},
+                  "shortlist": None, "warnings": [], "n_planned": 2, "n_eligible": 1, "n_ineligible": 1, "n_evaluated": 0,
+                  "n_skipped_resume": 1, "n_failed": 0, "n_cancelled": 0, "n_trials": 0,
+                  "cells": [cell("CELL_1", "completed", True, "RUN_2024_00001"), cell("CELL_2", "ineligible", True)],
+                  "historical_cells": [cell("CELL_3", "completed", False, "RUN_2024_00002")],
+                  "cumulative": {"completed": 1, "failed": 0, "pending": 0, "ineligible": 1, "cancelled": 0, "trials": 1},
+                  "note": "in-sample research results under the stated assumptions; nothing is validated"}
+        ranking = {"search_id": sid, "search_status": "completed", "metric": "expectancy_r", "direction": "descending",
+                   "min_sample_label": "MODERATE SAMPLE", "n_trials": 1, "n_current_cells": 2, "n_ranked": 1,
+                   "excluded": {"historical": 1, "ineligible": 1}, "in_sample": True, "status": "IN_SAMPLE", "validated": False,
+                   "ranked": [{"rank": 1, "strategy_id": "STR_111111111111", "dataset_id": "DS_X", "cell_id": "CELL_1",
+                               "run_id": "RUN_2024_00001", "trades_hash": "t", "value": 0.1, "value_infinite": False,
+                               "metrics": {"trade_count": 150, "sample_label": "MODERATE SAMPLE", "expectancy_r": 0.1}}],
+                   "label": "IN-SAMPLE ranking of 1 result(s) drawn from 1 trial(s) - NOT VALIDATED", "note": "note"}
+        pg.route(f"**/api/research/searches/{sid}", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                                          body=json.dumps(detail)))
+        pg.route(f"**/api/research/searches/{sid}/ranking*", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                                                   body=json.dumps(ranking)))
+        pg.goto(f"{self.base}/#/research/{sid}")
+        self.tid(pg, "rs-search-page").wait_for()
+        cur = self.tid(pg, "rs-cells").inner_text()
+        hist = self.tid(pg, "rs-historical-cells").inner_text()
+        self.assertIn("STR_111111111111", cur)
+        self.assertIn("no cost profile", cur)                                 # ineligible stays visible
+        self.assertNotIn("STR_333333333333", cur)
+        self.assertIn("STR_333333333333", hist)
+        self.assertIn("not counted", self.tid(pg, "rs-historical").inner_text())
+        self.tid(pg, "rk-table").wait_for()
+        self.assertNotIn("STR_333333333333", self.tid(pg, "rk-table").inner_text())
+        self.assertEqual(self._unexpected_errors(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

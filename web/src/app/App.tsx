@@ -8,7 +8,8 @@ import { Badge, Mono } from "../components/ui";
 import { BuilderPage } from "../pages/Builder";
 import { DashboardPage, LibraryPage, StrategyPage } from "../pages/Strategies";
 import { FamiliesPage, ResultsPage, VariationsPage } from "../pages/Research";
-import { DatasetsPage, DiscoveryPage, ResearchPage, SettingsPage } from "../pages/Data";
+import { DatasetsPage, DiscoveryPage, SettingsPage } from "../pages/Data";
+import { ResearchPage } from "../pages/ResearchEngine";
 
 const NAV: { path: string; label: string; match: string; planned?: boolean }[] = [
   { path: "/", label: "Dashboard", match: "" },
@@ -17,7 +18,7 @@ const NAV: { path: string; label: string; match: string; planned?: boolean }[] =
   { path: "/families", label: "Families", match: "families" },
   { path: "/variations", label: "Variations", match: "variations" },
   { path: "/datasets", label: "Datasets", match: "datasets" },
-  { path: "/research", label: "Research", match: "research", planned: true },
+  { path: "/research", label: "Research", match: "research" },
   { path: "/results", label: "Results", match: "results" },
   { path: "/discovery", label: "AI Discovery", match: "discovery", planned: true },
   { path: "/settings", label: "Settings", match: "settings" },
