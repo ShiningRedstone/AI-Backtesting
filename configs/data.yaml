@@ -1,0 +1,41 @@
+# Data validation thresholds and exchange session calendars.
+validation:
+  max_missing_bar_ratio_warn: 0.001     # > 0.1% expected bars missing -> WARN
+  max_missing_bar_ratio_fail: 0.05      # > 5% -> FAIL (blocks strategies)
+  max_outside_session_ratio_fail: 0.001 # bars when market is closed; DST/tz error signature
+  spike_range_multiple: 25              # bar range > 25x median range -> WARN (bad tick?)
+  tick_misaligned_ratio_warn: 0.0
+  allow_nonpositive_prices: false       # set true for instruments that traded negative (CL 2020)
+
+sample_size:
+  min_trades: 100        # below -> "LOW SAMPLE SIZE" label (not rejected, but flagged)
+  preferred_trades: 500
+
+# Calendars: a trading date D runs session_open (previous day if later than close) -> session_close on D.
+# Holidays are NOT bundled (no exchange_calendars offline). Add closures / early closes here;
+# unlisted holidays show up as MISSING_DAY warnings instead of passing silently.
+calendars:
+  CME_EQUITY:            # NQ, ES, YM, RTY, MNQ, MES: Sun 18:00 - Fri 17:00 ET, daily halt 17:00-18:00
+    timezone: America/New_York
+    session_open: "18:00"
+    session_close: "17:00"
+    trading_weekdays: [mon, tue, wed, thu, fri]
+    holidays: []           # e.g. ["2024-12-25", "2025-01-01"]
+    early_closes: {}       # e.g. {"2024-11-29": "13:15"}
+  CME_GLOBEX_COMMODITY:  # CL, GC (same Globex hours)
+    timezone: America/New_York
+    session_open: "18:00"
+    session_close: "17:00"
+    trading_weekdays: [mon, tue, wed, thu, fri]
+    holidays: []
+    early_closes: {}
+  FX_24_5:
+    timezone: America/New_York
+    session_open: "17:00"
+    session_close: "17:00"
+    trading_weekdays: [mon, tue, wed, thu, fri]
+  CRYPTO_24_7:
+    timezone: UTC
+    session_open: "00:00"
+    session_close: "24:00"
+    trading_weekdays: [mon, tue, wed, thu, fri, sat, sun]

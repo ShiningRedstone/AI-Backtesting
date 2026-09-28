@@ -1,0 +1,21 @@
+# Transaction cost ASSUMPTIONS. Replace with your broker / prop firm's actual schedule.
+# All $ amounts are per contract per SIDE. Slippage is adverse ticks per fill.
+costs:
+  default:
+    commission_per_side: 0.00
+    fees_per_side: 0.00
+    slippage_ticks_market: 1
+    slippage_ticks_stop: 1
+    slippage_ticks_limit: 0
+    spread_points: 0.0
+  symbols:
+    NQ:  {commission_per_side: 1.50, fees_per_side: 0.70}    # ~$4.40 round trip + slippage (assumed)
+    ES:  {commission_per_side: 1.50, fees_per_side: 0.70}
+    MNQ: {commission_per_side: 0.50, fees_per_side: 0.25}
+    MES: {commission_per_side: 0.50, fees_per_side: 0.25}
+    YM:  {commission_per_side: 1.50, fees_per_side: 0.70}
+    RTY: {commission_per_side: 1.50, fees_per_side: 0.70}
+    CL:  {commission_per_side: 1.50, fees_per_side: 0.80}
+    GC:  {commission_per_side: 1.50, fees_per_side: 0.80}
+    NAS100_CFD: {commission_per_side: 0.0, fees_per_side: 0.0, slippage_ticks_market: 2,
+                 slippage_ticks_stop: 2, spread_points: 1.0}

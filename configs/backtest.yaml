@@ -1,0 +1,22 @@
+backtest:
+  # Same-bar stop/target conflict: conservative (stop first) | optimistic (target first)
+  # | intrabar (replay lower-timeframe bars; falls back to intrabar_fallback when LTF data
+  # is missing, inconsistent with the bar, or itself ambiguous). The effective policy is
+  # recorded on every run and every affected trade.
+  same_bar_policy: intrabar
+  intrabar_fallback: conservative
+  gap_fill:
+    target: limit_price      # gap through target fills at target (conservative) | open
+  limit_fill:
+    penetration_ticks: 0     # >0 requires price to trade THROUGH a limit to count as filled
+  entry:
+    allow_next_session_entry: false   # signal on a session's last bar may not fill next session
+  session:
+    flatten_daily: true
+    flatten_time: "16:00"    # exchange-local; positions closed at close of the bar ending at/after this
+    hold_overnight: false    # also force-close at the last bar of each trading date
+  max_trades_per_day: null
+  require_causality_check: true
+  causality_cuts: 20
+  cost_multiplier: 1.0
+  cost_sensitivity_multipliers: [0.5, 1.0, 1.5, 2.0, 3.0]

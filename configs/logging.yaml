@@ -1,0 +1,4 @@
+logging:
+  level: INFO
+  json_file: logs/edgelab.jsonl
+  console: true

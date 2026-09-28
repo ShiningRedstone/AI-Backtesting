@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+logs/*.jsonl
+data/*.sqlite
+data/*.duckdb
+data/processed/parquet/
+reports/output/

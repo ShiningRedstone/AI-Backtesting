@@ -1,0 +1,6 @@
+storage:
+  backend: auto              # auto -> DuckDB+Parquet if installed, else SQLite fallback
+  root: data
+  duckdb_path: edgelab.duckdb
+  parquet_dir: processed/parquet
+  sqlite_path: edgelab.sqlite

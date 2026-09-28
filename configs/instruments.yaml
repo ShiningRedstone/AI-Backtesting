@@ -1,0 +1,23 @@
+# Contract specifications. point_value (contract multiplier) is derived as tick_value / tick_size;
+# if you also state point_value it must agree or loading fails.
+# Futures specs are standard CME specs; VERIFY against the exchange before live use.
+instruments:
+  NQ:  {exchange: CME,   tick_size: 0.25, tick_value: 5.00,  point_value: 20,   calendar: CME_EQUITY,
+        description: "E-mini Nasdaq-100", contract_months: HMUZ, roll_methodology: "volume roll ~8 days pre-expiry (configurable)"}
+  MNQ: {exchange: CME,   tick_size: 0.25, tick_value: 0.50,  point_value: 2,    calendar: CME_EQUITY,
+        description: "Micro E-mini Nasdaq-100", contract_months: HMUZ}
+  ES:  {exchange: CME,   tick_size: 0.25, tick_value: 12.50, point_value: 50,   calendar: CME_EQUITY,
+        description: "E-mini S&P 500", contract_months: HMUZ}
+  MES: {exchange: CME,   tick_size: 0.25, tick_value: 1.25,  point_value: 5,    calendar: CME_EQUITY,
+        description: "Micro E-mini S&P 500", contract_months: HMUZ}
+  YM:  {exchange: CBOT,  tick_size: 1.0,  tick_value: 5.00,  point_value: 5,    calendar: CME_EQUITY,
+        description: "E-mini Dow", contract_months: HMUZ}
+  RTY: {exchange: CME,   tick_size: 0.10, tick_value: 5.00,  point_value: 50,   calendar: CME_EQUITY,
+        description: "E-mini Russell 2000", contract_months: HMUZ}
+  CL:  {exchange: NYMEX, tick_size: 0.01, tick_value: 10.00, point_value: 1000, calendar: CME_GLOBEX_COMMODITY,
+        description: "WTI Crude Oil", contract_months: all}
+  GC:  {exchange: COMEX, tick_size: 0.10, tick_value: 10.00, point_value: 100,  calendar: CME_GLOBEX_COMMODITY,
+        description: "Gold", contract_months: GJMQVZ}
+  # CFD fallback: broker-specific. Values below assume 1 unit = $1/point; set to YOUR broker's spec.
+  NAS100_CFD: {exchange: OTC, asset_class: cfd, tick_size: 0.1, tick_value: 0.1, point_value: 1,
+               calendar: CME_EQUITY, description: "Nasdaq-100 CFD (broker-specific; verify)"}
