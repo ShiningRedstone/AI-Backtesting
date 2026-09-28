@@ -1,13 +1,68 @@
+# EdgeLab .gitignore
+# Note: edgelab/web/static/ (built frontend) IS committed on purpose - the app runs without Node.
+
+# --- Python caches / tooling ---------------------------------------------------
 __pycache__/
-*.pyc
-logs/*.jsonl
-data/*.sqlite
-data/*.duckdb
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Virtual environments -------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- Secrets / environment files (credentials come from environment variables) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+
+# --- Build / packaging artifacts ------------------------------------------------
+build/
+dist/
+*.egg-info/
+node_modules/
+npm-debug.log*
+
+# --- IDE / editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Market data (never committed; placeholders kept) ---------------------------
+data/raw/*
+!data/raw/.gitkeep
+data/import/
+data/processed/*
+!data/processed/.gitkeep
+data/metadata/*
+!data/metadata/.gitkeep
+data/**/*.csv
+data/**/*.parquet
 data/processed/parquet/
-reports/output/
+
+# --- Generated caches / databases / runtime output ------------------------------
+data/*.sqlite
+data/*.sqlite-journal
+data/*.duckdb
+data/*.duckdb.wal
 data/feature_cache/
-reports/imports/
 data/strategy_library/
+logs/
+reports/output/
+reports/imports/
 reports/last_test_run.txt
 demo_workspace/
 web/node_modules/
