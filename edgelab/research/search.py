@@ -271,12 +271,12 @@ def _resolve_strategies(canon: Mapping, library) -> tuple[dict[str, dict], list[
         for sid in children:
             add(sid, bid, False, "strategies.variation_batches")
     if src["proposal_batches"]:
-        members: dict[str, list[str]] = {b: [] for b in src["proposal_batches"]}
-        for row in library.list(include_archived=True):
-            for rec in library.load(row["strategy_id"])["lineage"]:
-                b = rec.get("generation_batch_id")
-                if b in members and row["strategy_id"] not in members[b]:
-                    members[b].append(row["strategy_id"])
+        members: dict[str, list[str]] = {}
+        for bid in src["proposal_batches"]:
+            try:                                    # the saved batch record (Phase 4 step 5 onwards)
+                members[bid] = list(library.load_batch(bid).get("children") or [])
+            except FileNotFoundError:               # batches ingested earlier: lineage via the index
+                members[bid] = library.batch_members(bid)
         for bid in src["proposal_batches"]:
             if not members[bid]:
                 iss.append(Issue("strategies.proposal_batches",

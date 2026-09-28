@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
 from edgelab.core.identity import hash_obj
@@ -92,10 +93,22 @@ class IngestReport:
     lineage: list = field(default_factory=list)          # LineageRecord per accepted proposal
     definitions: dict = field(default_factory=dict)      # strategy_id -> canonical definition
     identities: dict = field(default_factory=dict)
+    source: dict = field(default_factory=dict)
+    config_hash: str | None = None
 
     def to_dict(self) -> dict:
         return {"batch_id": self.batch_id, "accepted": self.accepted, "rejected": self.rejected,
                 "warnings": self.warnings, "n_accepted": len(self.accepted), "n_rejected": len(self.rejected)}
+
+    def record(self) -> dict:
+        """The batch record the strategy library stores (kind: proposal). `children` are the
+        accepted strategy ids; rejected proposals are kept with their reasons."""
+        return {**self.to_dict(), "kind": "proposal",
+                "created_at": self.lineage[0].generation_timestamp if self.lineage
+                else datetime.now(timezone.utc).isoformat(),
+                "source": dict(self.source), "config_hash": self.config_hash,
+                "versions": {"dsl_version": dsl.DSL_VERSION, "compiler_version": COMPILER_VERSION},
+                "children": [a["strategy_id"] for a in self.accepted]}
 
 
 def _structure(node: Any) -> Any:
@@ -136,7 +149,7 @@ def ingest_proposals(batch: Any, sessions: Mapping[str, SessionWindow],
     batch_id = "PB_" + hash_obj(b, 12).upper()
     if top_errors:
         raise StrategyValidationError(dsl.ValidationResult([dsl.Issue("batch", e) for e in top_errors]))
-    rep = IngestReport(batch_id)
+    rep = IngestReport(batch_id, source=dict(b["source"]), config_hash=config_hash)
     fam_ids, logic_seen, struct_seen = set(), {}, {}
     for i, p in enumerate(props):
         errs: list[str] = []

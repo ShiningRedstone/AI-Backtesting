@@ -286,6 +286,7 @@ class Services:
         if save:
             for rec in rep.lineage:
                 self.library.save(rep.definitions[rec.strategy_id], rep.identities[rec.strategy_id], rec)
+            self.library.save_batch(rep.record())          # Mode B batch record (kind: proposal)
         return _jsonable({**rep.to_dict(), "saved": save})
 
     def _run_cell(self, src: Any, dataset_id: str, record: bool = False, *,
@@ -453,8 +454,9 @@ class Services:
         self.library.restore(strategy_id)
         return {"strategy_id": strategy_id, "archived": False}
 
-    def list_variation_batches(self) -> list[dict]:
-        return _jsonable(self.library.list_batches())
+    def list_variation_batches(self, kind: str | None = None) -> list[dict]:
+        """Variation batches (default, unchanged); kind="proposal" lists Mode B proposal batches."""
+        return _jsonable(self.library.list_batches(kind))
 
     def get_variation_batch(self, batch_id: str) -> dict:
         b = self.library.load_batch(batch_id)

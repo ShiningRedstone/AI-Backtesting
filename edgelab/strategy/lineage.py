@@ -12,6 +12,14 @@ The library is a directory of JSON files (one per instance), easy to inspect, di
                                           lineage that points at them never breaks)
 An instance file is written once; later lineage records for the same logic are appended
 (the same logic can be reached from two parents - both paths are kept).
+
+    <root>/index.json                     a derived listing index (never authoritative)
+The index holds the listing rows, batch summaries and batch membership so listings do not parse
+every file. It carries a fingerprint of the library files (name, size, mtime, inode per file) and
+a checksum of its own payload; a missing, stale, corrupted or foreign-version index is rebuilt
+from the directory scan, which stays the source of truth (`verify_index` compares the two).
+Batch records: Mode A variation batches (no `kind` key, historically) and Mode B proposal
+batches (`kind: proposal`).
 """
 from __future__ import annotations
 
@@ -24,6 +32,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 GENERATION_METHODS = ("user", "manual_edit", "duplicate", "mode_a_variation", "mode_b_proposal")
+INDEX_VERSION = 1
+BATCH_KINDS = ("variation", "proposal")
+
+
+def batch_kind(record: Mapping) -> str:
+    return record.get("kind", "variation")
 
 
 @dataclass(frozen=True)
@@ -82,6 +96,7 @@ def _atomic_write(path: Path, obj: Any) -> None:
 class StrategyLibrary:
     def __init__(self, root: str | Path):
         self.root = Path(root)
+        self.last_index_event: str | None = None     # "used" or "rebuilt:<reason>" (diagnostics)
         (self.root / "instances").mkdir(parents=True, exist_ok=True)
         (self.root / "batches").mkdir(parents=True, exist_ok=True)
         (self.root / "archived").mkdir(parents=True, exist_ok=True)
@@ -140,14 +155,89 @@ class StrategyLibrary:
                 "n_lineage_records": len(d["lineage"]), "archived": archived}
 
     def list(self, family_id: str | None = None, include_archived: bool = False) -> list[dict]:
-        dirs = [("instances", False)] + ([("archived", True)] if include_archived else [])
-        out = []
-        for sub, archived in dirs:
+        idx = self._index()
+        rows = idx["instances"] + (idx["archived"] if include_archived else [])
+        return [dict(r) for r in rows if family_id is None or r.get("family_id") == family_id]
+
+    # ------------------------------------------------------------------ index
+    @property
+    def index_path(self) -> Path:
+        return self.root / "index.json"
+
+    def _fingerprint(self) -> str:
+        from edgelab.core.identity import hash_obj
+        entries = []
+        for sub in ("instances", "archived", "batches"):
+            for p in sorted((self.root / sub).glob("*.json")):
+                st = p.stat()
+                entries.append([sub, p.name, st.st_size, st.st_mtime_ns, st.st_ino])
+        return hash_obj(entries)
+
+    @staticmethod
+    def _batch_row(b: dict) -> dict:
+        if batch_kind(b) == "variation":        # the pre-index listing row, unchanged
+            return {"batch_id": b["batch_id"], "created_at": b.get("created_at"),
+                    "base_strategy_id": b["base"]["strategy_id"], "base_name": b["base"]["definition"].get("name"),
+                    "spec_name": b["spec"].get("name"), "mode": b["spec"].get("mode"),
+                    "combinations": b.get("combinations"), "generated": b.get("generated"),
+                    "duplicates": len(b.get("duplicates", [])), "same_as_base": len(b.get("same_as_base", []))}
+        return {"batch_id": b["batch_id"], "kind": batch_kind(b), "created_at": b.get("created_at"),
+                "source_kind": (b.get("source") or {}).get("kind"), "n_accepted": b.get("n_accepted"),
+                "n_rejected": b.get("n_rejected"), "children": len(b.get("children") or [])}
+
+    def _scan(self) -> dict:
+        """The authoritative directory scan, in the shape the index stores."""
+        out: dict = {"instances": [], "archived": [], "batches": [], "batch_members": {}}
+        for sub, archived in (("instances", False), ("archived", True)):
             for p in sorted((self.root / sub).glob("*.json")):
                 d = json.loads(p.read_text())
-                if family_id is None or d.get("family_id") == family_id:
-                    out.append(self._row(d, archived))
+                out[sub].append(self._row(d, archived))
+                for r in d["lineage"]:
+                    b = r.get("generation_batch_id")
+                    if b and d["strategy_id"] not in out["batch_members"].setdefault(b, []):
+                        out["batch_members"][b].append(d["strategy_id"])
+        for p in sorted((self.root / "batches").glob("*.json")):
+            b = json.loads(p.read_text())
+            out["batches"].append({"kind": batch_kind(b), "row": self._batch_row(b)})
         return out
+
+    def _index(self) -> dict:
+        """The index payload; rebuilt from `_scan` when missing, stale, corrupted or of another version."""
+        from edgelab.core.identity import hash_obj
+        fp = self._fingerprint()
+        try:
+            doc = json.loads(self.index_path.read_text())
+            if doc.get("index_version") != INDEX_VERSION:
+                reason = "version"
+            elif doc.get("checksum") != hash_obj(doc["payload"]):
+                reason = "corrupt"
+            elif doc.get("fingerprint") != fp:
+                reason = "stale"
+            else:
+                self.last_index_event = "used"
+                return doc["payload"]
+        except FileNotFoundError:
+            reason = "missing"
+        except (ValueError, KeyError, TypeError, AttributeError):
+            reason = "corrupt"
+        payload = self._scan()
+        try:
+            _atomic_write(self.index_path, {"index_version": INDEX_VERSION, "fingerprint": fp,
+                                            "checksum": hash_obj(payload), "payload": payload})
+        except OSError:
+            pass                                # an unwritable index only costs speed
+        self.last_index_event = f"rebuilt:{reason}"
+        return payload
+
+    def verify_index(self) -> dict:
+        """Compare the index with the authoritative directory scan."""
+        idx, scan = self._index(), self._scan()
+        diff = sorted(k for k in scan if idx.get(k) != scan[k])
+        return {"consistent": not diff, "differences": diff}
+
+    def batch_members(self, batch_id: str) -> list[str]:
+        """Strategies (active or archived) with a lineage record from this generation batch."""
+        return list(self._index()["batch_members"].get(batch_id, []))
 
     def archive(self, strategy_id: str) -> None:
         """Reversible removal from the active library (never deletes files)."""
@@ -162,16 +252,13 @@ class StrategyLibrary:
             raise KeyError(strategy_id)
         os.replace(a, self._path(strategy_id))
 
-    def list_batches(self) -> list[dict]:
-        out = []
-        for p in sorted((self.root / "batches").glob("*.json")):
-            b = json.loads(p.read_text())
-            out.append({"batch_id": b["batch_id"], "created_at": b.get("created_at"),
-                        "base_strategy_id": b["base"]["strategy_id"], "base_name": b["base"]["definition"].get("name"),
-                        "spec_name": b["spec"].get("name"), "mode": b["spec"].get("mode"),
-                        "combinations": b.get("combinations"), "generated": b.get("generated"),
-                        "duplicates": len(b.get("duplicates", [])), "same_as_base": len(b.get("same_as_base", []))})
-        return out
+    def list_batches(self, kind: str | None = None) -> list[dict]:
+        """Batch listing rows. Default (None) = variation batches only, exactly as before proposal
+        batches were stored; `kind="proposal"` lists Mode B proposal batches."""
+        if kind is not None and kind not in BATCH_KINDS:
+            raise ValueError(f"kind must be one of {BATCH_KINDS} (or omitted)")
+        want = kind or "variation"
+        return [dict(b["row"]) for b in self._index()["batches"] if b["kind"] == want]
 
     def families(self) -> dict[str, int]:
         counts: dict[str, int] = {}
