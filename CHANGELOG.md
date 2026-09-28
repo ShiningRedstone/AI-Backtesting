@@ -3,6 +3,33 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 4: Batch Research & Search
+
+| Item | Status |
+|---|---|
+| Search spec (`research/search.py`): sources = strategy ids, Mode A `VB_` batches, Mode B `PB_` batches, families; datasets; period (full / common / explicit with timezone); ranking settings; `max_cells`; seed; workers. Strict validation (unknown keys, malformed values, invalid references) with every issue reported; example `configs/search.example.yaml` (outside the config hash) | IMPLEMENTED, TESTED |
+| Deterministic planner: strategy x dataset cells in plan order; duplicate strategies collapse; archived batch/family members excluded and reported; eligibility = the exact `backtest_readiness` reasons (unconfigured CFD costs stay ineligible) plus "outside the period"; eligible cells above `max_cells` refused before anything runs, never truncated | IMPLEMENTED, TESTED |
+| Identity: `search_hash` = canonical sources, datasets, period, seed, spec version + execution `config_hash` (ranking, `max_cells`, workers excluded); `cell_id` = strategy_id, dataset_id, dataset content hash, config_hash, search_hash (ADR-32) | IMPLEMENTED, TESTED |
+| One cell pipeline: `Services._run_cell` / `_record_cell` extracted from `backtest_strategy` (unchanged output); `_dataset_eligibility` from `backtest_readiness` (ADR-33) | IMPLEMENTED, TESTED |
+| Durable SQLite storage: `search_batches`, `search_cells` (additive, ADR-34); the `runs` table stays authoritative; every planned cell stored (completed incl. zero-trade / failed with error / ineligible with reasons / cancelled) | IMPLEMENTED, TESTED |
+| `run_search`: synchronous, plan order, lineage (`parent_strategy_id`, `mutation`) and search/cell id on each run, status `IN_SAMPLE`; resume skips completed cells whose run exists; failed/pending/cancelled cells re-run | IMPLEMENTED, TESTED |
+| Trial accounting per invocation and cumulative over the CURRENT plan; cells of an earlier plan kept as historical, never counted (ADR-35) | IMPLEMENTED, TESTED |
+| In-sample ranking (`research/ranking.py`): expectancy_r (default) / profit_factor / net_r, win rate refused, minimum sample label, deterministic ties, exclusions counted by reason, +inf profit factor recognised from stored fields and flagged (never a number); every output labelled in-sample / NOT VALIDATED with its trial count; shortlist = a tag on the batch, no run status changed (ADR-36) | IMPLEMENTED, TESTED |
+| Mode B proposal-batch records (`kind: proposal`) saved by `ingest_proposals(save=True)`; `list_variation_batches(kind=)` with unchanged default; derived, verified strategy-library index (ADR-37) | IMPLEMENTED, TESTED |
+| Background jobs (`research/jobs.py`): one worker thread, one active job (409 otherwise), queued -> running -> completed / failed / cancelled, polling progress from stored cells, cooperative cancellation between cells, restart reconciliation (`running` -> `interrupted`, never auto-resumed); the service lock is shared and never held during a backtest (ADR-38) | IMPLEMENTED, TESTED |
+| `FeatureCache` thread and process safety: private lock for the memory LRU and stats; unique temp files for metadata and arrays, metadata written first (ADR-39) | IMPLEMENTED, TESTED (thread + multi-process stress) |
+| Process-parallel search (`workers > 1`, spawned processes): workers compute only, the parent writes everything in plan order; `workers=1` and `workers=N` give identical cell ids, statuses, trades hashes and errors (ADR-40) | IMPLEMENTED, TESTED |
+| `scripts/benchmark_search.py` (synthetic, informational): measured 32 cells, 17.97 s sequential vs 6.78 s with 4 workers on a 4-CPU container, results identical; tiny searches are slower in parallel (process start-up) | IMPLEMENTED, TESTED (runs in a test) |
+| `research_config_options` exposes the stored strategies and the search spec options (the Phase 2 "NOT IMPLEMENTED" placeholder is gone) | IMPLEMENTED, TESTED |
+| Research CLI: `research validate / plan / run [--workers N] / rank / job` | IMPLEMENTED, TESTED |
+| Research HTTP API: `/api/research/validate`, `plan`, `jobs`, `jobs/<id>`, `jobs/<id>/cancel`, `searches`, `searches/<id>`, `searches/<id>/ranking`, `searches/<id>/shortlist`; 422 search spec / ranking, 409 job conflict / unsupported storage, 404 unknown job or search | IMPLEMENTED, TESTED |
+| Research web page: setup, spec check, plan preview, background job with polling and cancel, searches list, current and historical cells, in-sample ranking, shortlist; committed bundle rebuilt | IMPLEMENTED, TESTED (browser) |
+| `research/compare.py`: cross-dataset warnings extracted into `comparison_warnings` (same text, ADR-41) | IMPLEMENTED, TESTED |
+| Analytics breakdowns, OOS, walk-forward, Monte Carlo, significance testing, null-control services, prop simulation, reports, paper/live trading, AI model calls | NOT IMPLEMENTED (Phase 5+) |
+| Research on real market or CFD data; broker CFD costs | REQUIRES REAL DATA (none imported; all results so far are synthetic) |
+
+Tests: full regression 416 passed, 4 skipped (DuckDB x3, slow opt-in); the Phase 4 audit run had 415 before the example-config test was added. Phase 4 added 98 tests (318 after Phase 3.5), including 9 browser end-to-end tests of which 4 cover the Research page. Phase 1 demo: identical to the pre-Phase-4 output apart from the source hash and timings.
+
 ## Phase 3.5: Strategy Builder & research UI
 
 | Item | Status |
@@ -17,13 +44,13 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Mode A in the UI: grid / one-at-a-time / seeded random, backend combination preview and cap, results with duplicates, batch ID and compare | IMPLEMENTED, TESTED (browser) |
 | Datasets: library, metadata and validation report, import over the Phase 2 pipeline (import folders only) | IMPLEMENTED, TESTED (API) |
 | Single backtest: readiness per dataset (validation, timeframe, cost reasons), explicit selection, run recorded in the Phase 1 run registry; synthetic runs labelled and listed separately; CFD refused while costs are unconfigured | IMPLEMENTED, TESTED (browser + API) |
-| Results page (single runs only), Research and AI Discovery placeholders, read-only Settings | IMPLEMENTED |
+| Results page (single runs only), Research and AI Discovery placeholders, read-only Settings | IMPLEMENTED (the Research placeholder was replaced by the Phase 4 Research page) |
 | Service additions (system_status, builder_options, render_strategy, variation_preview, archive/restore, batches, family_detail, backtest_readiness, list_runs, get_run); `backtest_strategy(record=)` | IMPLEMENTED, TESTED |
 | **Phase 1 store change:** SQLite `check_same_thread=False` (ADR-30); Phase 1 demo identical | IMPLEMENTED, TESTED |
 | Lineage library: reversible archive, richer listing, batch listing; variation summaries include overrides; feature `describe()` exposes session parameters | IMPLEMENTED, TESTED |
 | Optional `configs/web.yaml`, outside the research config hash | IMPLEMENTED, TESTED |
 | `scripts/run_tests.py` (dashboard test status); stale-bundle test; TypeScript type-check test | IMPLEMENTED, TESTED |
-| Batch research, analytics, OOS, walk-forward, Monte Carlo, prop simulation, reports, paper/live trading, AI model calls | NOT IMPLEMENTED (Phase 4+) |
+| Batch research, analytics, OOS, walk-forward, Monte Carlo, prop simulation, reports, paper/live trading, AI model calls | NOT IMPLEMENTED (Phase 4+); batch research was implemented in Phase 4 |
 
 Tests: 318 (20 new: 15 API, 5 browser end-to-end); 4 skipped (DuckDB x3, slow opt-in).
 
@@ -71,7 +98,7 @@ Tests: 318 (20 new: 15 API, 5 browser end-to-end); 4 skipped (DuckDB x3, slow op
 | Item | Status |
 |---|---|
 | Trailing stops, breakeven, partial exits, pyramiding, exit-based cooldown (engine does not support them) | NOT IMPLEMENTED (refused by the validator) |
-| Batch execution / ranking of variations and proposals | NOT IMPLEMENTED (Phase 4) |
+| Batch execution / ranking of variations and proposals | NOT IMPLEMENTED in Phase 3; IMPLEMENTED in Phase 4 |
 | Any AI model call | NOT IMPLEMENTED (interface only) |
 | UI, live trading, broker execution | NOT IMPLEMENTED (out of scope) |
 | Performance of any fixture strategy on real data | REQUIRES REAL DATA |
@@ -119,7 +146,7 @@ Tests: 298 (4 skipped: DuckDB unavailable, slow tests opt-in); Phase 3 added 79.
 | Service layer (strict-JSON contracts for Data Center / Feature Lab / Research Configuration) and CLI | IMPLEMENTED, TESTED |
 | Web UI | NOT IMPLEMENTED (contracts ready; no placeholder UI was built) |
 | Benchmark script and results (`reports/phase2_benchmark.txt`) | IMPLEMENTED (synthetic data) |
-| Strategy DSL, variation generation (Mode A), AI strategy families (Mode B), batch search | NOT IMPLEMENTED (Phases 3-4) |
+| Strategy DSL, variation generation (Mode A), AI strategy families (Mode B), batch search | NOT IMPLEMENTED in Phase 2; IMPLEMENTED in Phases 3-4 |
 
 ### Changes to Phase 1 code (all Phase 1 tests still pass)
 - **Bug fix - resampling fabricated volume.** `resample_bars` summed volume with pandas `sum()`, so a

@@ -1,4 +1,4 @@
-# EdgeLab web application (Phase 3.5)
+# EdgeLab web application (Phase 3.5, Research page Phase 4)
 
 A graphical Strategy Builder and research workspace on top of the Phase 1–3 backend. The
 browser is a presentation and input layer. The Python services stay authoritative for
@@ -10,7 +10,7 @@ Browser (React + TypeScript)      edits a DSL document; renders what the backend
       │  JSON over HTTP
 edgelab/web/app.py (Flask)        routing, input checks, error mapping. No strategy logic.
       │
-edgelab/services.py               Phase 2/3 service contracts (+ Phase 3.5 web contracts)
+edgelab/services.py               Phase 2/3 service contracts (+ Phase 3.5 web, Phase 4 research)
       │
 DSL · compiler · lineage · Mode A │ feature engine │ Phase 1 backtest engine + run registry
 ```
@@ -50,9 +50,28 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | Variations | Mode A batches with reproducibility metadata | batch records |
 | Datasets | Library, metadata and validation report, import over the existing pipeline | Phase 2 importer |
 | Results | Recorded single backtests (status `IN_SAMPLE`); synthetic runs listed separately | Phase 1 run registry |
-| Research | Placeholder: batch research is Phase 4 | — |
+| Research | Phase 4 batch search: spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
 | AI Discovery | Placeholder: no model is connected | — |
 | Settings | Read-only configuration: cost profile status, engine config, sessions, instruments | config |
+
+## Research (Phase 4)
+
+`#/research` sets up a search over the Phase 4 services; `#/research/SRCH_...` opens one.
+
+- **Setup:** strategies, variation batches, families, typed `PB_` proposal-batch ids, datasets (with
+  their readiness reasons), period (full, common, or explicit with a timezone), ranking metric and
+  sample floor, max cells, seed. The exact JSON spec sent is shown. **Check spec** reports every
+  problem; **Preview plan** shows counts, warnings and each cell as eligible or ineligible with
+  reasons (a search above max cells is refused, never truncated); **Start search** starts a
+  background job.
+- **Job:** state, progress counts (evaluated, pending, failed, skipped, cancelled, trials) polled
+  every 2 s until a final state; **Cancel search** lets the running cell finish and starts no new
+  one. Job ids live in the server process (after a restart the stored search remains, marked
+  `interrupted`).
+- **Search page:** accounting (last invocation and cumulative trials), current cells (ineligible and
+  failed cells stay visible with reasons), historical cells in a separate table (not counted, never
+  ranked), the in-sample ranking with the backend's "NOT VALIDATED" label and trial count, and the
+  shortlist (a research tag only; no run status changes).
 
 ## Strategy Builder
 
@@ -157,6 +176,7 @@ npm run typecheck      # tsc --noEmit
 python scripts/run_tests.py               # full suite; records reports/last_test_run.txt (shown on the dashboard)
 python -m unittest tests.test_web_api     # API contracts (Flask test client)
 python -m unittest tests.test_web_e2e     # real server + headless Chromium (skips without Playwright)
+python -m unittest tests.test_research_api  # Phase 4 research routes (jobs held mid-cell by a gate)
 ```
 
 The browser tests need `pip install playwright` and a Chromium build (`playwright install chromium`, or set `PLAYWRIGHT_BROWSERS_PATH`).
@@ -164,7 +184,8 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
 ## Known limitations
 
 - The Flask development server is single-process. Requests are serialized behind one lock (the SQLite store and services are single-user), so a long backtest delays other calls until it finishes. There is no progress reporting beyond busy states.
-- Variation generation and backtests are synchronous requests. Large batches are Phase 4 work.
+- Variation generation and single backtests are synchronous requests. Batch searches run as background jobs (one at a time, sequential); worker processes are available from the CLI (`research run --workers N`).
+- The Research page takes proposal batches as typed `PB_` ids, and research needs the SQLite result store (see `ARCHITECTURE.md`, Phase 4 limitations).
 - Dataset delete/archive is not offered, because stored datasets are immutable and referenced by runs. There is no in-browser file upload: files are imported from the import folder.
 - Typing uses a local React shim instead of `@types/react` (offline build).
 - The DSL supports one trading window per strategy; several windows need a local session or session-feature conditions.

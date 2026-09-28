@@ -1,0 +1,34 @@
+# EXAMPLE Phase 4 search specification (research/search.py). NOT part of the research config:
+# load_config() never reads this file, so it is outside the global config hash. A search spec
+# gets its own deterministic search_hash (sources, datasets, period, seed + the config hash).
+#
+# Copy it, replace the ILLUSTRATIVE ids with ids from your own workspace, then:
+#   python -m edgelab.cli research validate my_search.yaml     # keys, types, values
+#   python -m edgelab.cli research plan     my_search.yaml     # cells + eligibility, nothing runs
+#   python -m edgelab.cli research run      my_search.yaml     # or the Research page / API
+# Find ids with: `strategy list`, `datasets`, the Variations / Families pages, `strategy proposals`.
+#
+# Every result a search produces is an IN-SAMPLE measurement under the stated assumptions: it is
+# not validated, not a forecast and not evidence of an edge. Nothing here configures costs; CFD
+# datasets without broker costs you entered stay ineligible (never run).
+
+search_spec_version: 1
+
+strategies:                        # at least one source; duplicate strategies collapse to one
+  ids: [STR_0123456789AB]          # ILLUSTRATIVE stored strategy id(s)
+  variation_batches: []            # Mode A batches, e.g. [VB_0123456789AB] -> the generated children
+  proposal_batches: []             # Mode B batches saved by `strategy proposals` (PB_...)
+  families: [ema_crossover]        # every active instance of a family (here: the fixture family)
+
+datasets: [NQ_SYNTHETIC_EXAMPLE_5M_0123456789]   # ILLUSTRATIVE dataset id(s); never merged or averaged
+
+# period: common                   # optional: the overlap of all datasets, or explicit:
+# period: {start: "2024-01-02T00:00:00Z", end: "2024-03-29T00:00:00Z"}   # timezone required
+
+ranking:                           # applied later to stored results; not part of the search hash
+  metric: expectancy_r             # expectancy_r | profit_factor | net_r  (win_rate is refused)
+  min_sample_label: MODERATE SAMPLE   # LOW SAMPLE SIZE | MODERATE SAMPLE | ADEQUATE SAMPLE
+
+max_cells: 1000                    # eligible cells above this: the search is refused, never truncated
+seed: 1                            # part of the search identity
+workers: 1                         # >1 = worker processes (CLI/service); background jobs use 1

@@ -130,6 +130,32 @@ web/                       React + TypeScript sources, esbuild build script, tsc
 scripts/run_tests.py       full suite + reports/last_test_run.txt for the dashboard
 ```
 
+## Module map (Phase 4 additions)
+
+```
+edgelab/research/search.py   search spec (strict validation), canonical form, search_hash, cell_id,
+                             deterministic strategy x dataset planner with eligibility + max_cells
+edgelab/research/batch.py    run_search: persist batch + every cell, run eligible cells in plan order
+                             (sequential, or spawned worker processes that only compute), resume,
+                             accounting, cooperative cancel hook; search_summary
+edgelab/research/ranking.py  pure in-sample ranking of current cells; shortlist tag
+edgelab/research/jobs.py     JobManager: one background worker thread, one active job, progress,
+                             cancellation, restart reconciliation
+edgelab/research/compare.py  + comparison_warnings (extracted; ADR-41)
+edgelab/data/store.py        + search_batches / search_cells tables and accessors (SQLite; ADR-34)
+edgelab/features/cache.py    + thread/process-safe memory LRU and disk writes (ADR-39)
+edgelab/strategy/lineage.py  + derived index.json, batch kinds, batch_members, verify_index (ADR-37)
+edgelab/strategy/proposals.py + IngestReport.record() (the Mode B batch record)
+edgelab/services.py          + _run_cell/_record_cell, _dataset_eligibility (ADR-33), Services.lock,
+                             validate/plan/run/list/get search, rank_search, select_shortlist,
+                             start_search_job/job_status/cancel_job, research_config_options search
+edgelab/cli.py               + `research validate|plan|run|rank|job`
+edgelab/web/app.py           + /api/research/* routes and error mapping; uses Services.lock (ADR-38)
+web/src/pages/ResearchEngine.tsx, web/src/api/research.ts   Research page and its API calls
+configs/search.example.yaml  example search spec (not read by load_config; outside the config hash)
+scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worker processes)
+```
+
 ## Decision records
 
 ### ADR-1 Storage backend
@@ -351,7 +377,8 @@ scripts/run_tests.py       full suite + reports/last_test_run.txt for the dashbo
   inspectable, without committing to a database schema before Phase 4.
 - **Chosen:** one JSON file per instance (canonical definition plus lineage records), one per batch,
   written atomically. The same logic from two parents keeps both records.
-- **Tradeoffs:** `list`/`children` scan the directory (fine for thousands; Phase 4 can index).
+- **Tradeoffs:** `list`/`children` scan the directory (fine for thousands). Phase 4 added a derived
+  index for listings and batch membership (ADR-37); `children`/`ancestry` still scan.
 
 ### ADR-25 Mode A varies only declared parameters inside declared domains (Phase 3)
 - **Problem:** "controlled variations" must not become unbounded data mining, and the count of
@@ -400,6 +427,100 @@ scripts/run_tests.py       full suite + reports/last_test_run.txt for the dashbo
 - **Chosen:** `--demo` creates a separate root, marked by `DEMO_WORKSPACE`. Synthetic bars go through the normal import pipeline with `SYNTHETIC*` providers, which the system flags everywhere. Single backtests are recorded by the Phase 1 run registry (status `IN_SAMPLE`, notes marking synthetic data), and the Results page lists synthetic runs separately.
 - **Tradeoffs:** a second workspace directory. No new results store was added.
 
+### ADR-32 Search and cell identity (Phase 4)
+- **Problem:** a search must be reproducible and resumable, and its cells must never be confused
+  across datasets or configurations.
+- **Chosen:** `search_hash` covers the canonical spec (sorted, de-duplicated sources and datasets,
+  period in UTC, seed, spec version) plus the execution `config_hash`; ranking settings, `max_cells`
+  and `workers` are excluded (analysis of stored results, a safety cap, and something that never
+  changes results). `search_id = SRCH_<hash[:12]>`. `cell_id` covers strategy_id, **dataset_id**,
+  dataset content hash, config_hash and search_hash: two datasets may hold identical bars (a futures
+  and a CFD import of one file) yet differ in instrument, costs and calendar.
+- **Consequences:** a different config is a different search, never a resume of the old one. The
+  same spec and config resume the same search.
+
+### ADR-33 One cell pipeline for single backtests and searches (Phase 3 services modified)
+- **Problem:** batch search must use exactly the numerical path of a single backtest.
+- **Chosen:** `Services._run_cell` is the body of `backtest_strategy` (load and re-validate ->
+  optional `restrict_to_period` -> compile -> costs with the CFD refusal -> bind -> causality-checked
+  `run_backtest(sizing=strat.sizing)` -> metrics), with the run-record step as `_record_cell`.
+  `backtest_strategy` calls it; `_dataset_eligibility` is the per-dataset body of
+  `backtest_readiness`. Synthetic data is always labelled first in run notes.
+  `run_search(workers=None)` takes the spec's worker count.
+- **Verified:** `backtest_strategy` and `backtest_readiness` output unchanged (snapshot comparison
+  and tests); a search cell's trades_hash equals the single backtest's.
+
+### ADR-34 Search storage: additive SQLite tables (Phase 1 store modified)
+- **Problem:** durable batch and cell state without a second results store.
+- **Chosen:** `search_batches` and `search_cells` created with `CREATE TABLE IF NOT EXISTS` in
+  `SQLiteStore` only; cells reference `run_id`s in the unchanged, authoritative `runs` table. A
+  `current` flag separates the latest plan's cells from historical rows (never deleted).
+  `DuckDBStore` refuses every search accessor (`SearchStorageUnsupported`).
+- **Tradeoffs:** research requires the SQLite store. With `storage.backend: auto`, installing
+  DuckDB switches the store and research then refuses (see Phase 4 limitations).
+
+### ADR-35 Honest trial accounting (Phase 4)
+- **Chosen:** a trial is an eligible cell actually evaluated (completed, including zero trades, or
+  failed); ineligible cells are reported but are not trials; a completed cell skipped on resume is
+  not a new trial; duplicate strategy references count once. Cumulative totals come from the
+  current plan's stored cells, so a retried cell is one trial.
+- **Tradeoffs:** trials are counted per search, not across searches (Phase 4 limitations).
+
+### ADR-36 Ranking is an in-sample view; a shortlist is a tag (Phase 4)
+- **Chosen:** rank completed current cells by expectancy_r (default), profit_factor or net_r;
+  win rate is refused; a minimum sample label filters; ties by strategy_id then cell_id. A +inf
+  profit factor (no losing trade, stored as null) is recognised from the stored loss_rate and net_r
+  and flagged, never replaced by a number. Every output states the trial count, `in_sample: true`
+  and `validated: false`. A shortlist is stored on the batch row only and changes no run status;
+  promotion belongs to Phase 6.
+
+### ADR-37 Derived library index and Mode B batch records (Phase 3 lineage modified)
+- **Chosen:** `<library>/index.json` holds listing rows, batch summaries and batch membership, with
+  a fingerprint of the library files (name, size, mtime, inode) and a checksum of its own payload;
+  a missing, stale, corrupted or foreign-version index is rebuilt from the directory scan, which
+  stays authoritative (`verify_index`). `ingest_proposals(save=True)` stores the proposal batch
+  record (`kind: proposal`); variation records keep their format; `list_batches()` still returns
+  variation batches only by default.
+- **Tradeoffs:** any write makes the next read rescan; an in-place edit that keeps size, mtime and
+  inode is caught only by `verify_index`.
+
+### ADR-38 Background jobs share the one service lock (Phase 3.5 web app modified)
+- **Problem:** long searches must not freeze the web app, and the SQLite connection must still be
+  serialized (ADR-30).
+- **Chosen:** `Services.lock` is the single service lock; `create_app` uses it instead of creating
+  its own. The `JobManager` (one worker thread, one active job) takes it only around short store and
+  library operations, never during a backtest, so status and cancel stay responsive. Cancellation is
+  checked between cells. Creating a `JobManager` (at web start-up, SQLite only) marks batches left
+  `running` as `interrupted`; they are resumed only explicitly.
+- **Tradeoffs:** job ids and state live in the server process; reconciliation assumes one process.
+
+### ADR-39 FeatureCache safe under threads and processes (Phase 2 cache modified)
+- **Problem:** a job cell and a web request, or several worker processes, may use one cache.
+- **Chosen:** a private lock guards the in-memory LRU and stats (lookup + move is one step); no
+  I/O happens under it. Metadata and arrays are each written to a unique temp file and moved into
+  place with `os.replace`, metadata first, so a reader that finds an `.npz` finds its metadata.
+  Keys, file format, verification and API are unchanged.
+- **Tradeoffs:** two simultaneous misses compute the same (deterministic) entry twice.
+
+### ADR-40 Process-parallel search with parent-only writes (Phase 4)
+- **Chosen:** `workers > 1` runs cells in spawned (never forked) processes. The parent loads and
+  re-validates datasets once and reads definitions and lineage; each worker gets a read-only context
+  with no store and calls the unmodified `_run_cell` with `record=False`. The parent submits in plan
+  order (at most `workers` in flight), consumes results strictly in plan order and records them with
+  `_record_cell`, so run ids and rows never depend on completion order. Workers share the disk
+  feature cache (ADR-39). A crashed worker fails only the cells it did not return.
+- **Verified:** `workers=1` and `workers=N` give identical cells and trades hashes; the worker count
+  is not part of the search identity.
+- **Tradeoffs:** each worker receives a pickled copy of the datasets; process start-up makes tiny
+  searches slower in parallel.
+
+### ADR-41 Cross-dataset warnings shared by comparison and search (Phase 2 compare modified)
+- **Chosen:** the identical-content, mixed-timeframe and different-period warnings of
+  `run_across_datasets` were extracted into `comparison_warnings(manifests, check_periods=True)` and
+  are reused by the planner (the period warning is suppressed when a period is imposed).
+  `run_across_datasets` output is unchanged; it is not used by batch search (it sizes with the
+  config default, not the strategy's own sizing).
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and
@@ -436,12 +557,40 @@ scripts/run_tests.py       full suite + reports/last_test_run.txt for the dashbo
 - Canonical equivalence is syntactic plus a few algebraic rules; logically equivalent but
   differently written conditions can hash differently.
 - Mode B claim detection is pattern-based. No AI model is called anywhere.
-- No batch execution of variations or proposals yet (Phase 4). `strategy backtest` runs one
-  strategy on one dataset.
+- No batch execution of variations or proposals in Phase 3 (added in Phase 4). `strategy backtest`
+  runs one strategy on one dataset.
 
 ## Known limitations (Phase 3.5)
 
-- The development server and the lock serialize requests. Long backtests and variation batches are synchronous, with busy states but no progress reporting (Phase 4).
+- The development server and the lock serialize requests. Single backtests and variation generation stay synchronous, with busy states; Phase 4 searches run as background jobs with progress.
 - No authentication: the app is a local, single-user tool bound to loopback by default.
 - No dataset deletion (datasets are immutable) and no browser file upload (files are imported from `web.import_dirs`).
 - React typings come from a local shim (offline build); `npm install` restores `@types/react`.
+
+## Known limitations (Phase 4)
+
+- Research storage is SQLite-only: `DuckDBStore` refuses every search operation. With
+  `storage.backend: auto`, installing DuckDB switches the store and research then refuses
+  (HTTP 409, CLI exit 2); set `storage.backend: sqlite` to keep research available.
+- Cross-process use of one data root is not coordinated: `next_run_id` is MAX+1, so a CLI
+  `research run` and the web app running at the same time could collide on a run id (the cell is
+  recorded as failed and re-runs on resume), and a new web process marks a search that another
+  process is still running as `interrupted`.
+- Trials are counted per search. The seed is part of the search identity but does not change
+  deterministic DSL results, so the same work can be re-evaluated under another search id; there is
+  no global trial count across searches (needed before Phase 6 overfitting reports).
+- Background jobs run sequentially (`workers: 1`); worker processes are available through
+  `run_search` / `research run --workers N`.
+- Job ids and job state are process-local: after a restart a job id returns 404 (its stored search
+  persists and is marked `interrupted`), and the CLI `research job` follows its job in the foreground
+  (Ctrl-C cancels).
+- Each worker process receives its own copy of the datasets (memory grows with workers x data) and
+  start-up costs about 1-2 s.
+- FeatureCache: two simultaneous misses compute the same entry twice; `clear()` racing a write, or a
+  reader discarding a genuinely corrupt entry while it is rewritten, only causes a recompute.
+- The Research page takes proposal batches as typed `PB_` ids (the batch listing API returns
+  variation batches by default).
+- `scripts/benchmark_search.py` builds its synthetic fixture with `tests/phase2_helpers.py`.
+- The service lock is held while each cell's dataset is loaded and re-validated (it reads the
+  shared SQLite connection); the backtest itself runs without it.
+- No real market or CFD data has been imported: every Phase 4 result so far is on synthetic data.

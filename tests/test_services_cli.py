@@ -78,7 +78,45 @@ class TestServices(unittest.TestCase):
         for k in ("instruments", "datasets", "sessions", "features", "calendars"):
             self.assertTrue(o[k], k)
         self.assertIn("NY_0900_1000", o["sessions"])
-        self.assertIn("NOT IMPLEMENTED", o["strategies"])
+        self.assertIsInstance(o["strategies"], list)                      # Phase 4: stored strategies, no placeholder
+        self.assertNotIn("NOT IMPLEMENTED", json.dumps(o))
+        s = o["search"]                                                   # Phase 4 search spec options
+        self.assertEqual(s["keys"], ["datasets", "max_cells", "period", "ranking", "search_spec_version", "seed",
+                                     "strategies", "workers"])
+        self.assertEqual(s["strategy_sources"], {"families": None, "ids": "STR_", "proposal_batches": "PB_",
+                                                 "variation_batches": "VB_"})
+        self.assertEqual(s["ranking_metrics"], ["expectancy_r", "profit_factor", "net_r"])
+        self.assertNotIn("win_rate", s["ranking_metrics"])
+        self.assertEqual(s["refused_ranking_metrics"], ["win_rate"])
+        self.assertEqual(s["defaults"]["ranking"], {"metric": "expectancy_r", "min_sample_label": "MODERATE SAMPLE"})
+        self.assertEqual(s["not_in_search_hash"], ["ranking", "max_cells", "workers"])
+        saved = self.svc.save_strategy(str(REPO / "strategies" / "fixtures" / "ema_crossover.yaml"))
+        o2 = self.svc.research_config_options()
+        self.assertIn(saved["strategy_id"], [r["strategy_id"] for r in o2["strategies"]])
+        self.assertIn("ema_crossover", o2["search"]["families"])
+
+    def test_search_example_config_is_valid_and_outside_the_config_hash(self):
+        from edgelab.core.config import config_hash, load_config
+        from edgelab.research.search import canonical_search_spec, validate_search_spec
+        from edgelab.strategy.dsl import load_definition
+        example = REPO / "configs" / "search.example.yaml"
+        raw = load_definition(str(example))
+        self.assertTrue(validate_search_spec(raw).valid)
+        canon = canonical_search_spec(raw)
+        self.assertEqual(canon["ranking"]["metric"], "expectancy_r")
+        for k in ("datasets", "max_cells", "seed", "workers"):
+            self.assertIn(k, raw, k)
+        self.assertTrue(any(canon["strategies"].values()))
+        self.assertEqual(self.svc.validate_search(str(example))["valid"], True)
+        without = Path(tempfile.mkdtemp())
+        try:                                                                # not read by load_config
+            shutil.copytree(REPO / "configs", without / "configs", ignore=shutil.ignore_patterns("search.example.yaml"))
+            self.assertEqual(config_hash(load_config(without / "configs")), config_hash(load_config(REPO / "configs")))
+        finally:
+            shutil.rmtree(without, ignore_errors=True)
+        text = example.read_text().lower()
+        for word in ("profitable", "validated strategy", "guaranteed"):
+            self.assertNotIn(word, text)
 
 
 class TestCLI(unittest.TestCase):

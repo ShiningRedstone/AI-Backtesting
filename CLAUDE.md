@@ -12,7 +12,7 @@ strategies as aggressively as it discovers them. The final product is a unified 
 
 ## Current state
 
-**Phase 3.5 COMPLETE. Next: Phase 4 (Batch Research & Search).**
+**Phases 1, 2, 3, 3.5 and 4 COMPLETE. Next: Phase 5 (Analytics).**
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -75,9 +75,9 @@ remains. Do not rely on this file alone.
 | 1 Research Foundation | config, logging, calendars/resampling, validation gate, `ValidatedDataset`, content identity, backtester, lookahead protection, honest fills, costs, risk sizing, metrics with CIs/sample labels, run registry, synthetic/null controls, reproducibility | done |
 | 2 Data, CFD & Features | generic import pipeline, explicit tz/timestamp conventions, manifests/hashes, immutable store, derived TFs, feature registry, causal features, session/DST engine, causal MTF, persistent feature cache, explicit CFD costs, dataset comparison without merging | done |
 | 3 Strategy DSL & Variations | versioned DSL, validation, causality, deterministic compiler, identity/hashing, lineage, Mode A (grid/OAT/seeded random, cap-before-generate, dedupe), Mode B ingestion interface | done |
-| 3.5 Builder & Web UI | Flask API, React/TS UI, builder, library, families, variation batches, datasets/import, single backtests, results, Research/AI placeholders | done |
-| **4 Batch Research & Search** | batch evaluation of Mode A variations and Mode B proposals through the same pipeline; strategy x dataset research; search config (`search.yaml`); search runner; batch result storage; ranking/selection; honest trial counting; parallelism where appropriate; throughput benchmark; strategy library indexing; research service/API; Research web page; async jobs with progress; cancellation/job lifecycle | **next** |
-| 5 Analytics | rich performance analytics; session/timeframe/weekday/month/year breakdowns; trade distributions; drawdown analysis; cost sensitivity; breakeven cost; stability; visualizations | planned |
+| 3.5 Builder & Web UI | Flask API, React/TS UI, builder, library, families, variation batches, datasets/import, single backtests, results, Research/AI placeholders (Research replaced in Phase 4) | done |
+| 4 Batch Research & Search | batch evaluation of Mode A variations and Mode B proposals through the same pipeline; strategy x dataset research; search config (`search.yaml`); search runner; batch result storage; ranking/selection; honest trial counting; parallelism where appropriate; throughput benchmark; strategy library indexing; research service/API; Research web page; async jobs with progress; cancellation/job lifecycle | done |
+| **5 Analytics** | rich performance analytics; session/timeframe/weekday/month/year breakdowns; trade distributions; drawdown analysis; cost sensitivity; breakeven cost; stability; visualizations | **next** |
 | 6 Anti-Overfitting | OOS, walk-forward, Monte Carlo, random/null controls, multiple robustness tests, discovery vs validation separation, overfitting detection/reporting, significance/uncertainty | planned |
 | 7 Prop-Firm Simulation | evaluation/funded/payout states, daily loss, drawdown, consistency rules, minimum trading days, multi-account, configurable rule profiles (not hardcoded to one firm) | planned |
 | 8 Dashboard & Reporting | unified dashboard, strategy comparison, reports, lineage visualization, decision-oriented summaries, reproducible report generation | planned |
@@ -106,21 +106,36 @@ events/regimes, instruments/datasets, strategy families and controlled variation
   `Services.generate_variations` (Mode A), `Services.ingest_proposals` (Mode B).
 - `research.compare.run_across_datasets`, `restrict_to_period`, `compare_feeds`.
 - `edgelab/services.py`: strict-JSON contracts; the only interface the CLI and web API use.
-- Web API (`edgelab/web/app.py`): thin routes over `Services`; one service lock serializes calls.
+- Web API (`edgelab/web/app.py`): thin routes over `Services`; `Services.lock` is the one service
+  lock (shared with the job manager; never held during a backtest).
+- Phase 4 research (`edgelab/research/{search,batch,ranking,jobs}.py`): `plan_search(spec, svc)`
+  (`search_hash` = canonical sources/datasets/period/seed + config_hash; `cell_id` includes
+  dataset_id), `run_search(svc, spec, workers=None, lock=, cancel=)` -> `search_batches` /
+  `search_cells` (SQLite) referencing normal `runs`; every cell goes through `Services._run_cell` /
+  `_record_cell`; trials = eligible cells evaluated (current plan); `rank_cells` / `rank_search`
+  are in-sample only (never win rate, `validated: false`); a shortlist is a tag, never a status
+  promotion (Phase 6 owns promotion). Services: `validate_search`, `plan_search`, `run_search`,
+  `list_searches`, `get_search`, `rank_search`, `select_shortlist`, `start_search_job`,
+  `job_status`, `cancel_job`; HTTP under `/api/research/*`; CLI `research ...`.
 
-## Known limitations (repository, as of Phase 3.5)
+## Known limitations (repository, as of Phase 4)
 
-- No batch/search execution, parallelism, `search.yaml`, batch result storage, ranking or
-  selection. The Research API/UI is a placeholder.
-- No async jobs, progress or cancellation; web requests are serialized by the service lock.
+- Research storage is SQLite-only; DuckDB refuses search operations, and with
+  `storage.backend: auto` installing DuckDB makes research unavailable. The DuckDB backend is
+  otherwise untested.
+- One process per data root: `next_run_id` is MAX+1 and restart reconciliation marks any `running`
+  search `interrupted`, so concurrent CLI and web research on one root is not coordinated.
+- Trials are counted per search, not across searches; the seed changes the search identity without
+  changing deterministic DSL results. Needs a decision before Phase 6.
+- Background jobs are sequential (`workers: 1`) and process-local (job ids do not survive a
+  restart); worker processes copy the datasets; the service lock covers each cell's dataset load.
 - Random-entry null controls exist only in `scripts/phase1_demo.py`, not as a service.
-- Strategy library listing scans a directory (no index).
-- DuckDB backend exists but is untested (SQLite is used).
 - No real market data imported; all results so far are synthetic.
 - No browser file upload (imports come from `web.import_dirs`); no auth (local, loopback only).
-- Known stale docs: the `research_config_options` "strategies" placeholder (`services.py`), a
-  reference to a nonexistent `tests/test_reproducibility.py` in `research/runs.py`, and ADR-10's
-  `FAMILY_<hash>` id scheme (superseded for DSL strategies by ADR-23).
+- Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
+  `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
+  ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
+- Full list: `ARCHITECTURE.md`, "Known limitations (Phase 4)".
 
 ## Where things are
 
@@ -128,10 +143,12 @@ events/regimes, instruments/datasets, strategy families and controlled variation
   limitations), `CHANGELOG.md` (per-phase IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`.
-- Code: `edgelab/{core,data,engine,features,strategy,research,analytics,web}`; `services.py`,
+- Code: `edgelab/{core,data,engine,features,strategy,research,analytics,web}` (Phase 4 research:
+  `research/{search,batch,ranking,jobs}.py`, Research page `web/src/pages/ResearchEngine.tsx`); `services.py`,
   `cli.py`. Empty placeholders for later phases: `prop/`, `reports/`, `journal/`,
   `notifications/`, `execution/`.
-- Config: `configs/*.yaml` (research config is hashed; `web.yaml` is deliberately outside the hash).
+- Config: `configs/*.yaml` (research config is hashed; `web.yaml` and the example search spec
+  `search.example.yaml` are deliberately outside the hash).
 - Frontend sources in `web/` (React + TS, esbuild); the built bundle is committed in
   `edgelab/web/static/`, and a test detects a stale bundle, so rebuild after frontend changes.
 
@@ -140,10 +157,12 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 ```bash
 python -m unittest discover -s tests -t .        # full suite (~60 s); run only when asked
 python scripts/run_tests.py                      # full suite + dashboard test status
-python -m edgelab.cli --help                     # data, features, strategy commands
+python -m edgelab.cli --help                     # data, features, strategy, research commands
+python -m edgelab.cli research plan|run|rank ... # Phase 4 batch search (see README)
 python -m edgelab.web                            # web app at http://127.0.0.1:8765
 python -m edgelab.web --demo                     # separate synthetic demo workspace
 python scripts/phase1_demo.py                    # end-to-end synthetic demo (must stay identical)
+python scripts/benchmark_search.py               # Phase 4 search throughput (informational)
 ```
 
 ## Working rules for Claude Code

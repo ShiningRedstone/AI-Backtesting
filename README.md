@@ -16,8 +16,8 @@ result under stated assumptions*, not a forecast.
 | 2 Features + CFD data | CFD/any-provider import pipeline, dataset metadata/hashes, DST-safe sessions, 14 causal features, multi-timeframe, persistent feature cache, dataset comparison, CFD cost architecture, service layer + CLI | **done** (see CHANGELOG.md for IMPLEMENTED / TESTED / NOT IMPLEMENTED / REQUIRES REAL DATA) |
 | 3 Strategy DSL | versioned YAML/JSON DSL, validator with path errors, canonical identity, deterministic compiler into the existing Strategy interface, lineage library, Mode A controlled variations, Mode B proposal interface (no AI calls), opt-in signal exits in the engine, `time_of_day` feature | **done** (see STRATEGY_DSL.md, STRATEGY_GENERATION.md, CHANGELOG.md) |
 | 3.5 Web UI | Strategy Builder & research application foundation: visual DSL editor with live backend validation, library, families, lineage, Mode A variations, datasets, single backtests, demo workspace | **done** (see WEB_UI.md) |
-| 4 Research engine | batch/grid/random search, parallelism, benchmarks | next |
-| 5 Analytics | breakdowns by hour/session/weekday/month/year/event, distributions, rolling | planned |
+| 4 Research engine | strategy x dataset batch search (strategy ids, Mode A variation batches, Mode B proposal batches, families), deterministic planning with a max-cells refusal, durable resumable SQLite search storage, honest trial accounting, in-sample ranking and shortlist, background jobs with progress, cancellation and restart reconciliation, process-parallel execution, benchmark, Research CLI / API / web page | **done** (see CHANGELOG.md) |
+| 5 Analytics | breakdowns by hour/session/weekday/month/year/event, distributions, rolling | **next** |
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
 | 7 Prop simulator | evaluation, funded, payout, multi-account | planned |
 | 8 Reports | HTML dashboard, PDF | planned |
@@ -138,9 +138,33 @@ python -m edgelab.web --demo     # separate synthetic demo workspace (./demo_wor
 ```
 
 Build strategies visually, validate them against the backend, save them, generate controlled
-variations, inspect lineage and run single causality-checked backtests. The browser edits the DSL
+variations, inspect lineage, run single causality-checked backtests and (Phase 4) plan, run and rank
+batch searches on the Research page. The browser edits the DSL
 document itself; validation, hashing, compilation and backtesting stay in Python. No Node.js is
 needed to run it (the built frontend is committed). Details: WEB_UI.md.
+
+## Phase 4 research in one screen
+
+```bash
+cp configs/search.example.yaml my_search.yaml   # replace the illustrative ids with your own
+python -m edgelab.cli research validate my_search.yaml   # strict keys / types / values
+python -m edgelab.cli research plan     my_search.yaml   # strategy x dataset cells, eligibility, nothing runs
+python -m edgelab.cli research run      my_search.yaml [--workers 4]   # durable; re-running resumes
+python -m edgelab.cli research rank     SRCH_...          # in-sample ranking, NOT validated
+python -m edgelab.cli research job      my_search.yaml   # background job with progress (Ctrl-C cancels)
+python scripts/benchmark_search.py                       # synthetic throughput, sequential vs processes
+```
+
+- A search runs stored strategies on datasets, one strategy on one dataset per cell, through the same
+  pipeline as a single backtest. Datasets are never merged; unconfigured CFD costs make a cell
+  ineligible, never estimated.
+- Every planned cell is stored (completed, failed with its error, ineligible with its reasons), runs
+  keep status `IN_SAMPLE`, and a search larger than `max_cells` is refused, never truncated.
+- Trials are counted honestly (evaluated cells only, duplicates once, resumed cells not again).
+  Ranking uses expectancy, profit factor or net R (never win rate), always with its trial count and
+  "NOT VALIDATED". A shortlist is a tag; out-of-sample and walk-forward checks are Phase 6.
+- `workers=1` and `workers=N` produce identical cells and trades hashes; only the parent process
+  writes results. Limitations: `ARCHITECTURE.md` (Phase 4).
 
 ## Phase 3 in one screen
 

@@ -6,7 +6,7 @@ so the same functions back the CLI today and HTTP endpoints later:
   DATA CENTER            list_datasets, dataset_detail, inspect_file, import_file, compare_feeds
   FEATURE LAB            feature_catalog, feature_detail, feature_cache_status, build_features,
                          feature_values (for charts)
-  RESEARCH CONFIGURATION research_config_options
+  RESEARCH CONFIGURATION research_config_options (incl. Phase 4 search spec options)
   STRATEGY LAB (Phase 3)  validate_strategy, preview_strategy, compile_strategy, save_strategy,
                          edit_strategy, duplicate_strategy, load_strategy, list_strategies,
                          strategy_families, strategy_lineage, generate_variations,
@@ -15,6 +15,8 @@ so the same functions back the CLI today and HTTP endpoints later:
                          archive_strategy, restore_strategy, list_variation_batches,
                          get_variation_batch, family_detail, backtest_readiness, list_runs,
                          get_run, list_import_files
+  RESEARCH (Phase 4)     validate_search, plan_search, run_search, list_searches, get_search,
+                         rank_search, select_shortlist, start_search_job, job_status, cancel_job
 
 Nothing here fabricates data: when something is unavailable the response says so. Nothing
 here judges strategies: backtest results are returned with their sample-size labels only.
@@ -188,8 +190,24 @@ class Services:
             "features": [{"id": d.feature_id, "version": d.version, "category": d.category,
                           "params": [p.describe() for p in d.params], "requires": list(d.requires)}
                          for d in all_defs()],
-            "strategies": "NOT IMPLEMENTED (Phase 3: strategy DSL)",
+            "strategies": [{k: r[k] for k in ("strategy_id", "name", "family_id", "timeframe", "generation_method")}
+                           for r in self.library.list()],
+            "search": self._search_options(),
         })
+
+    def _search_options(self) -> dict:
+        """What a Phase 4 search spec may contain, from the search module's own tables."""
+        from edgelab.research import search as rs
+        return {"search_spec_version": rs.SEARCH_SPEC_VERSION, "keys": sorted(rs.SPEC_KEYS),
+                "strategy_sources": {k: v for k, v in sorted(rs.SOURCE_KEYS.items())},
+                "variation_batches": [b["batch_id"] for b in self.library.list_batches()],
+                "proposal_batches": [b["batch_id"] for b in self.library.list_batches("proposal")],
+                "families": sorted(self.library.families()),
+                "period": ["omitted (full datasets)", "common", "{start, end} with an explicit timezone"],
+                "ranking_metrics": list(rs.RANKING_METRICS), "sample_labels": list(rs.SAMPLE_LABELS),
+                "refused_ranking_metrics": ["win_rate"], "defaults": rs.DEFAULTS,
+                "not_in_search_hash": list(rs.NOT_HASHED), "background_job_workers": 1,
+                "storage": "SQLite result store only", "example": "configs/search.example.yaml"}
 
     # ============================================================ STRATEGY LAB (Phase 3)
     def _definition(self, src: Any) -> dict:
