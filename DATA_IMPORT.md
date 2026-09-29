@@ -191,7 +191,7 @@ dukascopy_python.fetch(INSTRUMENT_IDX_AMERICA_E_NQ_100, dukascopy_python.INTERVA
 | Timestamps | epoch ms → UTC (`utc=True`), bar open | library source |
 | Volume | Dukascopy source volume (decimal, provider-defined), stored as `volume_type: unknown` | **not** CME exchange volume |
 | Research proxy | yes | — |
-| Economics | research units: 1 per index point on a 0.001 grid; min/step 0.01 | **not** CME ($20/pt) and not Dukascopy's contract size; no broker figures are known |
+| Economics | research units: `point_value` 1 = USD 1 per 1.0 price move per unit, on a 0.001 grid; min/step 0.01 | Dukascopy official: 1 CFD, point value USD 0.01 per 0.01 price (= USD 1 per 1.0 move per CFD), so it matches IF 1 unit = 1 CFD. That mapping is **not yet broker-verified**; min/step 0.01 is not evidenced; **not** CME ($20/pt) |
 | `identity_status` | `user_specified` (not `source_verified`) | the symbol mapping could not be checked against Dukascopy's metadata from the build environment |
 
 ### Status gates
@@ -296,12 +296,20 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
      basis, and the Strategy Lab run tables show the scenario name, with the basis on hover.
    - **Notional commission versus research units.** Dukascopy's commission is charged on USD traded
      notional. EdgeLab computes notional as price × `point_value` × size.
-     - For `NQ_DUKASCOPY`, `point_value` = 1 is a provisional RESEARCH UNIT (`economics:
-       research_units`), not a broker-verified contract mapping. So "1 unit = USD 1 per index point"
-       is an assumption.
-     - The commission computed from it is correct only if Dukascopy's USATECH.IDX/USD contract maps
-       the same way. Any `commission_per_million` result inherits that caveat until the contract
-       size is evidenced.
+     - For `NQ_DUKASCOPY`, `point_value` = 1 means USD 1 per 1.0 price move per unit. Dukascopy's
+       official figures give USD 0.01 per 0.01-price point per CFD, which is USD 1 per 1.0 move per
+       CFD, so the value matches. The remaining assumption is:
+       **`1 EdgeLab research unit = 1 Dukascopy USATECH.IDX/USD CFD` - not yet broker-verified.**
+       Notional commission is dimensionally correct (USD) under that assumption, and any
+       `commission_per_million` result inherits it (`economics: research_units`).
+     - **Units: points are not ticks.**
+       - 1 EdgeLab point = 1.0 of the quoted price. Spread, `slippage_unit: points` and stop
+         distances all use it.
+       - 1 Dukascopy CFD point = 0.01 of the quoted price = **0.01 EdgeLab points**. A slippage
+         quoted as "N Dukascopy points" is entered as `N × 0.01`; for example, 50 Dukascopy points
+         = `0.50`.
+       - 1 EdgeLab tick = `tick_size` = 0.001 of the quoted price. So 1 Dukascopy point = 10 ticks,
+         and 1 EdgeLab point = 1,000 ticks.
 
 Import, validation, gap analysis and the Preferred-dataset setting all work while this refusal
 is active.

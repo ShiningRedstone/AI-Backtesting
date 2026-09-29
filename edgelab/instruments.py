@@ -123,6 +123,7 @@ def identity_info(inst: Instrument) -> dict:
             "identity_evidence": ex.get("identity_evidence"), "required_metadata": required,
             "source_feed_code": ex.get("source_feed_code"), "price_basis": ex.get("price_basis"),
             "volume_semantics": ex.get("volume_semantics"), "economics": ex.get("economics"),
+            "economics_evidence": ex.get("economics_evidence"), "economics_assumption": ex.get("economics_assumption"),
             "calendar": inst.calendar, "calendar_status": ex.get("calendar_status"),
             "calendar_unverified_scope": ex.get("calendar_unverified_scope"), "calendar_caveat": calendar_caveat(inst),
             "missing_metadata": missing if status == "provisional" else [],

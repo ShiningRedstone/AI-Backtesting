@@ -49,9 +49,13 @@ instruments:
   # Dukascopy's freeserv chart/json3 feed), OFFER_SIDE_BID = "B", timestamps = epoch ms -> UTC.
   # User-specified (not verifiable offline here): E_NQ-100 is Dukascopy's USA 100 Technical Index,
   # platform symbol USATECH.IDX/USD, a Dukascopy index CFD - NOT CME NQ futures.
-  # Economics: NO broker or exchange contract figures are known. tick/point/size values below are
-  # RESEARCH UNITS (1 unit = 1 per index point, 0.001 price grid), not CME NQ ($20/pt) and not
-  # Dukascopy's contract size. Costs: configs/costs.yaml NQ_DUKASCOPY (unconfigured -> research refused).
+  # Economics: still RESEARCH UNITS (not CME NQ, $20/pt). Official Dukascopy evidence (economics_evidence):
+  # 1 CFD = USD 0.01 per Dukascopy point, a Dukascopy CFD point = 0.01 of the quoted price, i.e. USD 1 per
+  # 1.0 price move per CFD - the same as point_value 1 per EdgeLab unit, IF 1 unit = 1 CFD (economics_assumption,
+  # not broker-verified). Units: 1 EdgeLab point = 1.0 quoted price; 1 Dukascopy point = 0.01 quoted price =
+  # 0.01 EdgeLab points; 1 EdgeLab tick = tick_size = 0.001 price (1 Dukascopy point = 10 ticks). min_size /
+  # size_step 0.01 are NOT evidenced (Dukascopy's minimum trade size is not recorded).
+  # Costs: configs/costs.yaml NQ_DUKASCOPY (unconfigured -> research refused).
   # Calendar: DUKASCOPY_USATECH_OBSERVED (18:00 -> 16:15 New York). REGULAR hours verified: they match
   # Dukascopy's official USATECH.IDX/USD hours and the real file (see calendar_evidence). Holidays and
   # early closes are NOT verified (calendar_unverified_scope): no dates are listed, so those closures
@@ -69,6 +73,8 @@ instruments:
                  price_basis: bid, source_interval: 1m,
                  volume_semantics: "Dukascopy source volume (provider-defined); NOT CME exchange-traded volume",
                  economics: research_units,
+                 economics_evidence: "Dukascopy official: USATECH.IDX/USD is an index CFD, trading size 1 CFD, point value 0.01 USD, a CFD point is the 2nd decimal of the quote (0.01 price) -> USD 1 per 1.0 price move per CFD, equal to point_value 1 per unit",
+                 economics_assumption: "1 EdgeLab research unit = 1 Dukascopy USATECH.IDX/USD CFD - not yet broker-verified",
                  identity_evidence: "user download code: dukascopy_python.fetch(INSTRUMENT_IDX_AMERICA_E_NQ_100 (= 'E_NQ-100' in dukascopy-python 4.0.1), INTERVAL_MIN_1, OFFER_SIDE_BID); symbol USATECH.IDX/USD and asset class stated by the user",
                  required_metadata: [source_symbol, asset_class, price_basis, tick_size, point_value,
                                      min_size, size_step],

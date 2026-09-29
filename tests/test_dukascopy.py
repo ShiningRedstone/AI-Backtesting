@@ -200,6 +200,18 @@ class TestObservedDukascopyCalendar(unittest.TestCase):
         self.assertEqual(rep.get("missing_trading_days").count, 1)
         self.assertEqual(rep.get("missing_trading_days").status, "WARN")          # visible, not a holiday entry
 
+    def test_economics_evidence_and_assumption_are_explicit(self):
+        idn = identity_info(self.inst)
+        self.assertEqual(idn["economics"], "research_units")                      # not upgraded to verified
+        self.assertIn("point value 0.01 USD", idn["economics_evidence"])
+        self.assertEqual(idn["economics_assumption"],
+                         "1 EdgeLab research unit = 1 Dukascopy USATECH.IDX/USD CFD - not yet broker-verified")
+        # values unchanged, and consistent with the evidence: USD 0.01 per 0.01 price = USD 1 per 1.0 price
+        self.assertEqual((self.inst.tick_size, self.inst.tick_value, self.inst.point_value,
+                          self.inst.min_size, self.inst.size_step), (0.001, 0.001, 1.0, 0.01, 0.01))
+        self.assertAlmostEqual(0.01 / 0.01, self.inst.point_value)
+        self.assertAlmostEqual(0.01 / self.inst.tick_size, 10.0)                   # 1 Dukascopy point = 10 ticks
+
     def test_only_regular_hours_are_verified(self):
         idn = identity_info(self.inst)
         self.assertEqual(idn["calendar_status"], "regular_hours_verified")
