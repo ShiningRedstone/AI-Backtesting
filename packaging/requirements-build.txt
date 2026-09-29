@@ -1,0 +1,11 @@
+# Build-time requirements for the packaged desktop app (developers only; end users need nothing).
+# Runtime dependencies come from ../requirements.txt, EXCEPT duckdb: the desktop build uses the
+# SQLite store, so do not install duckdb into the build environment (it would be bundled and
+# storage.backend: auto would select it).
+numpy>=2.0
+pandas>=2.2
+pyyaml>=6.0
+scipy>=1.10
+flask>=3.0
+tzdata>=2024.1          # IANA timezone database: Windows has none built in (zoneinfo needs it)
+pyinstaller>=6.0

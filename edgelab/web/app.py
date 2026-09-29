@@ -23,7 +23,9 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from edgelab.web.config import WebConfig, load_web_config
 
-STATIC = Path(__file__).parent / "static"
+from edgelab.runtime import resource_dir, runtime_info, static_dir
+
+STATIC = static_dir()
 STRATEGY_ID = re.compile(r"^STR_[0-9A-F]{12}$")
 BATCH_ID = re.compile(r"^VB_[0-9A-F]{12}$")
 RUN_ID = re.compile(r"^RUN_\d{4}_\d{5}$")
@@ -156,9 +158,9 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         s = call(svc.system_status)
         tests = root / "reports" / "last_test_run.txt"
         from edgelab.web.bundle import bundle_status
-        repo_tests = Path(__file__).resolve().parents[2] / "reports" / "last_test_run.txt"
+        repo_tests = resource_dir() / "reports" / "last_test_run.txt"
         tests = tests if tests.exists() else repo_tests
-        return jsonify({**s, "demo": demo, "root": str(root), "frontend": bundle_status(),
+        return jsonify({**s, "demo": demo, "root": str(root), "frontend": bundle_status(), "runtime": runtime_info(),
                         "test_status": tests.read_text().strip() if tests.exists() else None})
 
     @app.get("/api/options")

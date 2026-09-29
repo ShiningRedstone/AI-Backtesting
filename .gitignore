@@ -66,3 +66,4 @@ reports/imports/
 reports/last_test_run.txt
 demo_workspace/
 web/node_modules/
+.venv-build/

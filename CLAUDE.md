@@ -16,7 +16,8 @@ strategies as aggressively as it discovers them. The final product is a unified 
 (`analytics/research.py`), fixed-strategy OOS/walk-forward/Monte Carlo (`research/validation.py`), the
 matched random-entry control (`research/controls.py`), and the prop-account simulation layer
 (`edgelab/prop/`, requested as "Phase 6"; roadmap row 7, evaluation rules only; see PROP_SIMULATION.md,
-ADR-49). Windows `.exe` packaging is planned, not built (DESKTOP_PACKAGING.md).
+ADR-49), and desktop packaging hardening ("Phase 7": `edgelab/runtime.py`, `edgelab/desktop.py`,
+`packaging/`, `build_windows.ps1`; ADR-50, DESKTOP_PACKAGING.md; `EdgeLab.exe` must be built on Windows).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -165,6 +166,8 @@ python -m edgelab.cli --help                     # data, features, strategy, res
 python -m edgelab.cli research plan|run|rank ... # Phase 4 batch search (see README)
 python -m edgelab.web                            # web app at http://127.0.0.1:8765
 python -m edgelab.web --demo                     # separate synthetic demo workspace
+python -m edgelab.desktop [--data-root DIR]      # desktop launcher from source (free loopback port, browser)
+python packaging/build.py [--smoke]              # packaged folder build (Windows: build_windows.ps1)
 python scripts/phase1_demo.py                    # end-to-end synthetic demo (must stay identical)
 python scripts/benchmark_search.py               # Phase 4 search throughput (informational)
 ```

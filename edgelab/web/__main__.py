@@ -10,7 +10,9 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+from edgelab.runtime import resource_dir
+
+REPO = resource_dir()
 
 
 def main(argv: list[str] | None = None) -> int:

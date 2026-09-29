@@ -6,9 +6,11 @@ import hashlib
 import json
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-WEB = REPO / "web"
-STATIC = Path(__file__).parent / "static"
+from edgelab.runtime import is_frozen, resource_dir, static_dir
+
+REPO = resource_dir()
+WEB = REPO / "web"                       # frontend sources: present in a checkout, absent when packaged
+STATIC = static_dir()
 
 
 def source_hash(web: Path = WEB) -> str:
@@ -34,6 +36,6 @@ def bundle_status() -> dict:
     if not info_path.exists():
         return {"built": False, "up_to_date": False}
     info = json.loads(info_path.read_text())
-    current = source_hash() if (WEB / "src").is_dir() else None
-    return {"built": True, **info, "current_source_sha256": current,
+    current = source_hash() if (WEB / "src").is_dir() and not is_frozen() else None
+    return {"built": True, **info, "current_source_sha256": current, "packaged": is_frozen(),
             "up_to_date": current is None or current == info.get("source_sha256")}

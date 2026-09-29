@@ -751,6 +751,49 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   Eligible column showing the existing `backtest_readiness` reasons. No engine, DSL, store or
   metric change; prior tests unchanged.
 
+### ADR-50 Desktop packaging: one runtime module, a build manifest for code identity (Phase 7)
+- **Problem:** a PyInstaller build has no source files and no Git.
+  - `code_version()` (source hash, git commit), `compiler_source_hash()` and
+    `FeatureDef.impl_hash` (via `inspect.getsource`) would silently hash nothing, or raise.
+  - Configs and static files were found relative to the repository, and data relative to the
+    current directory.
+  - A fixed port and multiprocessing `spawn` would break or conflict.
+- **Chosen:**
+  - `edgelab/runtime.py` is the only place that distinguishes development (repository) from packaged
+    (`sys.frozen`, `sys._MEIPASS`). It resolves:
+    - read-only bundled resources: package, static bundle, default configs, fixtures;
+    - the persistent workspace: `%LOCALAPPDATA%\EdgeLab`, or `--data-root` / `EDGELAB_DATA_ROOT`.
+      Default configs are copied into it once and never overwritten; differences are only
+      reported.
+  - The build writes `edgelab_build.json` from the REAL sources. It holds the source, compiler and
+    per-feature implementation hashes (computed by the same functions as in development), plus the
+    git commit and a `build_id` over the identity fields.
+  - Frozen code reads these values and refuses without them. Packaged `code_version()` adds
+    `packaged`, `app_version` and `build_id`; development output is byte-identical to before.
+  - `edgelab/desktop.py` is the launcher:
+    - `freeze_support()` first;
+    - a single-instance lock per workspace;
+    - 127.0.0.1 on an OS-assigned port;
+    - readiness wait, then the browser;
+    - clean shutdown: cancel/join a job, close SQLite;
+    - errors to the log and a message box;
+    - a `cli` pass-through.
+  - SQLite by excluding DuckDB from the build, so `backend: auto` and the config hash stay
+    identical.
+- **Rejected:**
+  - A webview or native UI framework (the browser suffices; no new UI stack).
+  - onefile mode (slower start, temp extraction).
+  - Forcing `backend: sqlite` via a config override (it would change the research config hash).
+  - Bundling `.py` sources to keep runtime hashing (it hides that the running code is compiled,
+    and is easy to desynchronise).
+- **Minor changes to earlier modules:**
+  - `core/identity.py`, `strategy/compiler.py` and `features/spec.py` read the manifest when frozen.
+  - `core/config.py`, `web/app.py`, `web/bundle.py` and `web/__main__.py` resolve paths through
+    `edgelab.runtime`.
+  - `/api/status` adds `runtime`.
+  - No research semantics changed. Verified: a frozen run and a development run give identical
+    trades hash, config hash, strategy id and feature-cache keys.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and
@@ -838,4 +881,32 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
 - Sizes are compared in the instrument units of the trade records (NAS100_HISTDATA: 1 MNQ = 2 units);
   no automatic contract conversion.
 - No real firm's rules are shipped; the examples are synthetic and test-only.
-- Windows `.exe` packaging is not built; blockers are listed in DESKTOP_PACKAGING.md.
+- Windows `.exe` packaging: see DESKTOP_PACKAGING.md (Phase 7).
+
+## Module map (Phase 7 additions: desktop packaging)
+
+```
+edgelab/runtime.py             dev vs packaged locations (bundled resources, user workspace), workspace
+                               init, build manifest generation/loading, runtime_info (ADR-50)
+edgelab/desktop.py             launcher: freeze_support, workspace, instance lock, 127.0.0.1 + free port,
+                               readiness, browser, clean shutdown, error reporting, `cli` pass-through
+edgelab/core/identity.py       source_hash / git_commit / code_version read the manifest when frozen
+edgelab/strategy/compiler.py   compiler_source_hash reads the manifest when frozen
+edgelab/features/spec.py       FeatureDef.impl_hash reads the manifest when frozen (dev: cached source hash)
+edgelab/core/config.py, web/{app,bundle,__main__}.py   paths via edgelab.runtime; /api/status + runtime
+packaging/edgelab.spec         PyInstaller (folder mode, console, DuckDB excluded, tzdata collected)
+packaging/build.py             frontend -> manifest -> PyInstaller -> dist/EdgeLab
+packaging/launcher.py          PyInstaller entry script
+packaging/smoke_packaged.py    read-only packaged smoke test (scratch demo workspace)
+packaging/requirements-build.txt, build_windows.ps1
+```
+
+## Known limitations (Phase 7 desktop)
+
+- `EdgeLab.exe` itself was not produced in the development environment (Linux, no cross-compilation). The
+  identical spec was built and smoke-tested as a Linux folder app. Windows-only code paths (message box,
+  console-close handler, msvcrt lock, CTRL_BREAK) are untested until the first Windows build.
+- The console window is the app's lifetime (no tray icon / in-app quit); werkzeug's server; unsigned;
+  no installer or updates; imports only from `<workspace>/data/import`.
+- The CLI pass-through does not take the desktop instance lock.
+- Existing repository data is not migrated (documented manual paths only).

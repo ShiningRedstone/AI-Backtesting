@@ -96,9 +96,23 @@ class FeatureDef:
         if self.known_at not in KNOWN_AT:
             raise ValueError(f"{self.feature_id}: known_at must be one of {KNOWN_AT}")
 
-    @cached_property
+    @property
     def impl_hash(self) -> str:
-        """sha256 of the compute function's source (computed once per definition object)."""
+        """sha256 of the compute function's source. A packaged build has no source on disk: it uses
+        the hash recorded from the real source at build time and refuses an unknown feature."""
+        from edgelab import runtime
+        m = runtime.build_manifest()
+        if m is not None:
+            try:
+                return m["feature_impl_hashes"][self.feature_id]
+            except KeyError:
+                raise runtime.BuildManifestError(
+                    f"feature {self.feature_id!r} has no implementation hash in the build manifest") from None
+        return self._source_impl_hash
+
+    @cached_property
+    def _source_impl_hash(self) -> str:
+        """Computed once per definition object (development)."""
         src = inspect.getsource(self.compute)
         return hashlib.sha256(src.encode()).hexdigest()
 

@@ -1,99 +1,228 @@
-# Desktop packaging (Windows `.exe`) — architecture note
+# Desktop packaging (Windows `EdgeLab.exe`)
 
-Status: **not packaged**. This note records the intended path and the blockers found by auditing
-the code (Phase 6). No packaging code exists yet, and this phase deliberately made no packaging
-refactor.
+Status (Phase 7):
 
-## Goal
+- **Implemented and tested:** the launcher, path handling, persistent workspace, build manifest,
+  PyInstaller spec and build scripts.
+- **Built and smoke-tested:** a folder-mode build, with PyInstaller on Linux (`dist/EdgeLab/EdgeLab`).
+- **Not built yet:** `EdgeLab.exe` itself. The development environment has no Windows toolchain and
+  PyInstaller cannot cross-compile, so run `build_windows.ps1` on Windows to produce it. No installer
+  exists yet.
 
-A Windows executable that:
+## Architecture
 
-1. launches the local application and starts the backend;
-2. serves the existing React UI and opens it;
-3. needs no Python, Node, npm or Git on the user's machine, and no internet for local research;
-4. keeps the user's datasets, runs, strategies and configuration **outside** the executable,
-   persistent across application updates.
+```
+EdgeLab.exe (packaging/launcher.py -> edgelab.desktop.main)
+  multiprocessing.freeze_support()            first: frozen worker processes for research
+  resolve workspace (edgelab.runtime)         %LOCALAPPDATA%\EdgeLab (or --data-root / EDGELAB_DATA_ROOT)
+  init workspace (first run)                  copy bundled default configs/ once; create data/, logs/, reports/
+  single-instance lock                        logs\edgelab.lock; 2nd launch opens the running instance's URL
+  create_app(workspace)                       the existing Flask app + React bundle, unchanged
+  bind 127.0.0.1 : OS-assigned free port      never 0.0.0.0; --port only if asked
+  wait for /api/health, then open browser     runtime details in logs\runtime.json while running
+  Ctrl+C / close window / SIGTERM / Ctrl+Break  stop server, finish/cancel background job, close SQLite, release lock
+```
 
-Datasets are never embedded.
+One UI stack (React bundle in `edgelab/web/static`, committed), one backend (Flask over
+`edgelab/services.py`). The UI runs in the user's default browser. No webview dependency is
+needed; the packaged app is a console application whose window stays open while EdgeLab runs.
 
-## Current path (already compatible)
+## Bundled resources vs user configuration vs user data
 
-- **One UI stack.** The React + TypeScript frontend is compiled by esbuild into
-  `edgelab/web/static/` (`app.js`, `index.html`, `styles.css`, `build-info.json`). That build is
-  committed, so a packaged app ships the built static files and needs no Node at runtime or at
-  package time. A test fails if the bundle is stale.
-- **One backend.** Flask (`edgelab/web/app.py`) serves the static files and the `/api/*` routes.
-  The routes are thin wrappers over `edgelab/services.py`, the same contracts the CLI uses.
-- **One root.** Everything user-owned hangs off a single `root` directory:
-  - `configs/` (research config plus `web.yaml`, `configs/prop/`);
-  - `data/` (the SQLite store, datasets, feature cache, strategy library, prop simulations,
-    `data/import/`);
-  - `reports/`.
+`edgelab/runtime.py` is the single place that resolves locations. Nothing else checks
+`sys._MEIPASS`.
 
-  Code never writes inside the package.
-- **Local and offline.** The server binds to loopback by default and refuses other addresses
-  without `--allow-remote`. There's no auth, cloud call or CDN, and the fonts and JS are local.
+| Kind | Development (repository checkout) | Packaged |
+|---|---|---|
+| Application code | `edgelab/*.py` | compiled into the bundle (no `.py` files are shipped) |
+| Frontend | `edgelab/web/static/` | `_internal/edgelab/web/static/` |
+| Default configs (read-only) | `configs/` | `_internal/configs/` |
+| Demo fixtures (read-only) | `strategies/fixtures/` | `_internal/strategies/fixtures/` |
+| Build identity | git + source files | `_internal/edgelab_build.json` (a copy sits next to the exe) |
+| **User configs** | `configs/` of the root in use | `<workspace>\configs\` (copied from the defaults on first run, never overwritten) |
+| **User data** | `data/` of the root in use | `<workspace>\data\` (SQLite store, datasets, runs, strategy library, feature cache, prop simulations, `import\`) |
+| Logs / runtime | `logs/` | `<workspace>\logs\` (`desktop.log`, `runtime.json`, `edgelab.lock`, `edgelab_workspace.json`) |
 
-## Intended design
+**Workspace location:** `%LOCALAPPDATA%\EdgeLab` by default.
 
-| Concern | Plan |
-|---|---|
-| Tool | **PyInstaller, `--onedir`**, driven by a checked-in `.spec` file and a pinned requirements lock, built on a clean Windows runner so builds are reproducible. Prefer onedir to onefile: faster start, no temp extraction, and antivirus false positives are rarer. |
-| Entry point | A new `edgelab/desktop.py`. It calls `multiprocessing.freeze_support()`, then resolves the data root, picks a free loopback port, starts the existing `create_app(root)` on a server thread, and opens the UI. It reuses `edgelab.web.__main__` logic, but must not depend on the repository layout. |
-| UI window | Phase 1: the default browser (`webbrowser.open("http://127.0.0.1:<port>")`), which needs zero extra dependencies. Optional later: an embedded webview (pywebview on WebView2, present on Windows 10 and 11) pointed at the same URL. The React app is unchanged either way. |
-| Bundled (read-only) | Python runtime, the `edgelab` package, `edgelab/web/static/**`, **default** `configs/**` (research config, `web.yaml`, synthetic prop examples), `strategies/fixtures/**`, and the `tzdata` package data (Windows has no system tz database; `zoneinfo` needs it). |
-| External (persistent) | The user data root, default `%LOCALAPPDATA%\EdgeLab\workspace` and overridable (`--root`, or a setting). On first run the bundled default `configs/` are **copied** there and never overwritten by updates. Holds `data/` (datasets, runs, library, caches, prop simulations), `data/import/`, `reports/` and logs. |
-| Updates | Replace the application folder only; the workspace is untouched. Config schema changes need an explicit migration step (none exists yet). |
-| Storage backend | Force `storage.backend: sqlite` in the packaged defaults. With `auto`, bundling DuckDB would make research refuse, per the known Phase 4 limitation. |
+- Override it with `EdgeLab.exe --data-root D:\Research\EdgeLab` or the `EDGELAB_DATA_ROOT`
+  environment variable.
+- `--demo` uses a separate synthetic workspace, `<workspace>\demo`.
+- A workspace inside the bundle is refused.
+- Only `configs/` is ever copied into a workspace: no data and no repository files.
 
-## Blockers and required changes before a real `.exe`
+**When a new build ships different default configs:** the launcher lists the files where your
+copy differs from the bundled defaults, and never changes them. User configuration belongs to the
+user, and its content feeds the research config hash.
 
-1. **Code-version identity breaks when frozen.**
-   - `core.identity.source_hash()` hashes the `.py` files under the package directory. In a
-     PyInstaller build those files are compiled into an archive, so the hash would silently cover
-     nothing.
-   - `git_commit()` shells out to Git, which isn't available there.
-   - Needed: a build-time version stamp (git commit plus source hash, written at build time into a
-     bundled `build_version.json`) that `code_version()` reads when `sys.frozen` is set. Without
-     it, run reproducibility (research principle 9) degrades.
-2. **Repository-relative paths.**
-   - `edgelab/web/__main__.py` and `edgelab/web/bundle.py` use `REPO = parents[2]`: the demo
-     workspace copies repo `configs/` and fixtures, and there's the stale-bundle check.
-   - `edgelab/web/app.py` reads `reports/last_test_run.txt`.
-   - `core/config.py` uses `PROJECT_ROOT` (`parents[2]`).
-   - Frozen, these point inside the app folder. Needed: one `resources()` helper that resolves
-     bundled defaults (via `sys._MEIPASS` when frozen), with the stale-bundle and test-status
-     checks disabled in frozen builds.
-3. **Working-directory default.** `Services(root=".")` and `python -m edgelab.web` default to the
-   current directory. The desktop entry point must always pass an explicit workspace root and
-   create it on first run.
-4. **Process-parallel search on Windows.** `research/batch.py` uses `ProcessPoolExecutor` with
-   `spawn`. A frozen app must call `multiprocessing.freeze_support()` first thing in the entry
-   point, or worker processes re-launch the app. Background jobs default to `workers: 1`.
-5. **Single instance per data root.** Concurrent processes on one root aren't coordinated: run ids
-   are MAX+1, and restart reconciliation marks running searches `interrupted`. Needed: a lock file
-   in the workspace, so a second launch opens the existing window instead of starting a second
-   server.
-6. **Fixed port.** `web.yaml` uses port 8765. The desktop entry should choose a free loopback port
-   (or fall back when 8765 is busy).
-7. **Dataset import UX.** Imports come only from `web.import_dirs` (`data/import`), and there's no
-   browser upload. A desktop user needs either an "open import folder" action or a file picker
-   that copies into the import folder. Both are small UI and API additions.
-8. **Server.** `werkzeug.run_simple` is Flask's development server. It's acceptable on loopback
-   for a single user, but a production WSGI server (e.g. waitress, pure Python) is the safer
-   choice for the packaged app.
-9. **Native dependencies.** numpy, pandas, scipy and (optionally) pyarrow are collected by
-   PyInstaller's hooks. The build needs a test pass: the full test suite plus a scripted smoke test
-   (start the app, hit `/api/health`, run one synthetic backtest) executed against the built
-   folder.
-10. **Code signing.** An unsigned `.exe` will trigger SmartScreen warnings. Signing is a
-    distribution decision outside this project's scope.
+Development keeps working as before. `python -m edgelab.web` serves the repository root, and
+`python -m edgelab.desktop` runs the desktop launcher from source against the per-user workspace
+(or `--data-root`).
 
-## What stays true
+## Build / version metadata (reproducibility)
 
-- The research engine, DSL and services don't change for packaging. The desktop layer is a thin
-  launcher around `create_app(root)`.
-- The DSL remains the only strategy format. The packaged UI edits DSL documents through the same
-  API.
-- Live trading stays absent and disabled by default. Packaging adds no broker, network or cloud
-  capability.
+Every code hash in the research lineage used to come from source files at runtime:
+
+- `code_version()`: `source_sha256` (all package `.py` files) and `git_commit` (runs `git`);
+- the compiler source hash in the strategy provenance;
+- each feature's `impl_hash` via `inspect.getsource`, which is part of the feature-cache keys.
+
+In a packaged build the sources aren't on disk. `inspect.getsource` would raise, and the file
+hashes would silently cover nothing.
+
+**The fix:** `packaging/build.py` runs `edgelab.runtime.generate_build_manifest()` against the real
+sources at build time and bundles the result as `edgelab_build.json`. It records:
+
+- app version, git commit, and whether tracked files had uncommitted changes;
+- `source_sha256`, `compiler_source_sha256`, every feature's `impl_hash`;
+- the frontend source hash, the Python and PyInstaller versions, the build platform;
+- `build_id` = hash of the identity fields (`built_at` is excluded, so rebuilding identical inputs
+  gives the same id, and any code or toolchain change gives a new one).
+
+**At runtime, when frozen,** all of those functions return the manifest values.
+
+- Development output is unchanged.
+- Packaged `code_version()` also carries `packaged: true`, `app_version` and `build_id`, and every
+  run record stores it.
+- A packaged build without a valid manifest, or missing a feature's hash, **refuses** with
+  `BuildManifestError`. Nothing is faked or silently degraded.
+
+**Verified on the Linux build:** a packaged run and a development run of the same source produced
+identical results:
+
+- the same `trades_hash`, config hash and strategy id;
+- the same source hash;
+- identical feature-cache keys (70 files).
+
+## Port, startup and shutdown
+
+- **Binding:** always 127.0.0.1. Port 0 means the OS assigns a free port, so there's no race and no
+  fixed port. `--port N` is honoured, and if that port is busy you get a clear error. The UI isn't
+  exposed to the LAN, and there's no auth, telemetry or network call.
+- **Startup:**
+  - Checks the IANA timezone database (the Windows build bundles `tzdata`).
+  - Checks the build manifest.
+  - Refuses a non-SQLite store.
+  - Waits for `/api/health` before opening the browser.
+- **Startup failures:** written to `logs\desktop.log` and shown in a Windows message box (packaged)
+  or on stderr.
+- **Shutdown:** Ctrl+C, closing the console window (`SetConsoleCtrlHandler`), SIGTERM or
+  Ctrl+Break:
+  - stops the server;
+  - cancels and joins a running background search (it resumes later as `interrupted`, per Phase 4);
+  - closes the SQLite connection and deletes `runtime.json`.
+- **Hard kill:** loses nothing that was committed, because each store write commits.
+
+## SQLite
+
+- The desktop app uses the existing SQLite store.
+  - The build environment must not contain DuckDB: `packaging/build.py` refuses if it's
+    installed, and the spec excludes it.
+  - So `storage.backend: auto` resolves to SQLite exactly as in development, and the research
+    config hash is unchanged.
+  - The launcher refuses to start on any other backend.
+- The store is served by one process per workspace, enforced by the instance lock. Requests are
+  serialized behind the existing service lock (ADR-30/38).
+- Search worker processes never write the store (ADR-40).
+- The CLI (`EdgeLab.exe cli ...`) does not take the desktop lock: don't run CLI research against a
+  workspace while the app is serving it (the Phase 4 one-process limitation).
+
+## Multiprocessing
+
+`freeze_support()` runs before anything else. The `spawn` worker pool in `research/batch.py`
+then re-launches the frozen executable as workers.
+
+- **Verified in the frozen Linux build:** `EdgeLab cli research run ... --workers 2` completed with
+  worker processes.
+- **Background jobs:** still run with `workers: 1`, as in development.
+
+## Build (developers only)
+
+Prerequisites for building (end users need none of these):
+
+- **Windows 10/11 x64** with **Python 3.11+ 64-bit**;
+- **Node 18+**, only to rebuild the frontend (`-SkipFrontend` uses the committed bundle, which must
+  match `web/src`);
+- **Git**, so the manifest records the commit.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build_windows.ps1            # full build
+powershell -ExecutionPolicy Bypass -File build_windows.ps1 -Smoke     # + packaged smoke test
+```
+
+`build_windows.ps1` creates `.venv-build` from `packaging/requirements-build.txt`, which has no
+DuckDB and includes `tzdata` and PyInstaller. It then runs `packaging/build.py`, which:
+
+1. builds the frontend;
+2. verifies the bundle is fresh;
+3. writes `build/edgelab_build.json`;
+4. runs PyInstaller with `packaging/edgelab.spec` (folder mode, console);
+5. copies the manifest next to the exe.
+
+**Output:** `dist\EdgeLab\EdgeLab.exe` plus `dist\EdgeLab\_internal\`. Distribute the whole
+`dist\EdgeLab` folder; it contains no user data. Other platforms: `python packaging/build.py` gives
+`dist/EdgeLab/EdgeLab`.
+
+Build from a clean virtual environment. A system Python with unrelated broken packages can break
+PyInstaller's hooks.
+
+## Smoke test (read-only, scratch data only)
+
+```bash
+python packaging/smoke_packaged.py --exe dist/EdgeLab/EdgeLab.exe      # or --cmd "python -m edgelab.desktop"
+```
+
+It creates a fresh scratch workspace with the synthetic demo data and never touches a real store.
+It checks:
+
+- the exe exists and launches, binds loopback, and serves the UI, API and static assets;
+- the data root is outside the bundle and resources come from inside it;
+- config loads, the store is SQLite, and the build id and source hash match the manifest;
+- datasets and caveats are listed;
+- strategy workflow: open, validate (same id and hash), edit, save as a new version, lineage, and
+  the parent hash is unchanged;
+- a backtest runs, and its run records the build's code version;
+- a prop simulation runs, and the run is unchanged afterwards;
+- a second launch reuses the running instance;
+- shutdown is clean, `runtime.json` is removed, and SQLite `integrity_check` passes with all runs
+  kept;
+- a restart reuses the store;
+- a CLI search with 2 worker processes completes.
+
+`tests/test_desktop.py` runs it automatically when `dist/EdgeLab` exists.
+
+## Existing repository data (future migration path)
+
+Nothing is migrated automatically, and the developer checkout's `data/` is never touched by the
+packaged app unless you point it there explicitly. Options, in order of safety:
+
+1. **Copy (recommended when ready):**
+   1. Close both EdgeLab processes.
+   2. Copy `C:\Users\<you>\Documents\AI-Backtesting\data` to `%LOCALAPPDATA%\EdgeLab\data`.
+   3. Copy the repository's `configs\` to `%LOCALAPPDATA%\EdgeLab\configs`, so the config hash and
+      the cost, exclusion and calendar definitions of your existing runs match.
+
+   The original stays untouched as a backup. The copied store re-verifies dataset hashes on load.
+2. **Point the app at the checkout:** `EdgeLab.exe --data-root C:\Users\<you>\Documents\AI-Backtesting`.
+   It uses that root's `configs/` and `data/` in place, only adds `logs/` (git-ignored) and
+   `data/import/`, and new runs record the packaged build id. Never run it at the same time as
+   `python -m edgelab.web` on that root.
+3. A guided, verified migration command (copy, then hash-check every dataset and run) is future
+   work.
+
+## Current limitations
+
+- `EdgeLab.exe` must be built on Windows. The Windows-specific paths are implemented but have not
+  been executed on Windows:
+  - the message box;
+  - the console-close handler;
+  - `msvcrt` locking;
+  - `%LOCALAPPDATA%`;
+  - `CTRL_BREAK` in the smoke test.
+- The console window must stay open while EdgeLab runs. There's no tray icon and no in-app "Quit".
+- Unsigned executable: Windows SmartScreen will warn. No installer or auto-update exists.
+- The server is still werkzeug's threaded server (loopback, single user).
+- File import still reads from `<workspace>\data\import\`. There's no browser upload or file picker
+  yet.
+- The build is about 175 MB (numpy/pandas/scipy). No size optimization yet.
+- Updating a build doesn't update user configs; differences are only reported.

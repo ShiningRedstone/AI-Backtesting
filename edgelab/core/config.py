@@ -21,9 +21,11 @@ from typing import Any, Mapping
 
 import yaml
 
+from edgelab.runtime import default_config_dir, resource_dir
+
 ENV_PREFIX = "EDGELAB__"
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_DIR = PROJECT_ROOT / "configs"
+PROJECT_ROOT = resource_dir()            # repository (dev) or bundle (packaged); read-only defaults
+DEFAULT_CONFIG_DIR = default_config_dir()
 
 # Files merged (in this order) into one config tree. Top-level keys must not collide.
 CONFIG_FILES = ("data.yaml", "instruments.yaml", "costs.yaml", "backtest.yaml",

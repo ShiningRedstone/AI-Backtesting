@@ -34,7 +34,13 @@ def hash_arrays(*arrays: np.ndarray) -> str:
 
 
 def source_hash() -> str:
-    """Hash of every .py file in the package: detects uncommitted code changes."""
+    """Hash of every .py file in the package: detects uncommitted code changes. A packaged build
+    has no source files on disk: it reports the hash computed from the sources at build time
+    (edgelab_build.json) and refuses to run without it (see edgelab.runtime)."""
+    from edgelab import runtime
+    m = runtime.build_manifest()
+    if m is not None:
+        return m["source_sha256"]
     h = hashlib.sha256()
     for p in sorted(PACKAGE_DIR.rglob("*.py")):
         h.update(str(p.relative_to(PACKAGE_DIR)).encode())
@@ -43,6 +49,10 @@ def source_hash() -> str:
 
 
 def git_commit() -> str | None:
+    from edgelab import runtime
+    m = runtime.build_manifest()
+    if m is not None:
+        return m["git_commit"]
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=PACKAGE_DIR.parent,
                              capture_output=True, text=True, timeout=5)
@@ -54,7 +64,15 @@ def git_commit() -> str | None:
 
 
 def code_version() -> dict:
-    return {"git_commit": git_commit(), "source_sha256": source_hash()}
+    """Development: git commit + source hash (unchanged). Packaged: the same two values from the
+    build manifest, plus the build id and app version that distinguish application builds."""
+    from edgelab import runtime
+    m = runtime.build_manifest()
+    if m is None:
+        return {"git_commit": git_commit(), "source_sha256": source_hash()}
+    return {"git_commit": m["git_commit"], "source_sha256": m["source_sha256"], "packaged": True,
+            "app_version": m["app_version"], "build_id": m["build_id"],
+            "git_tracked_changes": m.get("git_tracked_changes")}
 
 
 def environment_fingerprint() -> dict:

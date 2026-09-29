@@ -236,3 +236,18 @@ python -m edgelab.web                                                # Prop Simu
 - Rules the trade records cannot support honestly are refused by name. No real firm's rules ship.
 - The result shows the strategy result and the account result separately, with full lineage. Passing
   is not evidence of profitability. See PROP_SIMULATION.md; packaging plan in DESKTOP_PACKAGING.md.
+
+## Windows desktop build (developers)
+
+The packaged app (`EdgeLab.exe`) needs no Python, Node or Git on the user's machine. Your data lives in
+`%LOCALAPPDATA%\EdgeLab`, outside the executable. To build it on Windows (Python 3.11+ 64-bit; Node 18+
+only to rebuild the frontend):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build_windows.ps1 -Smoke   # -> dist\EdgeLab\EdgeLab.exe
+```
+
+Double-click `dist\EdgeLab\EdgeLab.exe`. It starts the local server on 127.0.0.1 with a free port and
+opens the UI in your browser. Keep its window open while you work; close it to stop EdgeLab. Run from
+source with `python -m edgelab.desktop`. Details, the data layout and the migration path for existing
+repository data are in DESKTOP_PACKAGING.md.

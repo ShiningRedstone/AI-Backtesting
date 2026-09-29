@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 7 (as requested): Windows desktop / exe hardening
+
+| Item | Status |
+|---|---|
+| `edgelab/runtime.py`: the one dev-vs-packaged resolver (bundled resources, persistent workspace `%LOCALAPPDATA%\EdgeLab` / `--data-root` / `EDGELAB_DATA_ROOT`); default configs copied once, never overwritten; config differences reported (ADR-50) | IMPLEMENTED, TESTED |
+| Build manifest `edgelab_build.json` from the real sources (source, compiler and feature impl hashes, git commit, build id); frozen code reads it and refuses without it; development `code_version()` unchanged | IMPLEMENTED, TESTED (dev + simulated frozen) |
+| Launcher `edgelab/desktop.py`: freeze_support, single instance per workspace, 127.0.0.1 on a free port, readiness wait, browser, clean shutdown, logged/visible errors, `cli` pass-through | IMPLEMENTED, TESTED |
+| Repository-relative paths (config defaults, static bundle, demo fixtures, test status) resolved via `edgelab.runtime` | IMPLEMENTED, TESTED |
+| PyInstaller spec, `packaging/build.py`, `build_windows.ps1`, build requirements (no DuckDB, tzdata) | IMPLEMENTED |
+| Folder-mode build + packaged smoke test (launch, UI, API, static, config, SQLite, build id, data root outside the bundle, datasets, strategy edit/save/lineage, backtest, prop, single instance, clean shutdown + integrity, restart, CLI search with 2 worker processes) | BUILT AND PASSED on Linux (`dist/EdgeLab/EdgeLab`) |
+| Frozen vs development research identity (trades hash, config hash, strategy id, feature-cache keys) | VERIFIED identical |
+| `EdgeLab.exe` (Windows) | NOT PRODUCED here (no Windows toolchain; PyInstaller does not cross-compile); build with `build_windows.ps1` |
+| Installer, signing, auto-update, tray icon, migration command | NOT IMPLEMENTED (deliberately) |
+
 ## Phase 6 (as requested): Prop-firm simulation layer
 
 Roadmap row 7 ("Prop-Firm Simulation"), evaluation rules only. It sits above the engine and reads stored runs.

@@ -39,6 +39,10 @@ class StrategyCompileError(ValueError):
 
 
 def compiler_source_hash() -> str:
+    from edgelab import runtime
+    m = runtime.build_manifest()                # packaged: computed from the sources at build time
+    if m is not None:
+        return m["compiler_source_sha256"]
     h = hashlib.sha256()
     for p in sorted(Path(__file__).parent.glob("*.py")):
         h.update(p.name.encode())
