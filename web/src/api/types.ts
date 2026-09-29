@@ -83,7 +83,8 @@ export interface InstrumentIdentity {
   identity_status: string; research_proxy?: boolean; source_provider?: string | null; source_symbol?: string | null;
   asset_class?: string; exchange?: string; price_source?: string | null; identity_evidence?: string | null;
   required_metadata?: string[]; missing_metadata?: string[]; point_value?: number; tick_size?: number;
-  description?: string; problem?: string | null;
+  description?: string; problem?: string | null; source_feed_code?: string | null; price_basis?: string | null;
+  volume_semantics?: string | null; economics?: string | null; calendar?: string; calendar_status?: string | null;
 }
 export interface PreferredDataset {
   preferred: { dataset_id: string; set_at: string; content_hash: string; manifest_hash: string; provider: string;

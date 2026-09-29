@@ -274,8 +274,10 @@ and nothing is ranked. See WEB_UI.md.
 
 ## Dukascopy data and the Preferred Research Dataset (Phase 9)
 
-The Dukascopy Nasdaq-100 1m CSV is the intended primary research source. It imports through the normal pipeline as `NQ_DUKASCOPY`,
-with a **provisional** source identity (not CME NQ) and its own **unconfigured** cost profile. Research on it is refused until you
-state the identity and enter costs. Mark the validated 5m child as the workspace's **Preferred Research Dataset**; new research then
-starts on it. Exact commands and GUI steps are in DATA_IMPORT.md ("Dukascopy Nasdaq-100"). The real file is not in this repository,
-and nothing here was computed from it.
+The primary research source is Dukascopy **USATECH.IDX/USD** (feed `E_NQ-100`), as 1m **BID** candles in UTC. It is a
+Dukascopy index CFD research proxy, **not CME NQ futures**. Its source volume is not treated as exchange volume, and its economics
+are research units. It imports through the normal pipeline as `NQ_DUKASCOPY`. Research on it is refused until two things are
+done: the provisional session calendar has been verified against the real file with `scripts/dukascopy_inspect.py`
+(`calendar_status: verified`), and the separate Dukascopy cost profile has numbers (it ships `unconfigured`). Mark the validated
+5m child as the workspace's **Preferred Research Dataset**; new research then starts on it. Commands and GUI steps are in
+DATA_IMPORT.md ("Dukascopy USATECH.IDX/USD"). The real file is not in this repository, and nothing here was computed from it.

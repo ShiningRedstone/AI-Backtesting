@@ -1144,6 +1144,10 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 
 ## Known limitations (Phase 9)
 
+- **Identity and calendar gates (added after ADR-54):** `NQ_DUKASCOPY` is Dukascopy USATECH.IDX/USD (feed E_NQ-100, BID)
+  with `identity_status: user_specified`. `identity_problem` also refuses research while `calendar_status:
+  provisional_unverified`, so an unverified session calendar cannot silently shape results. The refusal goes
+  through the same single gate in `_run_cell`.
 - **Real data:** the real Dukascopy CSV is not in this repository. The pipeline was exercised only on
   a SYNTHETIC Dukascopy-shaped fixture. Its calendar is provisional until `inspect` evidence from the
   real file confirms or replaces it, and its holidays are not listed.

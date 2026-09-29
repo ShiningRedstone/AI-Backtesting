@@ -74,14 +74,14 @@ costs:
           spread_source: fixed
           spread_points: 0.50             # full spread in index points, charged once per round trip
           financing_mode: none
-    # Dukascopy Nasdaq-100 source (Phase 9): its OWN profile. HistData's assumed costs are never
+    # Dukascopy USATECH.IDX/USD (feed E_NQ-100, BID; Phase 9): its OWN profile. HistData's assumed costs are never
     # reused for it (a different feed has a different spread/price side). Ships UNCONFIGURED:
     # the dataset imports, but every backtest is refused until you enter real numbers here
     # (commission/fees per unit per side, spread, slippage, financing) with a status of
     # `assumed` or `broker_verified` and a rationale in `notes`.
     NQ_DUKASCOPY:
       status: unconfigured
-      notes: "Dukascopy source; no costs are assumed (not HistData's, not CME NQ's)"
+      notes: "Dukascopy USATECH.IDX/USD; no costs are assumed (not HistData's, not CME NQ's)"
       slippage_unit: points
       commission_per_side: null
       slippage_ticks_market: null

@@ -20,8 +20,10 @@ from edgelab.services import Services
 from tests.dukascopy_fixture import session_minutes, write_fixture
 
 REPO = Path(__file__).resolve().parents[1]
-OPTS = dict(profile="dukascopy_utc_csv", instrument="NQ_DUKASCOPY", provider="DUKASCOPY", asset_type="unspecified",
-            timeframe="1m", dataset_name="NQ_DUKASCOPY_2021_2026", derive_timeframes=["5m"], build_features=False)
+# exactly the options of the documented real import command (DATA_IMPORT.md), on a SYNTHETIC fixture
+OPTS = dict(profile="dukascopy_utc_csv", instrument="NQ_DUKASCOPY", provider="DUKASCOPY", asset_type="CFD",
+            symbol="USATECH.IDX/USD", price_basis="bid", timeframe="1m", dataset_name="NQ_DUKASCOPY_2021_2026",
+            derive_timeframes=["5m"], build_features=False)
 EMA = REPO / "strategies" / "fixtures" / "ema_crossover.yaml"
 
 
@@ -54,8 +56,8 @@ class TestImportAndProvenance(DukascopyBase):
         m = self.svc.dataset_detail(self.m1)["manifest"]
         self.assertTrue(self.m1.startswith("NQ_DUKASCOPY_2021_2026_1M_"))
         self.assertEqual((m["provider"], m["instrument"], m["asset_type"], m["symbol"]),
-                         ("DUKASCOPY", "NQ_DUKASCOPY", "unspecified", "UNSTATED"))      # symbol NOT invented
-        self.assertEqual((m["price_basis"], m["volume_type"]), ("unknown", "unknown"))  # decimal volume != exchange volume
+                         ("DUKASCOPY", "NQ_DUKASCOPY", "CFD", "USATECH.IDX/USD"))         # stated at import, never inferred
+        self.assertEqual((m["price_basis"], m["volume_type"]), ("bid", "unknown"))      # source volume != exchange volume
         self.assertEqual((m["source_timezone"], m["source_timestamp_convention"]), ("UTC", "open"))
         self.assertEqual(m["calendar"], "DUKASCOPY_NQ_PROVISIONAL")
         self.assertEqual(m["source_file_sha256"], hashlib.sha256(self.raw_bytes).hexdigest())
@@ -68,17 +70,20 @@ class TestImportAndProvenance(DukascopyBase):
         self.assertEqual(len(ds.bars.ts_ns), self.facts["rows"])
         self.assertTrue(np.all(np.diff(ds.bars.ts_ns) > 0))
 
-    def test_limitations_and_provisional_identity_are_visible(self):
+    def test_identity_and_unverified_calendar_are_visible(self):
         det = self.svc.dataset_detail(self.m1)
         self.assertTrue(any("volume semantics unknown" in x for x in det["limitations"]))
-        self.assertTrue(any("price basis" in x for x in det["limitations"]))
+        self.assertFalse(any("price basis" in x for x in det["limitations"]))       # BID is stated
         idn = det["identity"]
-        self.assertEqual(idn["identity_status"], "provisional")
+        self.assertEqual((idn["identity_status"], idn["source_symbol"], idn["source_feed_code"], idn["asset_class"],
+                          idn["price_basis"]), ("user_specified", "USATECH.IDX/USD", "E_NQ-100", "cfd", "bid"))
         self.assertTrue(idn["research_proxy"])
-        self.assertIsNone(idn["source_symbol"])
-        self.assertIn("source_symbol", idn["missing_metadata"])
-        self.assertIn("asset_class", idn["missing_metadata"])
-        self.assertIn("PROVISIONAL", idn["problem"])
+        self.assertIn("NOT CME", idn["volume_semantics"])
+        self.assertEqual(idn["economics"], "research_units")
+        self.assertIn("OFFER_SIDE_BID", idn["identity_evidence"])
+        self.assertEqual(idn["missing_metadata"], [])
+        self.assertEqual(idn["calendar_status"], "provisional_unverified")
+        self.assertIn("has not been verified", idn["problem"])
 
     def test_validation_report_covers_the_required_checks(self):
         rep = self.svc.store.get_report(self.m1)
@@ -115,19 +120,26 @@ class TestImportAndProvenance(DukascopyBase):
 
 
 class TestResearchRefusals(DukascopyBase):
-    def test_backtest_refused_while_identity_is_provisional(self):
+    def test_backtest_refused_while_calendar_is_unverified(self):
         with self.assertRaises(InstrumentIdentityError) as cm:
             self.svc.backtest_strategy(EMA.read_text(), self.m5)
-        self.assertIn("PROVISIONAL", str(cm.exception))
+        self.assertIn("has not been verified", str(cm.exception))
         row = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
         self.assertFalse(row["runnable"])
-        self.assertTrue(any("provisional" in r for r in row["reasons"]))
+        self.assertTrue(any("calendar not yet verified" in r for r in row["reasons"]))
         self.assertTrue(any("cost profile is unconfigured" in r for r in row["reasons"]))
 
-    def test_identity_stated_then_cost_refusal_names_the_dukascopy_profile(self):
+    def test_provisional_identity_is_still_refused(self):
         cfg = copy.deepcopy(self.svc.cfg)
-        cfg["instruments"]["NQ_DUKASCOPY"].update(identity_status="user_specified", source_symbol="TESTSYMBOL",
-                                                  asset_class="cfd")
+        cfg["instruments"]["NQ_DUKASCOPY"].update(identity_status="provisional", calendar_status="verified",
+                                                  calendar_evidence="test")
+        self.assertIn("PROVISIONAL source identity", identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
+
+    def test_calendar_verified_then_cost_refusal_names_the_dukascopy_profile(self):
+        cfg = copy.deepcopy(self.svc.cfg)
+        cfg["instruments"]["NQ_DUKASCOPY"]["calendar_status"] = "verified"
+        self.assertIn("calendar_evidence", identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
+        cfg["instruments"]["NQ_DUKASCOPY"]["calendar_evidence"] = "test: inspection report"
         self.assertIsNone(identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
         with self.assertRaises(CostConfigError) as cm:
             cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
@@ -149,8 +161,35 @@ class TestResearchRefusals(DukascopyBase):
 
     def test_source_verified_needs_evidence(self):
         cfg = copy.deepcopy(self.svc.cfg)
-        cfg["instruments"]["NQ_DUKASCOPY"]["identity_status"] = "source_verified"
+        cfg["instruments"]["NQ_DUKASCOPY"].update(identity_status="source_verified", identity_evidence=None,
+                                                  calendar_status="verified", calendar_evidence="test")
         self.assertIn("identity_evidence", identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
+
+
+class TestInspectionScriptIsReadOnly(unittest.TestCase):
+    def test_script_reports_and_stores_nothing(self):
+        import contextlib
+        import io
+        import runpy
+        root = workspace()
+        self.addCleanup(shutil.rmtree, root, True)
+        csv = root / "nq_1min_5years.csv"
+        write_fixture(csv, end="2024-04-27")
+        before = csv.read_bytes()
+        mod = runpy.run_path(str(REPO / "scripts" / "dukascopy_inspect.py"), run_name="dukascopy_inspect")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(mod["main"]([str(csv), "--root", str(root), "--out", str(root / "r.json")]), 0)
+        text = out.getvalue()
+        for needle in ("rows 55,175", "duplicate timestamps 0", "monotonic True", "bars per hour (New York)",
+                       "bars per hour (UTC)", "week_first_bar_ny: {'Sun 18:00': 8}", "week_last_bar_ny: {'Fri 16:59': 8}",
+                       "minutes_of_day_rarely_present_ny: ['17:00-18:00']", "coverage by year", "missing trading days (0)",
+                       "passes the gate"):
+            self.assertIn(needle, text)
+        self.assertEqual(csv.read_bytes(), before)
+        self.assertFalse((root / "data").exists())                   # no store, no dataset, no report
+        rep = json.loads((root / "r.json").read_text())
+        self.assertEqual(rep["sha256"], hashlib.sha256(before).hexdigest())
 
 
 class TestImportRefusals(unittest.TestCase):
@@ -284,7 +323,8 @@ class TestPreferredDataset(unittest.TestCase):
         self.assertEqual(r.get_json()["preferred"]["dataset_id"], self.duka5)
         rows = c.get("/api/datasets").get_json()
         self.assertTrue(next(d for d in rows if d["dataset_id"] == self.duka5)["preferred"])
-        self.assertEqual(next(d for d in rows if d["dataset_id"] == self.duka5)["identity"]["identity_status"], "provisional")
+        self.assertEqual(next(d for d in rows if d["dataset_id"] == self.duka5)["identity"]["calendar_status"],
+                         "provisional_unverified")
         q = c.get(f"/api/datasets/{self.duka5}/quality")
         self.assertEqual(q.status_code, 200)
         self.assertIn("largest_gaps", q.get_json())

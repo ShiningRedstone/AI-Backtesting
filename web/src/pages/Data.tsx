@@ -98,7 +98,8 @@ export function DatasetsPage() {
               <td data-testid={`identity-${d.dataset_id}`}>
                 {d.identity?.identity_status === "provisional" ? <Badge tone="warn" title={d.identity.problem ?? ""}>provisional</Badge>
                   : <Badge tone="neutral">{d.identity?.identity_status ?? "?"}</Badge>}
-                {d.identity?.research_proxy && <div className="small muted">research proxy</div>}</td>
+                {d.identity?.research_proxy && <div className="small muted">research proxy</div>}
+                {d.identity?.calendar_status === "provisional_unverified" && <div className="small muted">calendar unverified</div>}</td>
               <td>{d.timeframe}</td>
               <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td><td>{fmt(d.n_bars)}</td>
               <td><Badge tone={qTone(d.quality_status)}>{d.quality_status}</Badge>
@@ -149,10 +150,14 @@ function DatasetDetail({ id }: { id: string }) {
       {data.limitations.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{l}</Banner>)}
       {idn?.identity_status === "provisional" && <Banner tone="warn" testId="identity-provisional"><b>Provisional source identity.</b> {idn.problem}
         {idn.missing_metadata?.length ? <> Missing: {idn.missing_metadata.join(", ")}.</> : null}</Banner>}
+      {idn?.calendar_status === "provisional_unverified" && <Banner tone="warn" testId="calendar-unverified"><b>Session calendar not
+        verified.</b> {idn.problem}</Banner>}
       <KeyValues rows={[["Instrument identity", <>{idn?.identity_status}{idn?.research_proxy ? " · research proxy" : ""}</>],
-        ["Source provider / symbol", `${idn?.source_provider ?? "—"} / ${idn?.source_symbol ?? "not stated"}`],
-        ["Asset class", idn?.asset_class ?? "—"], ["Price source", idn?.price_source ?? "—"],
-        ["Point value / tick", `${idn?.point_value ?? "?"} / ${idn?.tick_size ?? "?"} (research units unless verified)`]]} />
+        ["Source provider / symbol", `${idn?.source_provider ?? "—"} / ${idn?.source_symbol ?? "not stated"}${idn?.source_feed_code ? ` (feed ${idn.source_feed_code})` : ""}`],
+        ["Asset class", idn?.asset_class ?? "—"], ["Price basis", idn?.price_basis ?? "—"], ["Price source", idn?.price_source ?? "—"],
+        ["Volume", idn?.volume_semantics ?? "—"],
+        ["Calendar", `${idn?.calendar ?? "—"}${idn?.calendar_status ? ` (${idn.calendar_status})` : ""}`],
+        ["Point value / tick", `${idn?.point_value ?? "?"} / ${idn?.tick_size ?? "?"} (${idn?.economics === "research_units" ? "research units, not contract economics" : "research units unless verified"})`]]} />
       <KeyValues rows={Object.entries(data.manifest).filter(([, v]) => typeof v !== "object" || v === null)
         .map(([k, v]) => [k, <span className="mono small">{fmt(v)}</span>])} />
       <KeyValues rows={[["Manifest hash", <Mono>{data.manifest_hash}</Mono>], ["Derived datasets", data.derived_datasets.join(", ") || "none"]]} />

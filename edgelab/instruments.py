@@ -121,12 +121,28 @@ def identity_info(inst: Instrument) -> dict:
             "source_provider": ex.get("source_provider"), "source_symbol": ex.get("source_symbol"),
             "asset_class": inst.asset_class, "exchange": inst.exchange, "price_source": ex.get("price_source"),
             "identity_evidence": ex.get("identity_evidence"), "required_metadata": required,
+            "source_feed_code": ex.get("source_feed_code"), "price_basis": ex.get("price_basis"),
+            "volume_semantics": ex.get("volume_semantics"), "economics": ex.get("economics"),
+            "calendar": inst.calendar, "calendar_status": ex.get("calendar_status"),
             "missing_metadata": missing if status == "provisional" else [],
             "point_value": inst.point_value, "tick_size": inst.tick_size, "description": inst.description}
 
 
+CALENDAR_STATUSES = ("provisional_unverified", "verified")
+
+
 def identity_problem(inst: Instrument) -> str | None:
-    """None when research may interpret this instrument's economics, else the exact reason."""
+    """None when research may interpret this instrument's economics and sessions, else the exact reason."""
+    cal_status = (inst.extra or {}).get("calendar_status")
+    if cal_status is not None and cal_status not in CALENDAR_STATUSES:
+        return f"instrument {inst.symbol}: unknown calendar_status {cal_status!r} (one of {CALENDAR_STATUSES})"
+    if cal_status == "provisional_unverified":
+        return (f"instrument {inst.symbol}: its session calendar {inst.calendar} is PROVISIONAL and has not been "
+                "verified against the real source file. Run scripts/dukascopy_inspect.py on the file, confirm or "
+                "replace the calendar, then set calendar_status: verified (with calendar_evidence) in "
+                "configs/instruments.yaml. See DATA_IMPORT.md.")
+    if cal_status == "verified" and not (inst.extra or {}).get("calendar_evidence"):
+        return f"instrument {inst.symbol}: calendar_status verified needs calendar_evidence in configs/instruments.yaml"
     status = (inst.extra or {}).get("identity_status")
     if status is None or status in ("user_specified", "source_verified"):
         if status == "source_verified" and not (inst.extra or {}).get("identity_evidence"):

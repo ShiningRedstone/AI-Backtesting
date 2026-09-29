@@ -25,7 +25,9 @@ Settings → Research Workspace; ADR-53).
 refused for research until its identity is stated, own unconfigured costs, provisional calendar, gap classification
 `data/quality.py`), workspace Preferred Research Dataset (`data/preferences.py`), and AI Discovery (`edgelab/ai/`: blind
 context, providers incl. deterministic mock, strict 8-stage gate, human review, lineage; ADR-54). The real Dukascopy CSV
-has NOT been imported in this repository.
+has NOT been imported in this repository. `NQ_DUKASCOPY` = Dukascopy USATECH.IDX/USD (feed E_NQ-100), BID, index CFD research
+proxy (not CME NQ), `identity_status: user_specified`; research stays refused while `calendar_status: provisional_unverified`
+and while its separate cost profile is `unconfigured` (read-only check: `scripts/dukascopy_inspect.py`).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

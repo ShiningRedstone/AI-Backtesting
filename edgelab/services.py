@@ -755,7 +755,9 @@ class Services:
             reasons.append("no cost profile for this instrument")
         identity = self._instrument_identity(m.instrument)
         if identity.get("problem"):
-            reasons.append("instrument source identity is provisional - state the source symbol, asset class "
+            reasons.append("session calendar not yet verified against the real source file (DATA_IMPORT.md)"
+                           if identity.get("calendar_status") != "verified" and identity.get("calendar_status") else
+                           "instrument source identity is provisional - state the source symbol, asset class "
                            "and contract economics first (DATA_IMPORT.md)")
         if d.get("quality_status") == "FAIL":
             reasons.append("dataset failed validation")

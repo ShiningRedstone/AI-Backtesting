@@ -133,8 +133,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                                       "issues": [i.to_dict() for i in e.result.issues],
                                       "details": str(e)}}), 422
         table = [(InstrumentIdentityError, 409, "instrument_identity",
-                  "Research unavailable: this instrument's source identity is provisional. State its "
-                  "symbol, asset class and contract economics first."),
+                  "Research unavailable: this instrument's source identity or session calendar is not yet "
+                  "established (see the reason)."),
                  (DiscoveryScopeError, 422, "ai_scope", "The discovery scope was refused."),
                  (ProviderError, 503, "ai_provider", "The AI provider is unavailable."),
                  (VariationError, 422, "variation", "Variation generation was refused."),

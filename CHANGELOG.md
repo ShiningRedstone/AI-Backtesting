@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Dukascopy identity and real-import preparation (after Phase 9)
+
+| Item | Status |
+|---|---|
+| `NQ_DUKASCOPY` identity from the user's download call: Dukascopy `USATECH.IDX/USD` (feed `E_NQ-100`, verified in dukascopy-python 4.0.1), asset class `cfd` (index CFD, not CME NQ), BID, UTC, source volume not exchange volume, research proxy, research-unit economics; `identity_status: user_specified` with evidence | IMPLEMENTED, TESTED |
+| Calendar gate: `calendar_status: provisional_unverified` refuses research (same single gate in `_run_cell`, `409 instrument_identity`) until the calendar is verified against the real file (`calendar_status: verified` + `calendar_evidence`) | IMPLEMENTED, TESTED |
+| Dukascopy cost profile stays separate and `unconfigured` (no costs invented) | UNCHANGED, TESTED |
+| `scripts/dukascopy_inspect.py`: read-only real-file inspection (production inspect + in-memory validation gate + gap analysis; stores nothing) | IMPLEMENTED, TESTED (synthetic fixture) |
+| Datasets UI shows symbol, feed code, price basis, volume semantics, calendar status | IMPLEMENTED |
+| Inspection, calendar verification, import, preferred dataset and smoke tests on the real file | REQUIRES REAL DATA (user's machine; commands in DATA_IMPORT.md) |
+
 ## Phase 9 (as requested): Dukascopy primary research source + AI-assisted strategy discovery
 
 | Item | Status |

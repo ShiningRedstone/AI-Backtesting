@@ -42,22 +42,30 @@ instruments:
                     min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: HISTDATA_NSX_R2,
                     research_proxy: true, price_source: "HistData NSXUSD M1, BID",
                     description: "HistData NSXUSD Nasdaq-100 quote - research proxy, not a live tradable contract"}
-  # ---- Dukascopy Nasdaq-100 source (Phase 9): PROVISIONAL identity --------------------------
-  # A price SOURCE, not a contract. Nothing about it is assumed to be CME NQ: the file name is not
-  # evidence. Unknown until you state it (DATA_IMPORT.md, "source identity metadata step"):
-  # the Dukascopy symbol, asset class (CFD / index quote / futures-derived), price side, and any
-  # contract economics. tick/point values below are RESEARCH UNITS (1 unit = 1 per index point,
-  # prices on a 0.001 grid), not broker or exchange figures. While identity_status is
-  # `provisional`, EVERY backtest / search / validation / control on this instrument is refused
-  # (and its cost profile ships unconfigured as well). To enable research, fill the fields in
-  # required_metadata and set identity_status to `user_specified` (you state it) or
-  # `source_verified` (with identity_evidence: where you verified it).
-  NQ_DUKASCOPY: {exchange: unverified, asset_class: unverified, tick_size: 0.001, tick_value: 0.001,
+  # ---- Dukascopy USATECH.IDX/USD (Phase 9 primary research source) ---------------------------
+  # Identity USER-SPECIFIED from the user's download code (dukascopy-python 4.0.1):
+  #   dukascopy_python.fetch(INSTRUMENT_IDX_AMERICA_E_NQ_100, INTERVAL_MIN_1, OFFER_SIDE_BID, START, END)
+  # Verified in the library source: INSTRUMENT_IDX_AMERICA_E_NQ_100 = "E_NQ-100" (the feed code sent to
+  # Dukascopy's freeserv chart/json3 feed), OFFER_SIDE_BID = "B", timestamps = epoch ms -> UTC.
+  # User-specified (not verifiable offline here): E_NQ-100 is Dukascopy's USA 100 Technical Index,
+  # platform symbol USATECH.IDX/USD, a Dukascopy index CFD - NOT CME NQ futures.
+  # Economics: NO broker or exchange contract figures are known. tick/point/size values below are
+  # RESEARCH UNITS (1 unit = 1 per index point, 0.001 price grid), not CME NQ ($20/pt) and not
+  # Dukascopy's contract size. Costs: configs/costs.yaml NQ_DUKASCOPY (unconfigured -> research refused).
+  # Calendar: DUKASCOPY_NQ_PROVISIONAL is NOT verified until scripts/dukascopy_inspect.py has been run
+  # on the real file (DATA_IMPORT.md).
+  NQ_DUKASCOPY: {exchange: OTC, asset_class: cfd, tick_size: 0.001, tick_value: 0.001,
                  point_value: 1, min_size: 0.01, size_step: 0.01, underlying: NDX,
-                 calendar: DUKASCOPY_NQ_PROVISIONAL, research_proxy: true,
-                 identity_status: provisional, source_provider: DUKASCOPY, source_symbol: null,
-                 identity_evidence: null,
+                 calendar: DUKASCOPY_NQ_PROVISIONAL, calendar_status: provisional_unverified,
+                 research_proxy: true, identity_status: user_specified,
+                 source_provider: DUKASCOPY, source_symbol: "USATECH.IDX/USD",
+                 source_feed_code: "E_NQ-100", source_instrument_constant: INSTRUMENT_IDX_AMERICA_E_NQ_100,
+                 source_description: "Dukascopy USA 100 Technical Index (Nasdaq-100-related index CFD)",
+                 price_basis: bid, source_interval: 1m,
+                 volume_semantics: "Dukascopy source volume (provider-defined); NOT CME exchange-traded volume",
+                 economics: research_units,
+                 identity_evidence: "user download code: dukascopy_python.fetch(INSTRUMENT_IDX_AMERICA_E_NQ_100 (= 'E_NQ-100' in dukascopy-python 4.0.1), INTERVAL_MIN_1, OFFER_SIDE_BID); symbol USATECH.IDX/USD and asset class stated by the user",
                  required_metadata: [source_symbol, asset_class, price_basis, tick_size, point_value,
                                      min_size, size_step],
-                 price_source: "Dukascopy 1m CSV (UTC offsets); price side not stated",
-                 description: "Dukascopy Nasdaq-100 source - PROVISIONAL identity; not CME NQ; research units only"}
+                 price_source: "Dukascopy USATECH.IDX/USD (feed E_NQ-100), 1m candles, BID side, UTC",
+                 description: "Dukascopy USATECH.IDX/USD BID - index CFD research proxy; NOT CME NQ; research units only"}
