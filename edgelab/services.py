@@ -770,6 +770,79 @@ class Services:
              "oos_stability": ra.stability_summary(test_rows),
              "monte_carlo_oos": self._monte_carlo(pooled, mc_sims, mc_seed)})
 
+    def random_entry_control(self, src: Any, dataset_id: str, n_controls: int = 20, seed: int = 0,
+                             period: tuple | None = None) -> dict:
+        """Matched random-entry control for ONE fixed candidate (research/controls.py): the candidate
+        runs once through the normal path; each seeded realization re-uses the candidate's compiled
+        definition, costs, sizing and backtest config and randomizes only entry timing/direction
+        among the candidate's own causal entry opportunities, matched on signal count and direction
+        mix. Control results are returned, never stored as run records."""
+        from edgelab.analytics import research as ra
+        from edgelab.analytics.metrics import compute_metrics
+        from edgelab.engine.backtester import run_backtest
+        from edgelab.features.strategy_api import FeatureContext
+        from edgelab.research import controls as rc
+        from edgelab.research.validation import copy_frozen, freeze_definition, validation_id
+        from edgelab.strategy.compiler import compile_strategy
+        if not (isinstance(n_controls, int) and 1 <= n_controls <= 1000):
+            raise ValueError("n_controls must be an integer in 1..1000")
+        frozen, fh = freeze_definition(self._definition(src))
+        cell = self._run_cell(copy_frozen(frozen), dataset_id, False, period=period)
+        ds, cand, costs, res = cell["ds"], cell["strategy"], cell["costs"], cell["result"]
+        csig = cell["bound"].generate_signals(ds.bars)
+        n_sig = int((csig.direction != 0).sum())                          # after cooldown (reported)
+        n_pre, n_long_pre = rc.candidate_opportunities(cell["bound"], ds.bars)   # before cooldown (calibration)
+        if n_pre == 0:
+            raise ValueError("the candidate produced no entry signals on this data; nothing to match")
+        p_long = n_long_pre / n_pre
+        thr = self.cfg.get("sample_size")
+        ctx = FeatureContext(ds, self.sessions, self.cache)
+        seeds = rc.realization_seeds(seed, n_controls)
+        reals = []
+        for k, sd in enumerate(seeds):
+            ctrl = rc.RandomEntryControl(compile_strategy(copy_frozen(frozen), self.sessions,
+                                                          self._config_hash()).compiled, sd).bind(ctx)
+            eligible = ctrl.eligible_count(ds.bars)
+            ctrl.set_design(min(1.0, n_pre / eligible) if eligible else 0.0, p_long)
+            r = run_backtest(ds, ctrl, costs, self.cfg["backtest"], sizing=cand.sizing)
+            reals.append({"index": k, "seed": sd, "control_strategy_id": ctrl.strategy_id,
+                          "eligible_bars": eligible, "signal_rate": ctrl.control["signal_rate"],
+                          "pre_cooldown_signals": ctrl.pre_cooldown_fires(ds.bars), "signals": r.n_signals, "trades_hash": r.trades_hash,
+                          "causality_passed": None if r.causality is None else r.causality.passed,
+                          "cost_status": r.assumptions["cost_status"],
+                          **ra._pick(compute_metrics(r.trades, sample_thresholds=thr), ra.REPORT_METRICS)})
+        if freeze_definition(frozen)[1] != fh:
+            raise RuntimeError("frozen strategy definition changed during the control run")
+        cand_m = ra._pick(cell["metrics"], ra.REPORT_METRICS)
+        d, a = res.dataset, res.assumptions
+        config = {"method": rc.CONTROL_METHOD, "n_controls": n_controls, "base_seed": int(seed),
+                  "realization_seeds": seeds, "period": None if period is None else [str(x) for x in period],
+                  "matching": {"candidate_pre_cooldown_signals": n_pre, "candidate_signals": n_sig,
+                               "candidate_long_share": p_long,
+                               "rule": "each eligible bar fires with p = candidate valid entries before "
+                                       "cooldown / eligible bars; direction long with the candidate's "
+                                       "pre-cooldown long share; the same cooldown and engine rules then "
+                                       "apply, so post-cooldown signal and trade counts are not forced"}}
+        labels = ra.research_labels([{"assumptions": a, "dataset": d,
+                                      "notes": "SYNTHETIC" if cell["synthetic"] else ""}], load_instruments(self.cfg))
+        labels.append("Random-entry control: a conditional null (entry timing and direction randomized among "
+                      "the candidate's own eligible bars, calibrated to its entries before cooldown and their "
+                      "direction mix; the same cooldown then applies). It does not test exits, sizing, "
+                      "cooldown or costs, which are identical on both sides.")
+        return _jsonable({
+            "validation": "random_entry_control",
+            "validation_id": validation_id("random_entry_control", fh, d["dataset_id"], [config]),
+            "candidate": {"strategy_id": cand.strategy_id, "definition_hash": fh, "trades_hash": res.trades_hash,
+                          "pre_cooldown_signals": n_pre, "signals": n_sig, "metrics": cand_m},
+            "dataset": {k: d.get(k) for k in ("dataset_id", "parent_dataset_id", "provider", "instrument",
+                                              "timeframe", "start", "end")},
+            "cost_profile": a["costs"]["profile"], "cost_status": a["cost_status"],
+            "control_config": config, "labels": labels,
+            "comparison": rc.summarize(cand_m, reals),
+            "realizations": reals,
+            "stored_as_runs": False,
+        })
+
     def list_import_files(self, import_dirs: list[str]) -> list[dict]:
         out = []
         for d in import_dirs:

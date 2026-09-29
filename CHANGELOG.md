@@ -36,7 +36,9 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Research page UI, Monte Carlo, walk-forward/OOS, distributions, weekday/month breakdowns | NOT IMPLEMENTED (deferred) |
 | Real five-year EMA pipeline baseline analysed through the report | REQUIRES the local store (runs are local) |
 | Validation of fixed strategies (ADR-47): OOS split (`IN_SAMPLE` / `OUT_OF_SAMPLE` runs), rolling/anchored walk-forward (`WALK_FORWARD` runs), frozen definition checks, seeded bootstrap/shuffle Monte Carlo of observed trades; `Services.evaluate_oos`, `Services.walk_forward`, CLI `validate`; `research_report` gains `monte_carlo` | IMPLEMENTED, TESTED |
-| Randomized-entry control through research; walk-forward across several datasets; validation HTTP/UI | NOT IMPLEMENTED (deferred) |
+| Matched random-entry control (ADR-48): candidate's own eligibility/levels/cooldown/exits/sizing/costs, entry timing and direction randomized per bar (seeded, prefix-stable), calibrated to the candidate's pre-cooldown entry count and long share (method v2; v1 under-fired cooldown strategies); N realizations, candidate-vs-control distribution summary; `Services.random_entry_control`, CLI `validate control`; control results never stored as runs | IMPLEMENTED, TESTED |
+| **Phase 3 compiler refactor:** `signals_from_features` split into shared helpers, behaviour-preserving (8/8 fixtures identical) | IMPLEMENTED, TESTED |
+| Walk-forward across several datasets; validation HTTP/UI | NOT IMPLEMENTED (deferred) |
 
 ## HistData research cost baseline (after HistData import, before Phase 5)
 

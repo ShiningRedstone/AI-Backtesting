@@ -19,6 +19,7 @@
     python -m edgelab.cli research job SEARCH_SPEC_FILE     (background job; progress; Ctrl-C cancels)
     python -m edgelab.cli report RUN_ID [RUN_ID ...]       (Phase 5: descriptive report, one strategy)
     python -m edgelab.cli validate oos|walkforward STRATEGY DATASET_ID [--split DATE | --train-months N --test-months M]
+    python -m edgelab.cli validate control STRATEGY DATASET_ID [--controls N --seed S]   (random-entry control)
 
 Add --json to any command for machine-readable output.
 """
@@ -142,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run_ids", nargs="+", help="RUN_ ids (one fixed strategy, one run per dataset)")
 
     p = sub.add_parser("validate", help="fixed-strategy OOS split or walk-forward (+ seeded Monte Carlo)")
-    p.add_argument("kind", choices=("oos", "walkforward"))
+    p.add_argument("kind", choices=("oos", "walkforward", "control"))
     p.add_argument("strategy", help="strategy file or STR_ id (used unchanged, frozen)")
     p.add_argument("dataset_id")
     p.add_argument("--split", help="oos: first instant of the out-of-sample window (UTC if no offset)")
@@ -151,7 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--anchored", action="store_true", help="walkforward: train from the dataset start")
     p.add_argument("--record", action="store_true", help="store each window as a run record")
     p.add_argument("--sims", type=int, default=1000, help="Monte Carlo simulations (default 1000)")
-    p.add_argument("--seed", type=int, default=0, help="Monte Carlo seed (default 0)")
+    p.add_argument("--seed", type=int, default=0, help="Monte Carlo / control base seed (default 0)")
+    p.add_argument("--controls", type=int, default=20, help="control: random-entry realizations (default 20)")
 
     p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
     p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
@@ -217,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                     if not a.split:
                         raise ValueError("oos needs --split")
                     r = svc.evaluate_oos(a.strategy, a.dataset_id, a.split, a.record, a.sims, a.seed)
+                elif a.kind == "control":
+                    r = svc.random_entry_control(a.strategy, a.dataset_id, a.controls, a.seed)
                 else:
                     if not (a.train_months and a.test_months):
                         raise ValueError("walkforward needs --train-months and --test-months")

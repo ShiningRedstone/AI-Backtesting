@@ -261,17 +261,15 @@ class DSLStrategy(FeatureStrategy):
         return super().bind(context)
 
     def signals_from_features(self, bars: BarArrays, f: FeatureFrame) -> SignalSet:
-        c, n = self.compiled, len(bars)
-        ent, ex = c.logic["entry"], c.logic["exit"]
         ev = _Eval(bars, f)
-        sig = SignalSet.empty(n)
-        diag = {"bars": n}
-        allowed = np.ones(n, bool)
-        if ent.get("session"):
-            allowed &= f.get_output(_session_spec(ent["session"]), "in_session") == 1.0
-        if ent.get("trading_weekdays"):
-            wd = f.get_output(FeatureSpec.make(*TOD_SPEC_ARGS), "trading_weekday")
-            allowed &= np.isin(wd, [WEEKDAY_NAMES.index(d) for d in ent["trading_weekdays"]])
+        diag = {"bars": len(bars)}
+        return self._emit(bars, ev, self._entry_directions(bars, f, ev, diag), diag)
+
+    def _entry_directions(self, bars: BarArrays, f: FeatureFrame, ev: "_Eval", diag: dict) -> np.ndarray:
+        """The candidate's trigger stage: +1/-1/0 per bar (entry conditions, session/weekday, no
+        ambiguous both-way bars). Levels, validity and cooldown come after, in ``_emit``."""
+        ent, n = self.compiled.logic["entry"], len(bars)
+        allowed = self._entry_allowed(f, n)
         long_ = ev.true(ent["long"]) if ent["long"] is not None else np.zeros(n, bool)
         short = ev.true(ent["short"]) if ent["short"] is not None else np.zeros(n, bool)
         long_ &= allowed
@@ -280,10 +278,29 @@ class DSLStrategy(FeatureStrategy):
         diag.update(raw_long=int(long_.sum()), raw_short=int(short.sum()), ambiguous_both=int(both.sum()))
         long_ &= ~both
         short &= ~both
-        d = np.where(long_, 1, np.where(short, -1, 0)).astype(np.int8)
+        return np.where(long_, 1, np.where(short, -1, 0)).astype(np.int8)
+
+    # The pieces below are shared with the research random-entry control (research/controls.py):
+    # everything a candidate does at an entry EXCEPT deciding when/which way to enter.
+    def _entry_allowed(self, f: FeatureFrame, n: int) -> np.ndarray:
+        """Session / weekday eligibility of each bar (causal: session features at bar t)."""
+        ent = self.compiled.logic["entry"]
+        allowed = np.ones(n, bool)
+        if ent.get("session"):
+            allowed &= f.get_output(_session_spec(ent["session"]), "in_session") == 1.0
+        if ent.get("trading_weekdays"):
+            wd = f.get_output(FeatureSpec.make(*TOD_SPEC_ARGS), "trading_weekday")
+            allowed &= np.isin(wd, [WEEKDAY_NAMES.index(d) for d in ent["trading_weekdays"]])
+        return allowed
+
+    def _orders(self, bars: BarArrays, ev: "_Eval", d: np.ndarray, diag: dict):
+        """Entry reference, stop and target for direction array ``d`` (+1/-1/0) and which of those
+        entries are executable (finite reference, stop and target on the correct sides)."""
+        c, n = self.compiled, len(bars)
+        ent, ex = c.logic["entry"], c.logic["exit"]
+        long_, short = d == 1, d == -1
         dirf = d.astype(float)
         on = d != 0
-
         otype = ent["order"]["type"]
         if otype == "market":
             ref = np.asarray(bars.close, float)
@@ -293,12 +310,11 @@ class DSLStrategy(FeatureStrategy):
                 key = f"{side}_price"
                 if key in ent["order"]:
                     ref = np.where(mask, ev.operand(ent["order"][key]), ref)
-            sig.entry_price[:] = np.where(on, ref, np.nan)
 
         stop, tgt = ex["stop"], ex["target"]
         stop_px = np.full(n, np.nan)
         if stop["type"] == "atr":
-            atr = f.get_output(_atr_spec(stop), "atr")
+            atr = ev.f.get_output(_atr_spec(stop), "atr")
             stop_px = ref - dirf * stop["multiple"] * atr
         elif stop["type"] == "price":
             for side, mask in (("long", long_), ("short", short)):
@@ -306,7 +322,7 @@ class DSLStrategy(FeatureStrategy):
                     stop_px = np.where(mask, ev.operand(stop[side]), stop_px)
         tgt_px = np.full(n, np.nan)
         if tgt["type"] == "atr":
-            tgt_px = ref + dirf * tgt["multiple"] * f.get_output(_atr_spec(tgt), "atr")
+            tgt_px = ref + dirf * tgt["multiple"] * ev.f.get_output(_atr_spec(tgt), "atr")
         elif tgt["type"] == "price":
             for side, mask in (("long", long_), ("short", short)):
                 if side in tgt:
@@ -325,22 +341,36 @@ class DSLStrategy(FeatureStrategy):
                 good_tgt = np.isfinite(tgt_px) & (dirf * (tgt_px - ref) > 0)
                 diag["invalid_target"] = int((ok & ~good_tgt).sum())
                 ok &= good_tgt
-        cd = ent.get("cooldown_bars", 0)
-        if cd:
-            idx = np.flatnonzero(ok)
-            keep, last = [], -10**12
-            for i in idx:                         # causal: depends only on earlier kept signals
-                if i - last > cd:
-                    keep.append(i)
-                    last = i
-            kept = np.zeros(n, bool)
-            kept[np.asarray(keep, dtype=np.int64)] = True
-            diag["cooldown_suppressed"] = int(ok.sum() - kept.sum())
-            ok = kept
+        return ref, stop_px, tgt_px, ok
+
+    def _apply_cooldown(self, ok: np.ndarray, diag: dict) -> np.ndarray:
+        cd = self.compiled.logic["entry"].get("cooldown_bars", 0)
+        if not cd:
+            return ok
+        idx = np.flatnonzero(ok)
+        keep, last = [], -10**12
+        for i in idx:                         # causal: depends only on earlier kept signals
+            if i - last > cd:
+                keep.append(i)
+                last = i
+        kept = np.zeros(len(ok), bool)
+        kept[np.asarray(keep, dtype=np.int64)] = True
+        diag["cooldown_suppressed"] = int(ok.sum() - kept.sum())
+        return kept
+
+    def _emit(self, bars: BarArrays, ev: "_Eval", d: np.ndarray, diag: dict) -> SignalSet:
+        """Levels, validity, cooldown and signal exits for entry directions ``d`` -> SignalSet."""
+        n = len(bars)
+        ent, ex = self.compiled.logic["entry"], self.compiled.logic["exit"]
+        sig = SignalSet.empty(n)
+        ref, stop_px, tgt_px, ok = self._orders(bars, ev, d, diag)
+        if ent["order"]["type"] != "market":
+            sig.entry_price[:] = np.where(d != 0, ref, np.nan)
+        ok = self._apply_cooldown(ok, diag)
         sig.direction[:] = np.where(ok, d, 0)
         sig.stop_price[:] = np.where(ok, stop_px, np.nan)
         sig.target_price[:] = np.where(ok, tgt_px, np.nan)
-        if otype != "market":
+        if ent["order"]["type"] != "market":
             sig.entry_price[:] = np.where(ok, ref, np.nan)
         sx = ex.get("signal") or {}
         if sx:

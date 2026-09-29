@@ -170,6 +170,10 @@ edgelab/research/validation.py OOS split / walk-forward windows, frozen definiti
 edgelab/services.py            + evaluate_oos, walk_forward; research_report gains monte_carlo;
                                _run_cell/_record_cell pass a run status (default IN_SAMPLE)
 edgelab/cli.py                 + `validate oos|walkforward STRATEGY DATASET_ID ...`
+edgelab/research/controls.py   matched random-entry control (RandomEntryControl, summarize) (ADR-48)
+edgelab/strategy/compiler.py   signals_from_features split into _entry_allowed/_orders/_apply_cooldown/
+                               _emit (behaviour-preserving; shared with the control)
+edgelab/services.py            + random_entry_control; CLI `validate control`
 ```
 
 ## Decision records
@@ -655,6 +659,35 @@ edgelab/cli.py                 + `validate oos|walkforward STRATEGY DATASET_ID .
   strategy used by `scripts/phase1_demo.py`, with fixed-point stops, so it is not directly comparable
   to DSL strategies with feature-based stops); walk-forward across several stored datasets (windows are
   within one dataset; the HistData datasets are one per year); HTTP/UI for validation.
+
+### ADR-48 Matched random-entry control (conditional null) for DSL candidates (Phase 3 compiler refactored)
+- **Problem:** `RandomEntry` (Phase 1 demo) uses fixed-point stops and its own window, so it is not
+  comparable to a DSL candidate with feature-based stops, sessions, cooldowns and signal exits.
+- **Chosen:** `DSLStrategy.signals_from_features` was split, without behaviour change, into
+  `_entry_directions` (trigger stage), `_entry_allowed` (session/weekday), `_orders` (entry reference,
+  stop, target, validity for a given direction array), `_apply_cooldown` and `_emit`; all 8 fixtures
+  give identical signals, levels, exits, diagnostics and ids before and after. `research/controls.RandomEntryControl` re-uses the
+  candidate's compiled definition and replaces only the entry decision: per bar
+  `default_rng(seed).random((n, 2))` (prefix-stable), a bar fires if it is eligible for the drawn
+  direction and its draw is below p. Eligible = what the candidate could have entered at that bar's
+  close (its session, weekdays, executable reference/stop/target). Both sides then pass the SAME
+  stages: candidate trigger -> `_orders` -> `_apply_cooldown`; control random fire -> `_orders` ->
+  `_apply_cooldown`. Calibration is at the pre-cooldown stage on both sides and uses pre-entry
+  quantities only: p = candidate valid entries before cooldown / eligible bars (per realization), so
+  expected pre-cooldown control fires equal the candidate's; P(long) = long share of those entries.
+  (Method v1 calibrated to the candidate's post-cooldown count while applying cooldown after firing;
+  controls of cooldown strategies under-fired, about 11% on `mtf_trend_filter`. Fixed as v2.)
+  Post-cooldown signal counts and trade counts are reported, not forced: cooldown removes more of a
+  clustered candidate's signals than of uniformly spread random ones, and the engine's
+  one-position rule removes more again. Everything else is the candidate's: costs object, sizing,
+  backtest config, engine and its causality check (which each realization passes). N realizations
+  use `SeedSequence(seed).spawn(N)`. Control ids are `CTRL_...`; results are never stored as runs.
+- **Interpretation:** a conditional null, conditioned on the candidate's pre-cooldown entry frequency
+  and direction mix (whole-period design constants carrying no outcome information), not on trade
+  outcomes. "Fraction of controls exceeding the candidate" is a descriptive rank, not a p-value. It
+  does not test exits, sizing, cooldown or costs (identical on both sides); the candidate's
+  clustering in time is part of what differs, since control fires are spread uniformly over
+  eligible bars.
 
 ## Known limitations (Phase 1)
 
