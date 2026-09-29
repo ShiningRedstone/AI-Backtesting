@@ -578,9 +578,12 @@ scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worke
   record. Removing rows changes the content hash, hence the dataset id, so results on an excluded
   dataset cannot share an id with the unmodified source. `restrict_to_period` children keep the
   parent id (`restricted_from`) but do not copy the record.
-- **Shipped set:** `HISTDATA_NSXUSD_2019` only: 20 one-hour windows (17:00-18:00 EDT) located by the
-  local outside-session trace. No other year has a set: each needs its own trace. 2018's 131 sparse
-  outside-session bars stay a WARN and are not excluded.
+- **Shipped sets:** year-specific audited sets for 2019, 2020, 2021, 2022 and 2024
+  (`HISTDATA_NSXUSD_<YEAR>`: 20, 20, 15, 15 and 17 one-hour 17:00-18:00 EDT windows), one per
+  evening on which the local outside-session trace of the real file found bars; evenings without
+  such bars (e.g. 2024-10-28/29) have no window, and partial hours are not assumed complete. The
+  dates are measured evidence, not a vendor statement. 2023 has no set and stays coverage-rejected.
+  2018's 131 sparse outside-session bars stay a WARN and are not excluded.
 
 ## Known limitations (Phase 1)
 

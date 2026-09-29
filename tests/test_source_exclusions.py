@@ -141,14 +141,22 @@ class TestHistDataAnomalyGate(unittest.TestCase):
         v = CFG["validation"]                          # thresholds unchanged by ADR-44
         self.assertEqual((v["max_outside_session_ratio_fail"], v["max_missing_bar_ratio_warn"],
                           v["max_missing_bar_ratio_fail"]), (0.001, 0.001, 0.05))
-        s = parse_exclusion_set("HISTDATA_NSXUSD_2019", CFG["source_exclusions"]["HISTDATA_NSXUSD_2019"])
-        self.assertEqual(len(s), 20)
-        for w in s:                                    # one 17:00-18:00 NY window per evening, nothing broader
-            self.assertEqual(w["end_utc"] - w["start_utc"], pd.Timedelta(hours=1))
-            self.assertEqual(w["start_utc"].tz_convert(NY).strftime("%H:%M"), "17:00")
-            self.assertFalse(R2.in_session(pd.date_range(w["start_utc"], w["end_utc"], freq="1min",
-                                                         inclusive="left")).any())
-        self.assertEqual(set(CFG["source_exclusions"]), {"HISTDATA_NSXUSD_2019"})
+        expected = {2019: 20, 2020: 20, 2021: 15, 2022: 15, 2024: 17}   # one window per traced evening
+        self.assertEqual(set(CFG["source_exclusions"]), {f"HISTDATA_NSXUSD_{y}" for y in expected})
+        self.assertNotIn("HISTDATA_NSXUSD_2023", CFG["source_exclusions"])     # 2023 stays coverage-rejected
+        for year, n in expected.items():
+            s = parse_exclusion_set(f"HISTDATA_NSXUSD_{year}", CFG["source_exclusions"][f"HISTDATA_NSXUSD_{year}"])
+            self.assertEqual(len(s), n, year)
+            for w in s:                                # one 17:00-18:00 NY window per evening, nothing broader
+                self.assertEqual(w["end_utc"] - w["start_utc"], pd.Timedelta(hours=1))
+                self.assertEqual(w["start_utc"].tz_convert(NY).strftime("%Y %H:%M"), f"{year} 17:00")
+                self.assertTrue(w["start"].endswith("T17:00:00-04:00") and w["end"].endswith("T18:00:00-04:00"))
+                self.assertTrue(w["reason"])
+                self.assertFalse(R2.in_session(pd.date_range(w["start_utc"], w["end_utc"], freq="1min",
+                                                             inclusive="left")).any())
+        dates_2024 = {w["start"][:10] for w in CFG["source_exclusions"]["HISTDATA_NSXUSD_2024"]["windows"]}
+        self.assertTrue({"2024-10-27", "2024-10-30", "2024-10-31"} <= dates_2024)
+        self.assertFalse({"2024-10-28", "2024-10-29"} & dates_2024)            # traced: no anomaly those evenings
         self.assertEqual((INSTRUMENTS["NAS100_CFD"].tick_size, INSTRUMENTS["NAS100_CFD"].calendar), (0.01, "CME_EQUITY"))
         c = CALENDARS["CME_EQUITY"]
         self.assertEqual((c.session_open, c.session_close), ("18:00", "17:00"))

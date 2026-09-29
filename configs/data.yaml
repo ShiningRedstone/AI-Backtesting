@@ -90,3 +90,98 @@ source_exclusions:
       - {start: "2019-10-29T17:00:00-04:00", end: "2019-10-29T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
       - {start: "2019-10-30T17:00:00-04:00", end: "2019-10-30T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
       - {start: "2019-10-31T17:00:00-04:00", end: "2019-10-31T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
+  HISTDATA_NSXUSD_2020:
+    description: >-
+      HistData NSXUSD M1 2020 (read as America/New_York, calendar HISTDATA_NSX_R2): 1,106 extra
+      17:00-17:59 NY bars outside R2 on the evenings listed below; 2020-03-15 (17:01-17:21) and 2020-03-22 (17:00-17:08) are partial hours. Dates were derived from
+      the local outside-session trace of the real file (measured evidence, not a vendor statement).
+      One half-open 17:00-18:00 NY window per affected evening; a window may match fewer than 60 bars.
+    windows:
+      - {start: "2020-03-08T17:00:00-04:00", end: "2020-03-08T18:00:00-04:00", reason: &hd2020-spring "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (spring 2020)"}
+      - {start: "2020-03-09T17:00:00-04:00", end: "2020-03-09T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-10T17:00:00-04:00", end: "2020-03-10T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-11T17:00:00-04:00", end: "2020-03-11T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-12T17:00:00-04:00", end: "2020-03-12T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-15T17:00:00-04:00", end: "2020-03-15T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-16T17:00:00-04:00", end: "2020-03-16T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-17T17:00:00-04:00", end: "2020-03-17T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-18T17:00:00-04:00", end: "2020-03-18T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-19T17:00:00-04:00", end: "2020-03-19T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-22T17:00:00-04:00", end: "2020-03-22T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-23T17:00:00-04:00", end: "2020-03-23T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-24T17:00:00-04:00", end: "2020-03-24T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-25T17:00:00-04:00", end: "2020-03-25T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-03-26T17:00:00-04:00", end: "2020-03-26T18:00:00-04:00", reason: *hd2020-spring}
+      - {start: "2020-10-25T17:00:00-04:00", end: "2020-10-25T18:00:00-04:00", reason: &hd2020-autumn "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (autumn 2020)"}
+      - {start: "2020-10-26T17:00:00-04:00", end: "2020-10-26T18:00:00-04:00", reason: *hd2020-autumn}
+      - {start: "2020-10-27T17:00:00-04:00", end: "2020-10-27T18:00:00-04:00", reason: *hd2020-autumn}
+      - {start: "2020-10-28T17:00:00-04:00", end: "2020-10-28T18:00:00-04:00", reason: *hd2020-autumn}
+      - {start: "2020-10-29T17:00:00-04:00", end: "2020-10-29T18:00:00-04:00", reason: *hd2020-autumn}
+  HISTDATA_NSXUSD_2021:
+    description: >-
+      HistData NSXUSD M1 2021 (read as America/New_York, calendar HISTDATA_NSX_R2): 900 extra
+      17:00-17:59 NY bars outside R2 on the evenings listed below; every affected evening is a full 17:00-17:59 block. Dates were derived from
+      the local outside-session trace of the real file (measured evidence, not a vendor statement).
+      One half-open 17:00-18:00 NY window per affected evening; a window may match fewer than 60 bars.
+    windows:
+      - {start: "2021-03-14T17:00:00-04:00", end: "2021-03-14T18:00:00-04:00", reason: &hd2021-spring "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (spring 2021)"}
+      - {start: "2021-03-15T17:00:00-04:00", end: "2021-03-15T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-16T17:00:00-04:00", end: "2021-03-16T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-17T17:00:00-04:00", end: "2021-03-17T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-18T17:00:00-04:00", end: "2021-03-18T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-21T17:00:00-04:00", end: "2021-03-21T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-22T17:00:00-04:00", end: "2021-03-22T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-23T17:00:00-04:00", end: "2021-03-23T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-24T17:00:00-04:00", end: "2021-03-24T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-03-25T17:00:00-04:00", end: "2021-03-25T18:00:00-04:00", reason: *hd2021-spring}
+      - {start: "2021-10-31T17:00:00-04:00", end: "2021-10-31T18:00:00-04:00", reason: &hd2021-autumn "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (autumn 2021)"}
+      - {start: "2021-11-01T17:00:00-04:00", end: "2021-11-01T18:00:00-04:00", reason: *hd2021-autumn}
+      - {start: "2021-11-02T17:00:00-04:00", end: "2021-11-02T18:00:00-04:00", reason: *hd2021-autumn}
+      - {start: "2021-11-03T17:00:00-04:00", end: "2021-11-03T18:00:00-04:00", reason: *hd2021-autumn}
+      - {start: "2021-11-04T17:00:00-04:00", end: "2021-11-04T18:00:00-04:00", reason: *hd2021-autumn}
+  HISTDATA_NSXUSD_2022:
+    description: >-
+      HistData NSXUSD M1 2022 (read as America/New_York, calendar HISTDATA_NSX_R2): 900 extra
+      17:00-17:59 NY bars outside R2 on the evenings listed below; every affected evening is a full 17:00-17:59 block. Dates were derived from
+      the local outside-session trace of the real file (measured evidence, not a vendor statement).
+      One half-open 17:00-18:00 NY window per affected evening; a window may match fewer than 60 bars.
+    windows:
+      - {start: "2022-03-13T17:00:00-04:00", end: "2022-03-13T18:00:00-04:00", reason: &hd2022-spring "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (spring 2022)"}
+      - {start: "2022-03-14T17:00:00-04:00", end: "2022-03-14T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-15T17:00:00-04:00", end: "2022-03-15T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-16T17:00:00-04:00", end: "2022-03-16T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-17T17:00:00-04:00", end: "2022-03-17T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-20T17:00:00-04:00", end: "2022-03-20T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-21T17:00:00-04:00", end: "2022-03-21T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-22T17:00:00-04:00", end: "2022-03-22T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-23T17:00:00-04:00", end: "2022-03-23T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-03-24T17:00:00-04:00", end: "2022-03-24T18:00:00-04:00", reason: *hd2022-spring}
+      - {start: "2022-10-30T17:00:00-04:00", end: "2022-10-30T18:00:00-04:00", reason: &hd2022-autumn "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (autumn 2022)"}
+      - {start: "2022-10-31T17:00:00-04:00", end: "2022-10-31T18:00:00-04:00", reason: *hd2022-autumn}
+      - {start: "2022-11-01T17:00:00-04:00", end: "2022-11-01T18:00:00-04:00", reason: *hd2022-autumn}
+      - {start: "2022-11-02T17:00:00-04:00", end: "2022-11-02T18:00:00-04:00", reason: *hd2022-autumn}
+      - {start: "2022-11-03T17:00:00-04:00", end: "2022-11-03T18:00:00-04:00", reason: *hd2022-autumn}
+  HISTDATA_NSXUSD_2024:
+    description: >-
+      HistData NSXUSD M1 2024 (read as America/New_York, calendar HISTDATA_NSX_R2): 898 extra
+      17:00-17:59 NY bars outside R2 on the evenings listed below; many evenings are partial hours; 2024-10-28 and 2024-10-29 carry no outside-session bars and have no window. Dates were derived from
+      the local outside-session trace of the real file (measured evidence, not a vendor statement).
+      One half-open 17:00-18:00 NY window per affected evening; a window may match fewer than 60 bars.
+    windows:
+      - {start: "2024-03-10T17:00:00-04:00", end: "2024-03-10T18:00:00-04:00", reason: &hd2024-spring "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (spring 2024)"}
+      - {start: "2024-03-11T17:00:00-04:00", end: "2024-03-11T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-12T17:00:00-04:00", end: "2024-03-12T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-13T17:00:00-04:00", end: "2024-03-13T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-14T17:00:00-04:00", end: "2024-03-14T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-17T17:00:00-04:00", end: "2024-03-17T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-18T17:00:00-04:00", end: "2024-03-18T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-19T17:00:00-04:00", end: "2024-03-19T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-20T17:00:00-04:00", end: "2024-03-20T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-21T17:00:00-04:00", end: "2024-03-21T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-24T17:00:00-04:00", end: "2024-03-24T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-25T17:00:00-04:00", end: "2024-03-25T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-26T17:00:00-04:00", end: "2024-03-26T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-03-27T17:00:00-04:00", end: "2024-03-27T18:00:00-04:00", reason: *hd2024-spring}
+      - {start: "2024-10-27T17:00:00-04:00", end: "2024-10-27T18:00:00-04:00", reason: &hd2024-autumn "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); measured in the local trace (autumn 2024)"}
+      - {start: "2024-10-30T17:00:00-04:00", end: "2024-10-30T18:00:00-04:00", reason: *hd2024-autumn}
+      - {start: "2024-10-31T17:00:00-04:00", end: "2024-10-31T18:00:00-04:00", reason: *hd2024-autumn}

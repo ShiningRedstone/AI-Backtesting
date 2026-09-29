@@ -157,8 +157,10 @@ it is a research proxy, not a tradable contract, and its costs ship unconfigured
 - **Known source anomaly:** on Sun-Thu evenings of the weeks when US and EU DST differ (2019:
   03-10..03-28 and 10-27..10-31) the file carries extra 17:00-17:59 NY bars. They fail
   `bars_outside_session` (about 600-1,200 bars a year), so 2019-2024 are refused unless an audited
-  exclusion set is named. Only 2019 has a set (`HISTDATA_NSXUSD_2019`); other years need their own
-  trace first. Thresholds are not relaxed.
+  exclusion set is named. 2019, 2020, 2021, 2022 and 2024 have year-specific audited sets
+  (`--source-exclusions HISTDATA_NSXUSD_<YEAR>`), one 17:00-18:00 NY window per evening on which
+  the local trace of the real file found such bars (measured evidence, not a vendor statement).
+  2023 has no set and remains coverage-rejected. Thresholds are not relaxed.
 - **Coverage:** 2017 (7.6% missing under R1) and 2023 (13.6% under R2) are rejected as full-year
   datasets. 2018 is expected to import with WARNs (2.9% missing, measured locally with an
   equivalent in-memory calendar). No holidays are listed; they count as missing days.
