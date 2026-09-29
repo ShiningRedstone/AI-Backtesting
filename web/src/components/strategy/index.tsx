@@ -316,6 +316,15 @@ export function VariationBuilder({ baseId, base }: { baseId: string; base: Strat
             ["Maximum allowed", fmt(preview.max_variants)], ["Mode", preview.mode ?? mode],
             ...(preview.full_grid !== undefined && preview.full_grid !== preview.combinations ? [["Full grid", fmt(preview.full_grid)] as [string, string]] : [])]} />
           <IssueList issues={[...preview.errors, ...(preview.warnings ?? [])]} testId="variation-issues" />
+          {preview.combinations_list && preview.combinations_list.length > 0 && (
+            <details open={preview.combinations_list.length <= 30} data-testid="var-combos">
+              <summary>Exact combinations to generate ({preview.combinations_list.length})</summary>
+              <TableWrap><table><thead><tr><th>#</th>{Object.keys(preview.values ?? {}).map((p) => <th key={p}>{p}</th>)}</tr></thead>
+                <tbody>{preview.combinations_list.map((c, i) => (
+                  <tr key={i}><td>{i + 1}</td>{Object.keys(preview.values ?? {}).map((p) => <td key={p} className="mono">{p in c ? fmt(c[p]) : <span className="muted">base</span>}</td>)}</tr>))}
+                </tbody></table></TableWrap>
+              <p className="muted small">Combinations identical to the base or to each other in logic are removed by the backend after compiling.</p>
+            </details>)}
         </>}
         <Button kind="primary" onClick={generate} busy={generating} testId="generate"
           busyLabel={`Generating ${preview?.combinations ?? ""} variations…`}
@@ -324,6 +333,9 @@ export function VariationBuilder({ baseId, base }: { baseId: string; base: Strat
           Generate Variations</Button>
       </div>
       <ErrorPanel error={genErr} title="Variation generation failed" testId="variation-error" />
+      {result && <Banner tone="ok" testId="var-next">Batch <Mono>{result.batch_id}</Mono> saved. Next:{" "}
+        <a href={href(`/strategies/${baseId}?tab=research&batch=${result.batch_id}`)} data-testid="var-run-batch">run it on datasets</a>
+        {" "}(Research tab), then compare the results.</Banner>}
       {result && <VariationResults result={{
         batch_id: result.batch_id, base_strategy_id: result.base_strategy_id, combinations: result.combinations,
         generated: result.generated, duplicates: result.duplicates, same_as_base: result.same_as_base_combinations,

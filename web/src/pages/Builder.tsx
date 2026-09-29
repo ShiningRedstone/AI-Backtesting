@@ -197,6 +197,8 @@ export function BuilderPage() {
             <KeyValues rows={[
               ["Strategy ID", <a href={href(`/strategies/${saveResult.strategy_id}`)}><Mono>{saveResult.strategy_id}</Mono></a>],
               ["Logic hash", <Mono>{saveResult.logic_hash}</Mono>], ["Definition hash", <Mono>{saveResult.definition_hash}</Mono>]]} />
+            <p><a href={href(`/strategies/${saveResult.strategy_id}?tab=research`)} data-testid="open-in-lab">Open this version in the Strategy Lab</a>
+              {" · "}<a href={href(`/strategies/${saveResult.strategy_id}?tab=backtest`)} data-testid="goto-backtest">Backtest it</a></p>
           </Banner>
         )}
 

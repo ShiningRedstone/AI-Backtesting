@@ -1,8 +1,9 @@
 import type { BatchDetail, BatchRow, FamilyDetail, RunDetail, RunRow } from "../api/types";
-import { href, useRoute } from "../app/router";
+import { go, href, useRoute } from "../app/router";
 import { useApi } from "../app/context";
 import { LineageTable, LineageTree, MetricsView, SYNTHETIC_NOTICE, VariationResults } from "../components/strategy";
-import { Badge, Banner, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, TableWrap, fmt, shortTime } from "../components/ui";
+import { EquityChart, SCOPE, ScopeBadge } from "../components/strategy/lab";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, TableWrap, fmt, shortTime } from "../components/ui";
 
 // =========================================================================== families
 export function FamiliesPage() {
@@ -93,6 +94,35 @@ function BatchPage({ id }: { id: string }) {
   );
 }
 
+// =========================================================================== run analytics
+function RunAnalytics({ runId }: { runId: string }) {
+  type Rows = { rows: Record<string, unknown>[]; note?: string; timezone?: string; breakeven_cost_multiplier?: number | null };
+  const { data, error } = useApi<{ labels: string[]; sessions: Rows; hours: Rows; cost_sensitivity: Rows }>(`/api/results/report?run_ids=${runId}`, [runId]);
+  if (error) return <ErrorPanel error={error} title="Analytics unavailable" />;
+  if (!data) return <Loading label="Computing analytics…" />;
+  const cells = (x: Record<string, unknown>) => ["trade_count", "net_r", "expectancy_r", "profit_factor", "win_rate"].map((k) =>
+    <td key={k} className="mono">{typeof x[k] === "number" ? (x[k] as number).toFixed(k === "trade_count" ? 0 : 3) : fmt(x[k])}</td>);
+  const table = (title: string, rows: Rows, first: (x: Record<string, unknown>) => string, testId: string) => (
+    <div><h4>{title}</h4><TableWrap testId={testId}><table>
+      <thead><tr><th /><th>Trades</th><th>Net R</th><th>Expectancy R</th><th>PF</th><th>Win rate</th></tr></thead>
+      <tbody>{rows.rows.map((x, i) => <tr key={i}><td>{first(x)}</td>{cells(x)}</tr>)}</tbody></table></TableWrap>
+      {rows.note && <p className="muted small">{rows.note}</p>}</div>);
+  const be = data.cost_sensitivity.breakeven_cost_multiplier;
+  return (
+    <Card title="Breakdowns (Phase 5 analytics of this run)" testId="run-analytics">
+      {data.labels.map((l) => <p key={l} className="muted small">{l}</p>)}
+      <div className="grid-cards">
+        {table("Sessions", data.sessions, (x) => `${fmt(x.session)} ${fmt(x.window)}`, "run-sessions")}
+        {table(`Entry hour (${data.hours.timezone ?? ""})`, data.hours, (x) => fmt(x.bucket), "run-hours")}
+        <div>{table("Cost sensitivity (× stated costs)", { ...data.cost_sensitivity,
+          rows: data.cost_sensitivity.rows.map((x) => ({ ...x, trade_count: x.trades })) }, (x) => `${fmt(x.cost_multiplier)}×`, "run-costs")}
+          <p className="small">Breakeven cost multiple: <b>{typeof be === "number" ? be.toFixed(3) : "—"}</b>
+            {typeof be === "number" && be <= 0 ? " (gross R is not positive: no cost level makes it profitable)" : ""}</p></div>
+      </div>
+    </Card>
+  );
+}
+
 // =========================================================================== results
 export function ResultsPage() {
   const route = useRoute();
@@ -135,7 +165,14 @@ function RunPage({ id }: { id: string }) {
   const cols = data.trades.length ? Object.keys(data.trades[0]).filter((c) => c !== "run_id") : [];
   return (
     <div className="page">
-      <header className="page-head"><h1>Run <Mono>{id}</Mono></h1></header>
+      <header className="page-head"><div><h1>Run <Mono>{id}</Mono></h1>
+        <div className="subtitle"><ScopeBadge status={r.status} /> {SCOPE[r.status]?.note}</div></div>
+        <div className="actions">
+          <Button small onClick={() => go(`/strategies/${r.strategy?.strategy_id}?tab=research`)}>Open strategy in Lab</Button>
+          <Button small onClick={() => go(`/compare?source=lineage&id=${r.strategy?.strategy_id}`)}>Compare lineage</Button>
+          <Button small onClick={() => go(`/strategies/${r.strategy?.strategy_id}?tab=validate&dataset=${r.dataset?.parent_dataset_id ?? r.dataset?.dataset_id}`)}>Validate</Button>
+          <Button small onClick={() => go(`/prop?run=${id}`)} testId="run-prop">Prop simulation</Button>
+        </div></header>
       {data.synthetic && <Banner tone="demo" testId="synthetic-banner"><b>{SYNTHETIC_NOTICE}</b></Banner>}
       <Card title="Record">
         <KeyValues rows={[["Status", <Badge>{r.status}</Badge>], ["Strategy", <Mono>{r.strategy?.strategy_id}</Mono>],
@@ -145,6 +182,8 @@ function RunPage({ id }: { id: string }) {
           ["Config hash", <Mono>{String(r.config_hash).slice(0, 12)}</Mono>], ["Notes", r.notes], ["Disclaimer", r.disclaimer]]} />
       </Card>
       <Card title="Headline metrics"><MetricsView metrics={r.headline_metrics ?? {}} /></Card>
+      <Card title="Equity and drawdown (net R)"><EquityChart runId={id} /></Card>
+      <RunAnalytics runId={id} />
       <Card title="Assumptions"><pre className="code">{JSON.stringify(r.assumptions, null, 2)}</pre></Card>
       <Card title={`Trades (${data.trades_shown} of ${data.n_trades})`}>
         {data.trades.length ? <TableWrap><table>

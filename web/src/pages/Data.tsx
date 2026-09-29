@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { DatasetRow } from "../api/types";
-import { useRoute } from "../app/router";
+import type { DatasetRow, ProposalReport } from "../api/types";
+import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt } from "../components/ui";
@@ -133,19 +133,51 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 
 // =========================================================================== placeholders
 export function DiscoveryPage() {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState<"" | "check" | "save">("");
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [rep, setRep] = useState<ProposalReport | null>(null);
+  const [menu, setMenu] = useState<unknown>(null);
+  const ingest = async (save: boolean) => {
+    setBusy(save ? "save" : "check"); setErr(null);
+    try { setRep(await api.post<ProposalReport>("/api/proposals/ingest", { batch: text, save })); }
+    catch (e) { setErr(e as ApiError); setRep(null); } finally { setBusy(""); }
+  };
   return (
     <div className="page" data-testid="discovery-page">
-      <header className="page-head"><h1>AI Strategy Discovery</h1><Badge tone="info">planned · later phase</Badge></header>
-      <Banner tone="info">Coming in a later phase. No AI model is connected, and none is called anywhere in EdgeLab.</Banner>
-      <Card title="How AI proposals will be handled">
+      <header className="page-head"><h1>AI Strategy Proposals</h1><Badge tone="info">gate ready · no model connected</Badge></header>
+      <Banner tone="info">No AI model is connected, and none is called anywhere in EdgeLab. This page is the entry gate a future
+        proposer will use: a proposal is <b>data</b> (a machine-readable batch), never code, and it cannot run backtests, touch datasets or
+        claim performance.</Banner>
+      <Card title="How a proposal becomes research">
         <div className="flow">
-          <div className="flow-step">AI proposal<span>data only</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step done">DSL validation<span>exists (Phase 3)</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step done">Compiler<span>exists (Phase 3)</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step">Numerical backtest<span>engine measures; AI never judges</span></div>
+          <div className="flow-step">Proposal batch<span>data only</span></div><div className="flow-arrow">→</div>
+          <div className="flow-step done">Gate<span>strict schema, claim language refused</span></div><div className="flow-arrow">→</div>
+          <div className="flow-step done">DSL validation + compiler<span>same as the builder</span></div><div className="flow-arrow">→</div>
+          <div className="flow-step done">Strategy ID / hash<span>library + lineage (mode_b_proposal)</span></div><div className="flow-arrow">→</div>
+          <div className="flow-step done">Backtest · validation<span>you start them in the Strategy Lab</span></div>
         </div>
-        <p className="muted small">The Phase 3 Mode B gate already rejects proposals that carry performance fields or claim language
-          (CLI: <code>python -m edgelab.cli strategy proposals FILE</code>).</p>
+      </Card>
+      <Card title="Import a proposal batch (YAML or JSON)">
+        <textarea className="input mono" rows={14} value={text} data-testid="proposal-text" placeholder="proposal_batch_version: 1&#10;proposals: …"
+          onChange={(e: { target: HTMLTextAreaElement }) => setText(e.target.value)} />
+        <div className="actions">
+          <Button onClick={() => ingest(false)} busy={busy === "check"} busyLabel="Checking…" disabled={!text.trim()} testId="proposal-check">Check (nothing saved)</Button>
+          <Button kind="primary" onClick={() => ingest(true)} busy={busy === "save"} busyLabel="Saving…" disabled={!rep || rep.saved || !rep.n_accepted}
+            testId="proposal-save">Save accepted proposals as strategies</Button>
+          <Button onClick={() => api.get("/api/proposals/menu?n=20").then(setMenu).catch(setErr)}>Show capability menu</Button>
+        </div>
+        <ErrorPanel error={err} title="The batch was refused" testId="proposal-error" />
+        {rep && <div data-testid="proposal-report">
+          <KeyValues rows={[["Batch", <Mono>{rep.batch_id}</Mono>], ["Accepted", String(rep.n_accepted)], ["Rejected", String(rep.n_rejected)],
+            ["Saved", rep.saved ? "yes — accepted proposals are now library strategies" : "no (check only)"]]} />
+          {rep.accepted.length > 0 && <TableWrap><table><thead><tr><th>Accepted</th><th>Strategy ID</th><th /></tr></thead>
+            <tbody>{rep.accepted.map((a) => <tr key={a.strategy_id}><td>{String(a.name ?? a.family_id ?? "")}</td><td><Mono>{a.strategy_id}</Mono></td>
+              <td>{rep.saved && <a href={href(`/strategies/${a.strategy_id}?tab=research`)}>Open in Strategy Lab</a>}</td></tr>)}</tbody></table></TableWrap>}
+          {rep.rejected.length > 0 && <details open><summary>{rep.rejected.length} rejected (with reasons)</summary>
+            <pre className="code">{JSON.stringify(rep.rejected, null, 2)}</pre></details>}
+        </div>}
+        {menu !== null && <details open><summary>Capability menu (what a proposer may use)</summary><pre className="code">{JSON.stringify(menu, null, 2)}</pre></details>}
       </Card>
     </div>
   );

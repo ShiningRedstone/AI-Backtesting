@@ -297,3 +297,10 @@ tr.differs td { background: var(--warn-weak); }
   .filters input { min-width: 0; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* Strategy Lab (Phase 8) */
+table.steps { width: 100%; border-collapse: collapse; }
+table.steps td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.steps td:first-child { width: 2em; text-align: center; }
+.equity { margin: 0; }
+.equity svg { display: block; max-width: 100%; height: auto; background: var(--surface); }

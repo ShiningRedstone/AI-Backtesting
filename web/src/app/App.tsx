@@ -11,18 +11,20 @@ import { FamiliesPage, ResultsPage, VariationsPage } from "../pages/Research";
 import { DatasetsPage, DiscoveryPage, SettingsPage } from "../pages/Data";
 import { ResearchPage } from "../pages/ResearchEngine";
 import { PropPage } from "../pages/Prop";
+import { ComparePage } from "../pages/Compare";
 
 const NAV: { path: string; label: string; match: string; planned?: boolean }[] = [
   { path: "/", label: "Dashboard", match: "" },
-  { path: "/strategies", label: "Strategies", match: "strategies" },
+  { path: "/strategies", label: "Strategy Lab", match: "strategies" },
   { path: "/builder", label: "Strategy Builder", match: "builder" },
   { path: "/families", label: "Families", match: "families" },
   { path: "/variations", label: "Variations", match: "variations" },
   { path: "/datasets", label: "Datasets", match: "datasets" },
   { path: "/research", label: "Research", match: "research" },
   { path: "/results", label: "Results", match: "results" },
+  { path: "/compare", label: "Compare", match: "compare" },
   { path: "/prop", label: "Prop Simulation", match: "prop" },
-  { path: "/discovery", label: "AI Discovery", match: "discovery", planned: true },
+  { path: "/discovery", label: "AI Proposals", match: "discovery" },
   { path: "/settings", label: "Settings", match: "settings" },
 ];
 
@@ -92,6 +94,7 @@ function Page() {
     case "research": return <ResearchPage />;
     case "results": return <ResultsPage />;
     case "prop": return <PropPage />;
+    case "compare": return <ComparePage />;
     case "discovery": return <DiscoveryPage />;
     case "settings": return <SettingsPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to the dashboard</a></p></div>;

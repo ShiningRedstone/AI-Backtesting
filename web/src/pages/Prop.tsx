@@ -22,7 +22,8 @@ function PropWorkspace() {
   const runs = useApi<RunRow[]>("/api/results");
   const cfgs = useApi<PropConfigRow[]>("/api/prop/configs");
   const sims = useApi<PropSimRow[]>("/api/prop/simulations");
-  const [runId, setRunId] = useState("");
+  const route = useRoute();
+  const [runId, setRunId] = useState(route.query.get("run") ?? "");
   const [accounts, setAccounts] = useState<AccountDraft[]>([{ account_id: "A1", config: "", start: "" }]);
   const [custom, setCustom] = useState("");
   const [busy, setBusy] = useState(false);

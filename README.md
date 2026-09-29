@@ -251,3 +251,16 @@ Double-click `dist\EdgeLab\EdgeLab.exe`. It starts the local server on 127.0.0.1
 opens the UI in your browser. Keep its window open while you work; close it to stop EdgeLab. Run from
 source with `python -m edgelab.desktop`. Details, the data layout and the migration path for existing
 repository data are in DESKTOP_PACKAGING.md.
+
+## Strategy Lab in one screen (Phase 8)
+
+Open EdgeLab (the desktop app or `python -m edgelab.web`), then go to **Strategy Lab**:
+
+- pick or create a strategy, then duplicate or edit it and save a new version (DSL = source of truth, lineage kept);
+- choose an eligible dataset and backtest;
+- generate controlled variations (the exact combinations are shown first);
+- run the batch on datasets, then **Compare** (unranked metrics, scope visible);
+- **Validate** a selection (OOS, walk-forward, random-entry control);
+- run a **Prop Simulation** on the stored run.
+
+**AI Proposals** is the Mode B gate for machine-readable proposal batches; no model is connected. See WEB_UI.md.

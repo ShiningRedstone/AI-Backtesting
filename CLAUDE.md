@@ -17,7 +17,8 @@ strategies as aggressively as it discovers them. The final product is a unified 
 matched random-entry control (`research/controls.py`), and the prop-account simulation layer
 (`edgelab/prop/`, requested as "Phase 6"; roadmap row 7, evaluation rules only; see PROP_SIMULATION.md,
 ADR-49), and desktop packaging hardening ("Phase 7": `edgelab/runtime.py`, `edgelab/desktop.py`,
-`packaging/`, `build_windows.ps1`; ADR-50, DESKTOP_PACKAGING.md; `EdgeLab.exe` must be built on Windows).
+`packaging/`, `build_windows.ps1`; ADR-50, DESKTOP_PACKAGING.md; `EdgeLab.exe` must be built on Windows), and the
+Strategy Lab ("Phase 8": `research/lab.py`, Research/Validate tabs, Compare page, AI Proposals gate page; ADR-51).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

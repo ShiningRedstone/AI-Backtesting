@@ -794,6 +794,33 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-51 Strategy Lab: read models over stored research, thin validation/proposal routes (Phase 8)
+- **Problem:** the backend could already version strategies, generate variations, run searches, OOS / walk-forward
+  / random controls and prop simulations, but the GUI reached only part of it. Comparison and provenance
+  existed only as scattered records.
+- **Chosen:** `research/lab.py` holds read models only, and adds no research logic:
+  - `strategy_research`: machine-readable strategy provenance (id, definition/logic hash, parent id and
+    parent definition hash, method, batch spec, parameters, stored runs with scope, validation state
+    `validated: false`);
+  - `compare_runs`: stored runs from exactly one source (lineage / version / batch / search / run ids), with
+    stored headline metrics, `breakeven_cost_multiplier`, scope label and cost profile/status;
+    **unranked**, with no score;
+  - `run_curve`: cumulative net R and drawdown from stored trades;
+  - `oos_control`: the unchanged `random_entry_control` on the `oos_windows` OOS window, labelled
+    OUT_OF_SAMPLE, the convention of `run_oos_random_controls_5y.py`.
+- **HTTP:** thin routes for these, for the existing `evaluate_oos` / `walk_forward` / `random_entry_control`
+  (synchronous, inputs bounded) and for the existing Mode B gate (`ingest_proposals`, `proposal_menu`).
+- **Variation preview:** now lists the exact combinations via the generator's own `_combos`, so what is
+  previewed is exactly what generation enumerates.
+- **Frontend:** the React app gains the Research hub and Validate tabs, the Compare page, run curves and
+  breakdowns, the AI Proposals gate page and dataset pickers that cannot select ineligible datasets.
+- **Rejected:**
+  - a composite score or "best" ranking (it would imply a verdict the engine does not make);
+  - a UI-side strategy model (the DSL document stays the source of truth);
+  - running validations as background jobs (the Phase 4 job manager is search-specific, so this
+    is deferred and documented).
+- **Unchanged:** the research methodology, the control method, the engine, the DSL and stored datasets.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and
@@ -910,3 +937,31 @@ packaging/requirements-build.txt, build_windows.ps1
   no installer or updates; imports only from `<workspace>/data/import`.
 - The CLI pass-through does not take the desktop instance lock.
 - Existing repository data is not migrated (documented manual paths only).
+
+## Module map (Phase 8 additions: Strategy Lab)
+
+```
+edgelab/research/lab.py        strategy_research (AI-ready provenance), compare_runs (unranked), run_curve,
+                               oos_control (unchanged control on the OOS window) (ADR-51)
+edgelab/services.py            + strategy_research, compare_runs, run_curve, oos_random_control;
+                               variation_preview lists the exact combinations (<= 500)
+edgelab/web/app.py             + /api/strategies/<id>/research, /api/compare, /api/results/<id>/curve,
+                               /api/validation/{oos,walkforward,control}, /api/proposals/{menu,ingest}
+web/src/components/strategy/lab.tsx   ScopeBadge, EquityChart, DatasetPicker, ProvenanceCard, RunsTable,
+                               BatchResearch, ValidationPanel, CompareTable
+web/src/pages/Compare.tsx      Compare page; Strategies.tsx Research hub + Validate tabs; Research.tsx run
+                               curve/breakdowns; Data.tsx AI Proposals gate page
+lab_smoke_real.py              local GUI-path smoke test on a real stored dataset
+```
+
+## Known limitations (Phase 8 Strategy Lab)
+
+- Backtests, OOS, walk-forward and controls run synchronously in the request, holding the service lock, so the
+  UI waits and other calls queue. Only batch searches are background jobs.
+- Date-range restriction exists only through validation windows (OOS split, walk-forward), not for single
+  backtests.
+- Comparison is capped at 500 runs per view. The equity curve is thinned above 5,000 trades for display only.
+- Declared parameter grids are strict: a value off `min + k*step` is refused until the step is changed (for
+  example `ema_crossover` `slow` 15 + 3k: 20 needs step 1). That is a real, hashed rule change.
+- Random-control results are shown, never stored (unchanged). Re-running one needs the same seed.
+- No external model is connected; AI Proposals accepts machine-readable batches only.

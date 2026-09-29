@@ -384,6 +384,99 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def result(rid):
         return jsonify(call(svc.get_run, _id(rid, RUN_ID, "run id")))
 
+    # ------------------------------------------------------------------ strategy lab (Phase 8)
+    @app.get("/api/strategies/<sid>/research")
+    def strategy_research(sid):
+        return jsonify(call(svc.strategy_research, _id(sid, STRATEGY_ID, "strategy id")))
+
+    @app.get("/api/compare")
+    def compare():
+        """?source=runs|strategy|lineage|batch|search&id=... (runs: comma-separated RUN_ ids)."""
+        src, ident = request.args.get("source", ""), (request.args.get("id") or "").strip()
+        if not ident:
+            raise _bad("id is required")
+        if src == "runs":
+            ids = [_id(x.strip(), RUN_ID, "run id") for x in ident.split(",") if x.strip()]
+            return jsonify(call(svc.compare_runs, run_ids=ids))
+        pattern = {"strategy": STRATEGY_ID, "lineage": STRATEGY_ID, "batch": BATCH_ID, "search": SEARCH_ID}.get(src)
+        if pattern is None:
+            raise _bad("source must be runs, strategy, lineage, batch or search")
+        key = {"strategy": "strategy_id", "lineage": "lineage_of", "batch": "batch_id", "search": "search_id"}[src]
+        return jsonify(call(svc.compare_runs, **{key: _id(ident, pattern, f"{src} id")}))
+
+    @app.get("/api/results/<rid>/curve")
+    def result_curve(rid):
+        return jsonify(call(svc.run_curve, _id(rid, RUN_ID, "run id")))
+
+    def _int(b: dict, key: str, default: int, lo: int, hi: int) -> int:
+        v = b.get(key, default)
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise _bad(f"{key} must be an integer in {lo}..{hi}")
+        return v
+
+    def _validation_target(b: dict) -> tuple:
+        strategy = strategy_source(b.get("strategy"))
+        if not (isinstance(strategy, dict) or (isinstance(strategy, str) and STRATEGY_ID.match(strategy))):
+            raise _bad("strategy must be a stored strategy id or a definition object")
+        return strategy, _id(b.get("dataset_id"), SAFE_ID, "dataset id")
+
+    def _date(b: dict, key: str) -> str:
+        v = b.get(key)
+        if not isinstance(v, str) or not re.match(r"^\d{4}-\d{2}-\d{2}([ T][0-9:.+Z-]*)?$", v):
+            raise _bad(f"{key} must be an ISO date (YYYY-MM-DD)")
+        return v
+
+    @app.post("/api/validation/oos")
+    def validation_oos():
+        b = body()
+        strategy, did = _validation_target(b)
+        return jsonify(call(svc.evaluate_oos, strategy, did, _date(b, "split_at"), bool(b.get("record", True)),
+                            _int(b, "mc_sims", 1000, 1, 20000), _int(b, "mc_seed", 0, 0, 2**32 - 1)))
+
+    @app.post("/api/validation/walkforward")
+    def validation_walkforward():
+        b = body()
+        strategy, did = _validation_target(b)
+        return jsonify(call(svc.walk_forward, strategy, did, _int(b, "train_months", 0, 1, 240),
+                            _int(b, "test_months", 0, 1, 120), bool(b.get("anchored", False)),
+                            bool(b.get("record", True)), _int(b, "mc_sims", 1000, 1, 20000),
+                            _int(b, "mc_seed", 0, 0, 2**32 - 1)))
+
+    @app.post("/api/validation/control")
+    def validation_control():
+        """Random-entry control over the whole dataset, or its OOS window when split_at is given."""
+        b = body()
+        strategy, did = _validation_target(b)
+        n, seed = _int(b, "n_controls", 20, 1, 1000), _int(b, "seed", 0, 0, 2**32 - 1)
+        if b.get("split_at"):
+            return jsonify(call(svc.oos_random_control, strategy, did, _date(b, "split_at"), n, seed))
+        return jsonify(call(svc.random_entry_control, strategy, did, n, seed))
+
+    @app.get("/api/proposals/menu")
+    def proposals_menu():
+        n = request.args.get("n", "20")
+        if not n.isdigit() or not 1 <= int(n) <= 200:
+            raise _bad("n must be an integer in 1..200")
+        return jsonify(call(svc.proposal_menu, int(n)))
+
+    @app.post("/api/proposals/ingest")
+    def proposals_ingest():
+        """Mode B gate: a machine-readable proposal batch (object or YAML/JSON text) -> strict schema,
+        claim-language rejection, the same validator and compiler -> ordinary library strategies."""
+        b = body()
+        batch = b.get("batch")
+        if isinstance(batch, str):
+            import yaml
+            if len(batch) > 1_000_000:
+                raise _bad("batch text is too large (max 1 MB)")
+            try:
+                batch = yaml.safe_load(batch)
+            except yaml.YAMLError as exc:
+                raise ApiError(422, "parse", "The proposal batch is not valid YAML/JSON.", reason=str(exc)) from None
+        if not isinstance(batch, dict):
+            raise _bad("batch must be a proposal batch object (or its YAML/JSON text)")
+        return jsonify(call(svc.ingest_proposals, batch, bool(b.get("save", False))))
+
     # ------------------------------------------------------------------ prop simulation (Phase 6)
     @app.get("/api/prop/configs")
     def prop_configs():

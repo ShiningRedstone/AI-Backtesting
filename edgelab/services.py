@@ -17,6 +17,8 @@ so the same functions back the CLI today and HTTP endpoints later:
                          get_run, list_import_files
   RESEARCH (Phase 4)     validate_search, plan_search, run_search, list_searches, get_search,
                          rank_search, select_shortlist, start_search_job, job_status, cancel_job
+  STRATEGY LAB (Phase 8) strategy_research, compare_runs, run_curve, oos_random_control (read models
+                         over stored strategies/runs; variation_preview lists exact combinations)
   PROP (Phase 6)         prop_configs, validate_prop_config, prop_simulate, list_prop_simulations,
                          get_prop_simulation (account rules over a stored run's trades; read-only)
 
@@ -526,6 +528,10 @@ class Services:
                 grid *= len(_dim_values(d))
             out.update(combinations=n, full_grid=grid,
                        values={d["parameter"]: _dim_values(d) for d in sp["dimensions"]})
+            if n <= 500 and grid <= MAX_GRID:            # the exact combinations generation will evaluate
+                from edgelab.strategy.variations import _combos
+                base_vals = {k: (v or {}).get("value") for k, v in (raw.get("parameters") or {}).items()}
+                out["combinations_list"] = _combos(sp, sp["dimensions"], base_vals)
             if n > out["max_variants"] or grid > MAX_GRID:
                 out["ok"] = False
                 out["errors"].append({"path": "max_variants", "severity": "error", "hint": "",
@@ -883,3 +889,26 @@ class Services:
     def get_prop_simulation(self, simulation_id: str) -> dict:
         from edgelab.prop import service as ps
         return _jsonable(ps.get_simulation(self.data_root, simulation_id))
+
+    # ============================================================ STRATEGY LAB (Phase 8)
+    def strategy_research(self, strategy_id: str) -> dict:
+        """Machine-readable provenance of one strategy version + its stored runs (read-only)."""
+        from edgelab.research import lab
+        return _jsonable(lab.strategy_research(self, strategy_id))
+
+    def compare_runs(self, run_ids: list[str] | None = None, strategy_id: str | None = None,
+                     lineage_of: str | None = None, batch_id: str | None = None,
+                     search_id: str | None = None) -> dict:
+        """Transparent side-by-side metrics of stored runs from ONE source; never ranked or scored."""
+        from edgelab.research import lab
+        return _jsonable(lab.compare_runs(self, run_ids, strategy_id, lineage_of, batch_id, search_id))
+
+    def run_curve(self, run_id: str) -> dict:
+        from edgelab.research import lab
+        return _jsonable(lab.run_curve(self, run_id))
+
+    def oos_random_control(self, src: Any, dataset_id: str, split_at: Any, n_controls: int = 20,
+                           seed: int = 0) -> dict:
+        """random_entry_control (unchanged method) on the OOS window of an evaluate_oos split."""
+        from edgelab.research import lab
+        return _jsonable(lab.oos_control(self, src, dataset_id, split_at, n_controls, seed))

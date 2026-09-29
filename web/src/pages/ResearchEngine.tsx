@@ -211,7 +211,8 @@ function JobPanel({ jobId, onFinished }: { jobId: string; onFinished: () => void
             ["Skipped (already completed)", fmt(p.skipped_resume)], ["Cancelled", fmt(p.cancelled)], ["Trials", fmt(p.trials)],
             ["Batch status", <StatusBadge s={p.batch_status} />]]} />
         </div>}
-        {!active && <p><a href={href(`/research/${job.search_id}`)} data-testid="rs-open-results">Open search results →</a></p>}
+        {!active && <p><a href={href(`/research/${job.search_id}`)} data-testid="rs-open-results">Open search results →</a>
+          {" · "}<a href={href(`/compare?source=search&id=${job.search_id}`)} data-testid="rs-open-compare">Compare these runs →</a></p>}
       </>}
     </Card>
   );
@@ -244,7 +245,8 @@ function SearchPage({ id }: { id: string }) {
     <div className="page" data-testid="rs-search-page">
       <header className="page-head"><div><h1>Search <Mono>{d.search_id}</Mono></h1>
         <div className="subtitle"><StatusBadge s={d.status} /> · created {shortTime(d.created_at)} · finished {shortTime(d.finished_at)}</div></div>
-        <a href={href("/research")}>All searches</a></header>
+        <div className="actions"><a href={href(`/compare?source=search&id=${d.search_id}`)} data-testid="rs-compare">Compare runs</a>
+          {" · "}<a href={href("/research")}>All searches</a></div></header>
       <Banner tone="info" testId="rs-search-in-sample"><b>{IN_SAMPLE}.</b> {d.note}</Banner>
       <Card title="Accounting">
         <KeyValues rows={[["Last invocation", `${d.n_planned} planned · ${d.n_eligible} eligible · ${d.n_ineligible} ineligible · `

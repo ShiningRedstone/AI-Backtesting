@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 8 (as requested): Strategy Lab and GUI-first strategy research
+
+| Item | Status |
+|---|---|
+| Strategy page as a Strategy Lab: Research hub (version, provenance, workflow, stored runs with scope, batch-on-datasets), Validate tab (OOS, walk-forward, random control on the whole dataset or OOS window), existing Backtest / Variations / Lineage tabs | IMPLEMENTED, TESTED (API + browser e2e) |
+| Compare page: unranked side-by-side metrics (trades, gross/net/cost R, expectancy, PF, max DD, breakeven cost multiple, parameters, scope, costs, prop count) from a lineage / version / batch / search; sort and filter as views; selection → validate / prop | IMPLEMENTED, TESTED |
+| Run page: scope badge, equity + drawdown curve from stored trades, session / entry-hour / cost-sensitivity breakdowns | IMPLEMENTED, TESTED |
+| Dataset pickers with provider/instrument/timeframe filters, caveats, and eligibility enforced (ineligible not selectable) | IMPLEMENTED, TESTED |
+| Variation preview lists the exact combinations before generation; batch → "run on datasets" link | IMPLEMENTED, TESTED |
+| Machine-readable provenance `GET /api/strategies/<id>/research` (id, hashes, parent id/hash, batch spec, parameters, runs, validation state) | IMPLEMENTED, TESTED |
+| HTTP for existing validation services and the Mode B gate; AI Proposals page (check, then save accepted proposals as strategies) | IMPLEMENTED, TESTED; no LLM connected |
+| Real 2024 GUI-path smoke test (`lab_smoke_real.py`) | REQUIRES REAL DATA (local store; verified on a synthetic stand-in) |
+| Scoring, ranking, "best" labels, automatic optimization, LLM calls, live/paper trading | NOT IMPLEMENTED (deliberately) |
+
 ## Phase 7 (as requested): Windows desktop / exe hardening
 
 | Item | Status |

@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { api, ApiError } from "../api/client";
-import type { ExplainResult, LibraryRow, LineageResponse, StoredStrategy, SystemStatus } from "../api/types";
+import type { ExplainResult, LibraryRow, LineageResponse, StoredStrategy, StrategyResearch, SystemStatus } from "../api/types";
 import { go, href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { BacktestPanel, LineageTable, LineageTree, METHOD_LABEL, VariationBuilder, changesText } from "../components/strategy";
 import type { TreeNode } from "../components/strategy";
+import { BatchResearch, ProvenanceCard, RunsTable, ValidationPanel } from "../components/strategy/lab";
 import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TextInput, fmt, shortTime } from "../components/ui";
 import type { StrategyDoc } from "../dsl/types";
 
@@ -137,12 +139,14 @@ export function LibraryPage() {
 }
 
 // =========================================================================== strategy detail
-type DetailTab = "overview" | "lineage" | "variations" | "backtest";
+type DetailTab = "research" | "overview" | "backtest" | "variations" | "validate" | "lineage";
 
 export function StrategyPage() {
   const route = useRoute();
   const id = route.parts[1];
-  const [tab, setTab] = useState<DetailTab>((route.query.get("tab") as DetailTab) || "overview");
+  const qTab = route.query.get("tab") as DetailTab | null;
+  const [tab, setTab] = useState<DetailTab>(qTab || "research");
+  useEffect(() => { if (qTab) setTab(qTab); }, [qTab]);    // links that change only ?tab= on the same strategy
   const { data: s, error } = useApi<StoredStrategy>(`/api/strategies/${id}`, [id]);
   if (error) return <ErrorPanel error={error} title={`Could not load ${id}`} />;
   if (!s) return <Loading label="Loading strategy…" />;
@@ -153,7 +157,7 @@ export function StrategyPage() {
       <header className="page-head">
         <div>
           <h1 data-testid="strategy-title">{s.name}</h1>
-          <div className="subtitle"><Mono>{s.strategy_id}</Mono> · family <a href={href(`/families/${s.family_id}`)}>{s.family_id}</a>
+          <div className="subtitle">Strategy Lab · <Mono>{s.strategy_id}</Mono> · family <a href={href(`/families/${s.family_id}`)}>{s.family_id}</a>
             {" "}· <Badge>{METHOD_LABEL[first.generation_method] ?? first.generation_method}</Badge>
             {s.archived && <Badge tone="warn">archived</Badge>}</div>
         </div>
@@ -163,13 +167,48 @@ export function StrategyPage() {
         </div>
       </header>
       <Tabs<DetailTab> active={tab} onChange={(t) => { setTab(t); window.history.replaceState(null, "", `#/strategies/${id}?tab=${t}`); }}
-        tabs={[{ id: "overview", label: "Overview & Explain" }, { id: "lineage", label: "Lineage" },
-          { id: "variations", label: "Generate Variations" }, { id: "backtest", label: "Backtest" }]} />
+        tabs={[{ id: "research", label: "Research" }, { id: "overview", label: "Overview & Explain" }, { id: "backtest", label: "Backtest" },
+          { id: "variations", label: "Generate Variations" }, { id: "validate", label: "Validate (OOS · WF · Control)" },
+          { id: "lineage", label: "Lineage" }]} />
+      {tab === "research" && <ResearchHub s={s} batch={route.query.get("batch")} onTab={(t) => { setTab(t); window.history.replaceState(null, "", `#/strategies/${id}?tab=${t}`); }} />}
+      {tab === "validate" && <ValidationPanel strategyId={s.strategy_id} initialDataset={route.query.get("dataset")} />}
       {tab === "overview" && <Overview s={s} fam={fam} />}
       {tab === "lineage" && <StrategyLineage id={s.strategy_id} />}
       {tab === "variations" && (s.archived ? <Banner tone="warn">Restore this strategy before generating variations from it.</Banner>
         : <VariationBuilder baseId={s.strategy_id} base={s.definition as unknown as StrategyDoc} />)}
       {tab === "backtest" && <BacktestPanel strategy={s.strategy_id} />}
+    </div>
+  );
+}
+
+function ResearchHub({ s, batch, onTab }: { s: StoredStrategy; batch: string | null; onTab: (t: DetailTab) => void }) {
+  const { data: sr, error, reload } = useApi<StrategyResearch>(`/api/strategies/${s.strategy_id}/research`, [s.strategy_id]);
+  if (error) return <ErrorPanel error={error} />;
+  if (!sr) return <Loading label="Loading research state…" />;
+  const hasRun = sr.runs.length > 0;
+  const steps: [string, string, ReactNode][] = [
+    ["1", "Edit or duplicate", <>{!s.archived && <Button small onClick={() => go(`/builder/${s.strategy_id}`)}>Edit</Button>}
+      {!s.archived && <Button small onClick={() => go(`/builder?duplicate=${s.strategy_id}`)} testId="lab-duplicate">Duplicate</Button>}
+      <span className="muted small">Saving a changed rule creates a new version; this one never changes.</span></>],
+    ["2", "Backtest on a dataset", <Button small onClick={() => onTab("backtest")} testId="lab-goto-backtest">Backtest</Button>],
+    ["3", "Generate controlled variations", <Button small onClick={() => onTab("variations")} disabled={s.archived}>Generate variations</Button>],
+    ["4", "Run a batch on datasets", <span className="muted small">below</span>],
+    ["5", "Compare results", <Button small onClick={() => go(`/compare?source=lineage&id=${s.strategy_id}`)} disabled={!hasRun} testId="lab-goto-compare">Compare this lineage</Button>],
+    ["6", "Validate (OOS · walk-forward · random control)", <Button small onClick={() => onTab("validate")} testId="lab-goto-validate">Validate</Button>],
+    ["7", "Prop simulation on a stored run", <Button small onClick={() => go("/prop")} disabled={!hasRun}>Prop simulation</Button>],
+  ];
+  return (
+    <div className="grid-cards" data-testid="lab-hub">
+      <ProvenanceCard sr={sr} />
+      <Card title="Research workflow">
+        <table className="steps"><tbody>{steps.map(([n, label, action]) => (
+          <tr key={n}><td className="muted">{n}</td><td>{label}</td><td className="inline">{action}</td></tr>))}</tbody></table>
+        <p className="muted small">Every step calls the existing research engine; the stored DSL definition is the single source of truth.</p>
+      </Card>
+      <Card title={`Stored runs of this version (${sr.runs.length})`} className="wide" actions={<Button small onClick={reload}>Refresh</Button>}>
+        <RunsTable runs={sr.runs} />
+      </Card>
+      <div className="wide"><BatchResearch strategyId={s.strategy_id} batches={sr.variation_batches_from_this_strategy} preselect={batch} /></div>
     </div>
   );
 }

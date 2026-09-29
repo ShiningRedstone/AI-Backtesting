@@ -50,6 +50,7 @@ export interface ExplainResult { identity: Identity; explain: string; canonical_
 export interface VariationPreview {
   ok: boolean; errors: Issue[]; warnings?: Issue[]; max_variants?: number; mode?: string;
   combinations?: number; full_grid?: number; values?: Record<string, unknown[]>;
+  combinations_list?: Record<string, unknown>[];
 }
 export interface VariantRow { strategy_id: string; name: string; overrides: Record<string, unknown>; changes: Change[] }
 export interface VariationResult {
@@ -183,4 +184,59 @@ export interface PropSimulation {
 export interface PropSimRow {
   simulation_id: string; created_at: string; source_run_id: string; strategy_id: string; dataset_id: string;
   accounts: { account_id: string; prop_config_id: string; status: string }[];
+}
+
+// ---------------------------------------------------------------- strategy lab (Phase 8)
+export interface RunSummary {
+  run_id: string; created_at: string; status: string; scope: string; validated: boolean; synthetic: boolean; notes: string;
+  strategy_id: string; strategy_name: string | null; definition_hash: string | null; logic_hash: string | null;
+  parent_strategy_id: string | null; dataset_id: string; dataset_name: string | null; parent_dataset_id: string | null;
+  provider: string; instrument: string; timeframe: string; period: { start: string; end: string };
+  cost_profile: string | null; cost_status: string | null; config_hash: string; trades_hash: string;
+  metrics: Record<string, number | string | null>; prop_simulations: number;
+}
+export interface CompareRow extends RunSummary {
+  breakeven_cost_multiplier: number | null; breakeven_note: string | null; parameters: Record<string, unknown>;
+  generation_method: string | null; library_parent: string | null; changes: Change[]; generation_batch_id: string | null;
+}
+export interface Comparison { object: string; source: Record<string, unknown>; n_runs: number; rows: CompareRow[]; labels: string[] }
+export interface StrategyResearch {
+  object: string;
+  strategy: { strategy_id: string; name: string; family_id: string; logic_hash: string; definition_hash: string; timeframe: string;
+    dsl_version: number; parameters: Record<string, unknown>; archived: boolean };
+  lineage: { generation_method: string | null; parent_strategy_id: string | null; parent_definition_hash: string | null;
+    changes: Change[]; generation_parameters: Record<string, unknown>; generation_timestamp: string | null; records: number;
+    generation_batch: { batch_id: string; kind?: string; spec?: Record<string, unknown>; missing?: boolean } | null;
+    ancestry: string[]; children: string[] };
+  variation_batches_from_this_strategy: string[];
+  runs: RunSummary[];
+  validation_state: { run_statuses: string[]; has_out_of_sample_runs: boolean; validated: boolean; note: string };
+}
+export interface CurvePoint { i: number; exit_ts: string; equity_r: number; drawdown_r: number }
+export interface RunCurve { run_id: string; status: string; scope: string; n_trades: number; thinned?: boolean;
+  final_net_r?: number; max_drawdown_r?: number; points: CurvePoint[]; note?: string }
+export interface ValidationWindow {
+  window: { role: string; start: string; end: string }; status: string; run_id: string | null; strategy_id: string;
+  dataset_id: string; parent_dataset_id: string | null; cost_status: string; cost_profile: string; trades_hash: string;
+  metrics: Record<string, unknown>; segment?: number; partial?: boolean;
+}
+export interface ValidationReport {
+  validation: string; validation_id: string; strategy_id: string; definition_hash: string; dataset_id: string;
+  cost_status: string[]; labels: string[]; windows: ValidationWindow[];
+  monte_carlo_oos?: Record<string, Record<string, unknown>>; oos_pooled?: Record<string, unknown>;
+  oos_segments?: Record<string, unknown>[]; scheme?: string;
+}
+export interface ControlReport {
+  validation: string; validation_id: string; sample_status: string; labels: string[]; stored_as_runs: boolean;
+  candidate: { strategy_id: string; definition_hash: string; trades_hash: string; pre_cooldown_signals: number; signals: number;
+    metrics: Record<string, unknown> };
+  dataset: Record<string, unknown>; cost_profile: string; cost_status: string;
+  control_config: { method: string; n_controls: number; base_seed: number; period: string[] | null };
+  comparison: Record<string, any>;  // eslint-disable-line @typescript-eslint/no-explicit-any
+  realizations: Record<string, unknown>[]; oos_window?: { split_at: string; start: string; end: string };
+}
+export interface ProposalReport {
+  batch_id: string; n_accepted: number; n_rejected: number; saved: boolean; warnings: unknown[];
+  accepted: { strategy_id: string; name?: string; family_id?: string; [k: string]: unknown }[];
+  rejected: { index?: number; name?: string; reasons?: unknown; [k: string]: unknown }[];
 }

@@ -43,17 +43,48 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | Page | What it does | Backend |
 |---|---|---|
 | Dashboard | Backend status, software/source version, frontend build, last recorded test run, counts, quick actions (each enabled only when its prerequisites exist) | `system_status` |
-| Strategies | Library with filters: open, edit, duplicate, explain, variations, lineage, archive/restore (with confirmation) | `StrategyLibrary` |
-| Strategy page | Overview and backend `explain()`, lineage, Generate Variations, Backtest | Phase 3 services |
+| Strategy Lab (library) | Library with filters: open, edit, duplicate, explain, variations, lineage, archive/restore (with confirmation) | `StrategyLibrary` |
+| Strategy page (Strategy Lab) | **Research** hub (version + provenance, workflow steps, stored runs with scope badges, run this version + a variation batch on datasets), Overview and backend `explain()`, Backtest, Generate Variations (exact combinations previewed), **Validate** (OOS split, walk-forward, random-entry control on the whole dataset or the OOS window), Lineage | Phase 3/4/5 services, `strategy_research`, validation services |
+| Compare | Stored runs of a lineage, a version, a variation batch or a search side by side: trades, gross/net/cost R, expectancy, profit factor, max drawdown, breakeven cost multiple, parameters, scope, cost status, prop count. Sort and filter (views, not rankings); selected run → validate or prop simulation | `compare_runs` |
 | Strategy Builder | Visual editor for the DSL: General · Market & Sessions · Parameters · Entry · Exit · Sizing · Review, with live backend validation and DSL preview | `render_strategy`, validator, compiler |
 | Families | Hypotheses and their instances, as a lineage tree and table | `family_detail` |
 | Variations | Mode A batches with reproducibility metadata | batch records |
 | Datasets | Library with provider/instrument/timeframe, validation status, cost status and an **Eligible** column (with the reasons a dataset cannot run); metadata, validation report and caveats; import over the existing pipeline | Phase 2 importer, `backtest_readiness` |
-| Results | Recorded single backtests (status `IN_SAMPLE`); synthetic runs listed separately | Phase 1 run registry |
+| Results | Recorded runs (any status); a run page shows its scope, headline metrics, equity and drawdown curve, session / entry-hour / cost-sensitivity breakdowns and breakeven cost multiple, and links to Lab, Compare, Validate and Prop | run registry, `run_curve`, `research_report` |
 | Research | Phase 4 batch search: spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
 | Prop Simulation | Choose a stored run and one or more accounts (each with a rule set from `configs/prop/` or custom YAML, optional start), run, then view the source strategy result and the prop-account results side by side but separately: outcome, breaches, violations with detection mode, day table and per-trade progression. Recorded simulations are listed. See PROP_SIMULATION.md | `/api/prop/*` |
-| AI Discovery | Placeholder: no model is connected | — |
+| AI Proposals | Mode B gate in the GUI: paste a machine-readable proposal batch, check it (nothing saved), then save the accepted proposals as ordinary library strategies (lineage `mode_b_proposal`). No model is connected or called | `ingest_proposals`, `proposal_menu` |
 | Settings | Read-only configuration: cost profile status, engine config, sessions, instruments | config |
+
+## Strategy Lab workflow (Phase 8)
+
+The GUI is the front door; the stored DSL definition stays the single source of truth. Every button calls an
+existing service and the research engine; the UI never holds a second strategy format.
+
+1. **Start**: Strategy Lab → open a strategy (Research tab), or New / Duplicate / Edit in the builder.
+2. **Edit**: parameters (value, domain, step), entry and exit rules, stop, target, sizing, session and cooldown
+   through the builder's controls (only constructs the compiler supports). Live backend validation shows
+   errors with paths and the canonical strategy id; unsupported semantics are refused by name.
+3. **Save**: a changed rule saves a NEW version with lineage (parent id and parent definition hash);
+   stored versions are never modified. Cosmetic edits keep the same id.
+4. **Dataset**: pickers list validated datasets with provider, instrument, timeframe, validation, cost
+   profile/status, caveats and eligibility; ineligible datasets are shown with reasons and cannot be selected.
+5. **Backtest** → run page (equity/drawdown, breakdowns, breakeven).
+6. **Variations**: one-at-a-time, grid, or seeded random sample inside declared domains, with a cap; the
+   exact combinations are listed before generating; the backend dedupes logic.
+7. **Batch research**: Research tab → run this version + a variation batch on chosen datasets (the Phase 4
+   background job, progress and cancel on the Research page).
+8. **Compare**: unranked metric table; selecting a run leads to Validate or Prop.
+9. **Validate**: OOS split, walk-forward, random-entry control (whole dataset or OOS window). OOS and
+   walk-forward windows can be recorded as runs (OUT_OF_SAMPLE / WALK_FORWARD); controls are never runs.
+10. **Prop simulation** on any stored run (e.g. an OOS window).
+
+Scope is always visible: in-sample results are labelled exploratory; out-of-sample, walk-forward, random
+control and prop results are shown as separate things with their labels. Nothing is ranked, scored,
+promoted or called a winner.
+
+Synchronous calls: backtests and validations run in the request (the page shows a busy state); only batch
+searches are background jobs.
 
 ## Research (Phase 4)
 
@@ -148,6 +179,11 @@ Every route is a thin call into `edgelab.services`.
 | POST | `/api/backtests/readiness`, `/api/backtests` | `backtest_readiness`, `backtest_strategy(record=True)` |
 | GET | `/api/results`, `/api/results/{run_id}` | run registry |
 | GET | `/api/results/report?run_ids=RUN_...,RUN_...` | Phase 5 descriptive report over stored runs of one strategy (no UI page yet) |
+| GET | `/api/strategies/{id}/research` | `strategy_research` (machine-readable provenance + stored runs) |
+| GET | `/api/compare?source=lineage\|strategy\|batch\|search\|runs&id=...` | `compare_runs` (unranked) |
+| GET | `/api/results/{run_id}/curve` | `run_curve` |
+| POST | `/api/validation/oos` `{strategy, dataset_id, split_at, record?}` · `/api/validation/walkforward` `{strategy, dataset_id, train_months, test_months, anchored?, record?}` · `/api/validation/control` `{strategy, dataset_id, n_controls, seed, split_at?}` | `evaluate_oos`, `walk_forward`, `random_entry_control` / `oos_random_control` (synchronous) |
+| GET/POST | `/api/proposals/menu`, `/api/proposals/ingest` `{batch, save}` | `proposal_menu`, `ingest_proposals` |
 | GET | `/api/prop/configs`, `/api/prop/simulations`, `/api/prop/simulations/{PROP_id}` | `prop_configs`, `list_prop_simulations`, `get_prop_simulation` |
 | POST | `/api/prop/validate` `{config}` · `/api/prop/simulate` `{run_id, accounts: [{account_id?, config, start?}], record?}` | `validate_prop_config`, `prop_simulate` (reads the run; never writes it) |
 
