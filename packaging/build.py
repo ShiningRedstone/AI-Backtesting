@@ -3,8 +3,9 @@
     python packaging/build.py [--skip-frontend] [--smoke]
 
 Steps (each fails loudly):
-  1. rebuild the React bundle with web/build.mjs when Node is available (else --skip-frontend,
-     which is only accepted if the committed bundle matches web/src);
+  1. install the locked frontend dependencies (`npm ci` from web/package-lock.json into
+     web/node_modules; nothing global) and rebuild the React bundle with web/build.mjs
+     (or --skip-frontend, only accepted if the committed bundle matches web/src);
   2. verify the bundle is up to date with its sources;
   3. generate build/edgelab_build.json from the real sources (edgelab.runtime);
   4. run PyInstaller with packaging/edgelab.spec (folder mode);
@@ -42,10 +43,14 @@ def main(argv=None) -> int:
                  "Build from a clean virtual environment without duckdb.")
 
     if not a.skip_frontend:
+        node, npm = shutil.which("node"), shutil.which("npm")
+        if not (node and npm):
+            sys.exit("Node/npm are not available; install Node 18+ (developers only) or pass --skip-frontend")
+        if not (REPO / "web" / "package-lock.json").is_file():
+            sys.exit("web/package-lock.json is missing; the frontend dependencies cannot be installed reproducibly")
+        step("installing the locked frontend dependencies (npm ci in web/)")
+        subprocess.run([npm, "ci", "--no-audit", "--no-fund"], cwd=REPO / "web", check=True)
         step("building the frontend (web/build.mjs)")
-        node = shutil.which("node")
-        if not node:
-            sys.exit("Node is not available; install Node (developers only) or pass --skip-frontend")
         subprocess.run([node, "build.mjs"], cwd=REPO / "web", check=True)
     step("verifying the frontend bundle matches its sources")
     from edgelab.web.bundle import bundle_status

@@ -141,8 +141,10 @@ then re-launches the frozen executable as workers.
 Prerequisites for building (end users need none of these):
 
 - **Windows 10/11 x64** with **Python 3.11+ 64-bit**;
-- **Node 18+**, only to rebuild the frontend (`-SkipFrontend` uses the committed bundle, which must
-  match `web/src`);
+- **Node 18+ with npm**, to rebuild the frontend. The build runs `npm ci` in `web\`, which installs
+  the exact versions locked in `web\package-lock.json` into `web\node_modules` (network needed at
+  build time only; nothing global). `-SkipFrontend` uses the committed bundle instead, which must
+  match `web/src`;
 - **Git**, so the manifest records the commit.
 
 ```powershell
@@ -153,7 +155,7 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1 -Smoke     # + packag
 `build_windows.ps1` creates `.venv-build` from `packaging/requirements-build.txt`, which has no
 DuckDB and includes `tzdata` and PyInstaller. It then runs `packaging/build.py`, which:
 
-1. builds the frontend;
+1. installs the locked frontend dependencies (`npm ci`) and builds the frontend (`web/build.mjs`);
 2. verifies the bundle is fresh;
 3. writes `build/edgelab_build.json`;
 4. runs PyInstaller with `packaging/edgelab.spec` (folder mode, console);

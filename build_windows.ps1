@@ -1,7 +1,8 @@
 # Build the EdgeLab desktop app for Windows (developers only).
 #   powershell -ExecutionPolicy Bypass -File build_windows.ps1 [-SkipFrontend] [-Smoke]
-# Prerequisites: Python 3.11+ (64-bit), Node 18+ (only to rebuild the frontend; -SkipFrontend uses
-# the committed bundle), Git (for the recorded commit). End users need none of these.
+# Prerequisites: Python 3.11+ (64-bit), Node 18+ with npm (the build runs `npm ci` in web\ to install
+# the locked frontend dependencies from web\package-lock.json, network needed; -SkipFrontend uses the
+# committed bundle instead), Git (for the recorded commit). End users need none of these.
 # Output: dist\EdgeLab\EdgeLab.exe   (copy the whole dist\EdgeLab folder; user data is NOT in it)
 param([switch]$SkipFrontend, [switch]$Smoke)
 $ErrorActionPreference = "Stop"

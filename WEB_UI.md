@@ -164,13 +164,14 @@ Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "det
 
 ```bash
 cd web
-npm install            # react, react-dom, esbuild, typescript, @types/react (network needed)
+npm ci                 # exact locked versions from package-lock.json into web/node_modules (network needed)
 npm run build          # -> edgelab/web/static/{app.js, styles.css, index.html, build-info.json}
 npm run watch          # rebuild on change
 npm run typecheck      # tsc --noEmit
 ```
 
-- **Offline builds.** `build.mjs` falls back to globally installed packages, which is how this build was made offline.
+- **Locked dependencies.** `web/package-lock.json` pins the toolchain that built the committed bundle (esbuild 0.27.7, React 19.2.5) for every platform, including esbuild's Windows binaries. `npm ci` installs exactly that into `web/node_modules`, and the desktop build (`packaging/build.py`) runs it before `build.mjs`. Change dependencies with `npm install <pkg>@<version>`, which updates both files, and commit both.
+- **Offline builds.** `build.mjs` falls back to globally installed packages when `web/node_modules` is absent. That is how the first bundle was built offline, but reproducible builds should use `npm ci`.
 - **Type shim.** `@types/react` could not be installed offline, so `web/src/types/react-shim.d.ts` types the React APIs used. Delete it after `npm install`.
 - **Bundle freshness.** `build-info.json` records a SHA-256 of the sources, and a test fails if the committed bundle is stale.
 
