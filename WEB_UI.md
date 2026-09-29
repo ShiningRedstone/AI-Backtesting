@@ -146,6 +146,7 @@ Every route is a thin call into `edgelab.services`.
 | GET/POST | `/api/import/files`, `/api/import/inspect`, `/api/import` | Phase 2 `inspect_file` / `import_file` |
 | POST | `/api/backtests/readiness`, `/api/backtests` | `backtest_readiness`, `backtest_strategy(record=True)` |
 | GET | `/api/results`, `/api/results/{run_id}` | run registry |
+| GET | `/api/results/report?run_ids=RUN_...,RUN_...` | Phase 5 descriptive report over stored runs of one strategy (no UI page yet) |
 
 Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "details"?}}`. The kinds are `validation`, `compile`, `variation`, `cost_unconfigured`, `backtest`, `import_failed`, `not_found`, `bad_request`, `forbidden`, `parse`, `invalid_request` and `internal`. The UI shows `message`, `reason` and `issues`; stack traces appear only under **Technical details**.
 

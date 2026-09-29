@@ -359,6 +359,15 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def results():
         return jsonify(call(svc.list_runs))
 
+    @app.get("/api/results/report")
+    def results_report():
+        """Phase 5: /api/results/report?run_ids=RUN_2026_00001,RUN_2026_00002 (one fixed strategy)."""
+        raw = (request.args.get("run_ids") or "").split(",")
+        ids = [_id(x.strip(), RUN_ID, "run id") for x in raw if x.strip()]
+        if not ids:
+            raise _bad("run_ids is required")
+        return jsonify(call(svc.research_report, ids))
+
     @app.get("/api/results/<rid>")
     def result(rid):
         return jsonify(call(svc.get_run, _id(rid, RUN_ID, "run id")))

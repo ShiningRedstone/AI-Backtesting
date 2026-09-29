@@ -156,6 +156,17 @@ configs/search.example.yaml  example search spec (not read by load_config; outsi
 scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worker processes)
 ```
 
+## Module map (Phase 5 additions, in progress)
+
+```
+edgelab/analytics/research.py  pooled / per-dataset metrics, stability counts, canonical-session and
+                               entry-hour breakdowns, exact cost sensitivity + break-even, report
+                               caveat labels; every number via analytics.metrics (ADR-46)
+edgelab/services.py            + research_report(run_ids)
+edgelab/cli.py                 + `report RUN_ID ...`
+edgelab/web/app.py             + GET /api/results/report?run_ids=...
+```
+
 ## Decision records
 
 ### ADR-1 Storage backend
@@ -601,6 +612,23 @@ scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worke
 - **Verified:** regression test (source with a repeated exact-copy block: reloaded manifest and hash
   equal the stored ones); prior import/store/compare/research tests pass; the Phase 1 demo results
   are unchanged (only the code hash, timings and artifact paths differ).
+
+### ADR-46 Phase 5 research analytics are selections over stored trades, not new metrics
+- **Problem:** runs were only measurable one at a time; cost sensitivity and the break-even cost
+  multiple existed but no report used them; nothing aggregated a fixed strategy across datasets.
+- **Chosen:** `analytics/research.py` only selects, orders and labels trades, and calls the Phase 1
+  functions (`compute_metrics`, `cost_sensitivity`, `breakeven_cost_multiplier`) on each subset.
+  Pooled figures are ONE measurement of all trades in entry-time order (drawdowns and streaks run
+  across dataset boundaries), never averages of per-dataset figures. Stability is counts and spread
+  of per-dataset figures; no composite score. Sessions are the canonical `configs/sessions.yaml`
+  windows by entry time (they overlap; rows do not sum). Cost sensitivity uses
+  `backtest.cost_sensitivity_multipliers` unchanged. `Services.research_report(run_ids)` reads stored
+  runs only, refuses mixed strategies and repeated datasets, and attaches caveat labels from what the
+  runs recorded (cost status and profile, price basis, research-proxy instruments) plus a small
+  documented table of standing notes (HistData CFD BID proxy, MNQ-equivalent assumed costs, 2023
+  excluded).
+- **Deferred:** UI page, Monte Carlo, walk-forward/OOS, distributions/plots, weekday/month
+  breakdowns.
 
 ## Known limitations (Phase 1)
 

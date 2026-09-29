@@ -17,6 +17,7 @@
     python -m edgelab.cli research run SEARCH_SPEC_FILE [--workers N]
     python -m edgelab.cli research rank SEARCH_ID [--metric M] [--min-sample-label L]
     python -m edgelab.cli research job SEARCH_SPEC_FILE     (background job; progress; Ctrl-C cancels)
+    python -m edgelab.cli report RUN_ID [RUN_ID ...]       (Phase 5: descriptive report, one strategy)
 
 Add --json to any command for machine-readable output.
 """
@@ -136,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-save", action="store_true")
     p.add_argument("--n-families", type=int, default=20)
 
+    p = sub.add_parser("report", help="Phase 5: descriptive research report over stored runs of one strategy")
+    p.add_argument("run_ids", nargs="+", help="RUN_ ids (one fixed strategy, one run per dataset)")
+
     p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
     p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
     p.add_argument("target", help="search spec file (YAML/JSON), or a SRCH_ id for rank")
@@ -194,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
             return _strategy(svc, a, ap)
         elif a.cmd == "research":
             return _research(svc, a)
+        elif a.cmd == "report":
+            try:
+                _print(svc.research_report(a.run_ids), True)
+            except ValueError as exc:
+                print(f"report refused: {exc}", file=sys.stderr)
+                return 2
     except SearchSpecError as exc:
         print(f"search refused: {exc}", file=sys.stderr)
         return 2

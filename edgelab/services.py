@@ -633,6 +633,52 @@ class Services:
                           "n_trades": len(trades), "trades_shown": len(t),
                           "trades": t.to_dict("records")})
 
+    def research_report(self, run_ids: list[str], hour_timezone: str = "America/New_York") -> dict:
+        """Phase 5: descriptive analytics over STORED runs of ONE fixed strategy on distinct
+        datasets (e.g. one run per year). Pooled + per-dataset metrics, stability counts, canonical
+        session and entry-hour breakdowns, exact cost sensitivity at the configured multipliers,
+        break-even cost multiple, and the caveats the runs' data/costs require. Reads only."""
+        from edgelab.analytics import research as ra
+        ids = list(dict.fromkeys(run_ids or []))
+        if not ids:
+            raise ValueError("research_report needs at least one run id")
+        loaded = [(rid, *self.store.load_run(rid)) for rid in ids]
+        strategies = sorted({rec["strategy"]["strategy_id"] for _, rec, _ in loaded})
+        if len(strategies) != 1:
+            raise ValueError(f"a research report covers ONE fixed strategy; got {strategies}")
+        datasets = [rec["dataset"]["dataset_id"] for _, rec, _ in loaded]
+        if len(set(datasets)) != len(datasets):
+            raise ValueError("each dataset may appear once in a report (the same trades would be counted twice)")
+        loaded.sort(key=lambda x: (str(x[1]["dataset"].get("start")), x[1]["dataset"]["dataset_id"]))
+        groups = {rec["dataset"]["dataset_id"]: trades for _, rec, trades in loaded}
+        thr = self.cfg.get("sample_size")
+        rows = ra.group_table(groups, thr)
+        for row, (rid, rec, _) in zip(rows, loaded):
+            d, a = rec["dataset"], rec.get("assumptions") or {}
+            row.update({"dataset_id": row["group"], "run_id": rid, "period": f"{str(d.get('start'))[:10]} .. {str(d.get('end'))[:10]}",
+                        "cost_status": a.get("cost_status"), "cost_profile": (a.get("costs") or {}).get("profile")})
+        pooled = ra.pooled_trades(groups)
+        mults = self.cfg["backtest"].get("cost_sensitivity_multipliers", [0.5, 1.0, 1.5, 2.0, 3.0])
+        first = loaded[0][1]
+        return _jsonable({
+            "report": "phase5_research_summary",
+            "strategy_id": strategies[0],
+            "strategy_name": (first["strategy"].get("dsl") or {}).get("name"),
+            "labels": ra.research_labels([rec for _, rec, _ in loaded], load_instruments(self.cfg)),
+            "cost_status": sorted({str((rec.get("assumptions") or {}).get("cost_status")) for _, rec, _ in loaded}),
+            "runs": [{"run_id": rid, "dataset_id": rec["dataset"]["dataset_id"], "trades_hash": rec.get("trades_hash"),
+                      "provider": rec["dataset"].get("provider"), "instrument": rec["dataset"].get("instrument"),
+                      "timeframe": rec["dataset"].get("timeframe")} for rid, rec, _ in loaded],
+            "pooled": ra.pooled_summary(groups, thr),
+            "by_dataset": rows,
+            "stability": ra.stability_summary(rows),
+            "sessions": ra.session_breakdown(pooled, self.sessions, thr),
+            "hours": ra.hour_breakdown(pooled, hour_timezone, thr),
+            "cost_sensitivity": ra.cost_sensitivity_table(pooled, mults),
+            "deferred": ["Monte Carlo", "walk-forward / out-of-sample", "trade-distribution plots",
+                         "weekday/month breakdowns", "Research page UI"],
+        })
+
     def list_import_files(self, import_dirs: list[str]) -> list[dict]:
         out = []
         for d in import_dirs:

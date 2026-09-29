@@ -27,6 +27,15 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Sets `HISTDATA_NSXUSD_2020` / `_2021` / `_2022` / `_2024` (20 / 15 / 15 / 17 windows, 17:00-18:00 EDT, dates from the local trace; none for 2024-10-28/29) | CONFIGURED, TESTED (config); REQUIRES REAL DATA (local run must confirm every window matches bars and the gate accepts) |
 | Exclusion set for 2023 | NOT IMPLEMENTED (deliberately; 2023 stays coverage-rejected) |
 
+## Phase 5: Research Analytics (in progress)
+
+| Item | Status |
+|---|---|
+| `analytics/research.py`: pooled (entry-time ordered, not averaged) and per-dataset metrics, stability counts, canonical-session and entry-hour breakdowns, exact cost sensitivity at the configured multipliers, break-even cost multiple, caveat labels (ADR-46) | IMPLEMENTED, TESTED |
+| `Services.research_report(run_ids)`, CLI `report RUN_ID ...`, `GET /api/results/report?run_ids=...` (one fixed strategy; mixed strategies and repeated datasets refused) | IMPLEMENTED, TESTED |
+| Research page UI, Monte Carlo, walk-forward/OOS, distributions, weekday/month breakdowns | NOT IMPLEMENTED (deferred) |
+| Real five-year EMA pipeline baseline analysed through the report | REQUIRES the local store (runs are local) |
+
 ## HistData research cost baseline (after HistData import, before Phase 5)
 
 | Item | Status |
