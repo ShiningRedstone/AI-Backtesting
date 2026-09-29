@@ -27,6 +27,13 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Sets `HISTDATA_NSXUSD_2020` / `_2021` / `_2022` / `_2024` (20 / 15 / 15 / 17 windows, 17:00-18:00 EDT, dates from the local trace; none for 2024-10-28/29) | CONFIGURED, TESTED (config); REQUIRES REAL DATA (local run must confirm every window matches bars and the gate accepts) |
 | Exclusion set for 2023 | NOT IMPLEMENTED (deliberately; 2023 stays coverage-rejected) |
 
+## Dataset reload fix (after HistData import, before Phase 5)
+
+| Item | Status |
+|---|---|
+| **Phase 2 fix:** `load_validated` kept overwriting import-time cleaning facts (`source_detail.cleaning`, `raw_duplicate_bars`, `duplicate_bars`) on reload, so datasets whose source needed cleaning reloaded with a different manifest hash; it now keeps the stored facts (ADR-45) | IMPLEMENTED, TESTED |
+| Real HistData 2019-2022, 2024 imported locally (`NAS100_HISTDATA_<YEAR>`, WARN, exclusions 1197/1106/900/900/898, 60-row rollback cleaned); only the reload manifest-hash check failed before this fix | MEASURED LOCALLY; re-check after the fix REQUIRES the local run |
+
 ## Phase 4: Batch Research & Search
 
 | Item | Status |

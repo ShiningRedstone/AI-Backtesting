@@ -585,6 +585,23 @@ scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worke
   dates are measured evidence, not a vendor statement. 2023 has no set and stays coverage-rejected.
   2018's 131 sparse outside-session bars stay a WARN and are not excluded.
 
+### ADR-45 Reloading a dataset reproduces its stored manifest (Phase 2 `load_validated` fixed)
+- **Problem:** `load_validated` re-runs `validate_and_freeze` on the stored bars. Those bars were
+  sorted and de-duplicated at import, so the re-run found nothing to clean and overwrote the stored
+  import-time facts (`source_detail.cleaning`, `source_detail.raw_duplicate_bars`,
+  `duplicate_bars`) with empty/zero values. Any dataset whose source needed cleaning therefore
+  reloaded with a different manifest hash than the stored one (found on the real HistData
+  2019-2024 imports, which carry a 60-row exact-copy block; synthetic fixtures had none).
+  `compare_feeds` provenance records `manifest_hash()` of reloaded datasets, so it was affected.
+- **Chosen:** after the unchanged re-validation and content-hash check, `load_validated` keeps the
+  stored `source_detail` and `duplicate_bars` (facts about the raw source, not the stored bars).
+  Everything that re-validation legitimately decides (quality status, missing bars, the report)
+  still comes from the re-run, so a changed config or calendar still shows up. Stored manifests
+  were always correct; no re-import is needed.
+- **Verified:** regression test (source with a repeated exact-copy block: reloaded manifest and hash
+  equal the stored ones); prior import/store/compare/research tests pass; the Phase 1 demo results
+  are unchanged (only the code hash, timings and artifact paths differ).
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and

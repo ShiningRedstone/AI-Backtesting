@@ -459,4 +459,9 @@ def load_validated(store: ResultStore, cfg: Mapping, dataset_id: str,
     if ds.manifest.content_hash != m.content_hash:
         raise ImportFailed("load", f"{dataset_id}: content hash mismatch after reload")
     ds.manifest.imported_at = m.imported_at
+    # The stored bars were cleaned at import, so re-validating them finds nothing to sort or drop.
+    # Keep the import-time facts about the RAW source instead of overwriting them with empty/zero
+    # values; otherwise the reloaded manifest (and its hash) differs from the stored one (ADR-45).
+    ds.manifest.source_detail = dict(m.source_detail)
+    ds.manifest.duplicate_bars = m.duplicate_bars
     return ds

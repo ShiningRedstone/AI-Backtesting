@@ -369,6 +369,23 @@ class TestStoreAndLoad(Base):
         ds = load_validated(self.store, cfg2, r.dataset_id, allow_calendar_change=True)
         self.assertEqual(ds.manifest.content_hash, self.store.get_manifest(r.dataset_id).content_hash)
 
+    def test_reload_reproduces_manifest_of_source_that_needed_cleaning(self):
+        """ADR-45 regression: a source with a repeated exact-copy block (HistData's October rollback)
+        is sorted and de-duplicated at import. Reloading the clean stored bars must reproduce the
+        stored manifest (and its hash), not overwrite the import-time cleaning facts with zeros."""
+        df = pd.concat([self.df, self.df.iloc[100:160]], ignore_index=True)      # 60 rows repeated, out of order
+        write_generic_utc(df, self.tmp / "rb.csv")
+        o = ImportOptions(str(self.tmp / "rb.csv"), "NAS100_CFD", "P", "CFD", "1m", source_timezone="UTC",
+                          build_features=False)
+        r = import_dataset(o, CFG, self.store)
+        stored = self.store.get_manifest(r.dataset_id)
+        self.assertEqual((stored.duplicate_bars, stored.source_detail["raw_duplicate_bars"]), (60, 60))
+        self.assertTrue(stored.source_detail["cleaning"])
+        ds = load_validated(self.store, CFG, r.dataset_id)
+        self.assertEqual(ds.manifest.to_dict(), stored.to_dict())
+        self.assertEqual(ds.manifest.manifest_hash(), stored.manifest_hash())
+        self.assertEqual(ds.manifest.content_hash, ds.bars.content_hash())
+
     def test_tampered_bars_detected_on_load(self):
         r = import_dataset(self.mt5(), CFG, self.store)
         self.store.con.execute("UPDATE bars SET spread = spread + 1 WHERE rowid = 5")
