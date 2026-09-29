@@ -265,11 +265,19 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
      - It reports both SHA-256s, row counts and ranges, per-side timestamp and price anomalies, the
        exact timestamp overlap, BID-only and ASK-only timestamps, and the spread distribution in
        points over the overlap. Nothing is filled, interpolated or resampled.
-     - Only when both sides align exactly does `--write-combined <NEW.csv>` write a new file: the BID
-       rows verbatim, plus the ask OHLC. It never overwrites an existing file.
-     - Import that new file as a new dataset, with a new `--dataset-name`, using
+     - `--write-combined <NEW.csv>` (together with `--out <report.json>`) writes a new file: the BID
+       rows with their values verbatim, plus the ask OHLC from the row with the identical timestamp.
+       It never overwrites any file and never fills anything. Both of these conditions must hold:
+       - there are no anomalies and no negative spread;
+       - alignment is exact, OR `--intersection` is given and every one-sided timestamp lies outside
+         the overlap's range. Your two downloads are shifted by one trading date, so the output is
+         then the exact overlap. Any one-sided timestamp inside the overlap always refuses.
+     - The report's `combined` section records the provenance: both source SHA-256s, their row
+       counts, the one-sided counts and ranges, the overlap range, and the output rows and SHA-256.
+     - The script also prints an `IMPORT NOTES` string. Pass it as `--notes`, so the manifest's
+       `provider_notes` keeps that lineage.
+     - Import the new file as a new dataset, with a new `--dataset-name`, using
        `--bid-close-column close --ask-close-column ask_close`.
-     - If the sides do not align exactly, combining them is a user decision; the check refuses.
    - The frozen BID-only datasets stay unchanged. Bars without an ask value get no spread, and
      trades on them are refused.
    - The alternative is a fixed spread (`spread_source: fixed`, `spread_points`) taken from evidence

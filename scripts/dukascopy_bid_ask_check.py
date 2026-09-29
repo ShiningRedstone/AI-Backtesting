@@ -7,12 +7,19 @@ timestamp overlap, one-sided timestamps, per-side anomalies and the close-to-clo
 (ask_close - bid_close, in price points) over the exact overlap.
 
     python scripts/dukascopy_bid_ask_check.py BID.csv ASK.csv --root . [--out report.json]
-        [--write-combined NEW.csv]
+        [--write-combined NEW.csv --out report.json [--intersection]]
 
-`--write-combined` is refused unless alignment is EXACT (same timestamps on both sides, no anomalies,
-no negative spread). It writes a NEW file (never an existing path, never either input): the BID
-file's own rows and columns, byte-for-byte values, plus `ask_open/ask_high/ask_low/ask_close` from the
-ASK file. That file is the input for a later, separate import with
+`--write-combined` writes a NEW file (never an existing path, never either input) only when there
+are no anomalies and no negative spread, and either
+  * alignment is EXACT (identical timestamps on both sides), or
+  * `--intersection` is given and every one-sided timestamp lies OUTSIDE the exact overlap's range
+    (boundary-only: the two downloads cover shifted periods). Output = the exact overlap only; an
+    interior one-sided timestamp (a gap on one side inside the overlap) always refuses.
+Rows are the BID file's own rows (text values verbatim, timestamps untouched) plus
+`ask_open/ask_high/ask_low/ask_close` from the ASK row with the identical timestamp text. Provenance
+(both source SHA-256s, row counts, one-sided counts and ranges, overlap range, output rows and
+SHA-256) goes into the `--out` report (required) and into an `import_notes` string for the import's
+`--notes` (stored in the dataset manifest as provider_notes). That file is the input for a later, separate import with
 `--bid-close-column close --ask-close-column ask_close` (a NEW dataset; the frozen BID-only
 datasets are untouched). Nothing is imported here.
 """
@@ -103,39 +110,61 @@ def check(bid_path: str, ask_path: str, root: str = ".", profile: str = "dukasco
     if spreads["close"]["negative"]:
         anomalies.append(f"negative close spread on {spreads['close']['negative']} bars (ask < bid)")
     exact = not len(bid_only) and not len(ask_only) and not anomalies
+    lo, hi = (both[0], both[-1]) if len(both) else (0, -1)
+    interior = int(((bid_only >= lo) & (bid_only <= hi)).sum() + ((ask_only >= lo) & (ask_only <= hi)).sum())
+    rng = lambda arr: ([str(pd.Timestamp(int(arr[0]), tz="UTC")), str(pd.Timestamp(int(arr[-1]), tz="UTC"))]
+                       if len(arr) else None)
     rep = {"report_version": REPORT_VERSION, "read_only": True, "profile": profile,
            "bid": bf, "ask": af,
            "alignment": {"overlap": int(len(both)), "bid_only": int(len(bid_only)), "ask_only": int(len(ask_only)),
                          "bid_only_first": fmt(bid_only), "ask_only_first": fmt(ask_only),
                          "overlap_first": str(pd.Timestamp(int(both[0]), tz="UTC")) if len(both) else None,
                          "overlap_last": str(pd.Timestamp(int(both[-1]), tz="UTC")) if len(both) else None,
-                         "negative_close_spread_first": fmt(both[neg_close])},
+                         "negative_close_spread_first": fmt(both[neg_close]),
+                         "bid_only_range": rng(bid_only), "ask_only_range": rng(ask_only),
+                         "one_sided_inside_overlap": interior},
            "spread_points": spreads,
            "anomalies": anomalies,
            "exactly_aligned": bool(exact),
+           "intersection_aligned": bool(len(both) and not anomalies and interior == 0),
            "note": "spread = ask - bid over the exact timestamp overlap only; nothing filled, interpolated or "
                    "resampled; one-sided timestamps are reported, never paired"}
-    return rep, (braw, araw, bf, af)
+    return rep, (braw, araw, bf, af, both, rb, ra)
 
 
-def write_combined(rep: dict, parts: tuple, out: str) -> str:
-    braw, araw, bf, af = parts
+def write_combined(rep: dict, parts: tuple, out: str, intersection: bool = False) -> dict:
+    braw, araw, bf, af, both, rb, ra = parts
     outp = Path(out).resolve()
-    if not rep["exactly_aligned"]:
-        raise SystemExit("refused: BID and ASK are not exactly aligned (see alignment/anomalies); nothing written")
+    ok = rep["exactly_aligned"] or (intersection and rep["intersection_aligned"])
+    if not ok:
+        why = ("one-sided timestamps inside the overlap or anomalies (see alignment/anomalies)" if intersection
+               else "BID and ASK are not exactly aligned (use --intersection only for boundary-only differences)")
+        raise SystemExit(f"refused: {why}; nothing written")
     if outp.exists():
         raise SystemExit(f"refused: {outp} already exists; nothing is ever overwritten")
     if outp in (Path(bf["file"]).resolve(), Path(af["file"]).resolve()):
         raise SystemExit("refused: output must be a new file, not an input")
     tcol = "timestamp"
-    if list(braw[tcol]) != list(araw[tcol]):          # identical rows in identical order, as TEXT
+    b_sel, a_sel = braw.iloc[rb], araw.iloc[ra]                # the exact overlap, source order (sorted, monotonic)
+    if list(b_sel[tcol]) != list(a_sel[tcol]):              # identical timestamp TEXT row by row
         raise SystemExit("refused: timestamp text differs row-by-row between BID and ASK; nothing written")
-    comb = braw.copy()
+    comb = b_sel.reset_index(drop=True).copy()
     for k in ("open", "high", "low", "close"):
-        comb[f"ask_{k}"] = araw[k].to_numpy()
+        comb[f"ask_{k}"] = a_sel[k].to_numpy()
     outp.parent.mkdir(parents=True, exist_ok=True)
     comb.to_csv(outp, index=False)
-    return file_sha256(str(outp))
+    al = rep["alignment"]
+    prov = {"file": str(outp), "sha256": file_sha256(str(outp)), "mode": "exact" if rep["exactly_aligned"] else "intersection",
+            "columns": list(comb.columns), "output_rows": int(len(comb)),
+            "bid_sha256": bf["sha256"], "ask_sha256": af["sha256"], "bid_rows": bf["rows"], "ask_rows": af["rows"],
+            "bid_only": al["bid_only"], "ask_only": al["ask_only"],
+            "bid_only_range": al["bid_only_range"], "ask_only_range": al["ask_only_range"],
+            "overlap_first": al["overlap_first"], "overlap_last": al["overlap_last"],
+            "transform": "BID rows restricted to the exact timestamp overlap, values verbatim; ask OHLC appended from the "
+                         "ASK row with the identical timestamp; no fill, interpolation, resampling or timestamp change"}
+    if prov["output_rows"] != al["overlap"]:
+        raise SystemExit("internal: output rows != overlap")
+    return prov
 
 
 def _print(r: dict) -> None:
@@ -158,7 +187,8 @@ def _print(r: dict) -> None:
         print(f"SPREAD ({k}, points): {s['stats_points']}  negative {s['negative']}  zero {s['zero']}  "
               f"not computable {s['not_computable']}")
     print(f"ANOMALIES: {r['anomalies'] or 'none'}")
-    print(f"EXACTLY ALIGNED: {r['exactly_aligned']}")
+    print(f"EXACTLY ALIGNED: {r['exactly_aligned']}   BOUNDARY-ONLY (intersection usable): {r['intersection_aligned']}  "
+          f"(one-sided inside overlap: {a['one_sided_inside_overlap']})")
 
 
 def main(argv=None) -> int:
@@ -167,23 +197,37 @@ def main(argv=None) -> int:
     ap.add_argument("ask")
     ap.add_argument("--root", default=".")
     ap.add_argument("--out", help="write the JSON report here (a new or report file; never an input)")
-    ap.add_argument("--write-combined", help="NEW csv path; only when exactly aligned")
+    ap.add_argument("--write-combined", help="NEW csv path (requires --out); exact alignment, or --intersection")
+    ap.add_argument("--intersection", action="store_true",
+                    help="with --write-combined: write the exact overlap when one-sided rows are boundary-only")
     a = ap.parse_args(argv)
+    ins = {Path(a.bid).resolve(), Path(a.ask).resolve()}
+    if a.out and Path(a.out).resolve() in ins:
+        raise SystemExit("refused: --out must not be an input file")
+    if a.write_combined and not a.out:
+        raise SystemExit("refused: --write-combined needs --out (the provenance report)")
+    if a.write_combined and Path(a.out).resolve() == Path(a.write_combined).resolve():
+        raise SystemExit("refused: --out and --write-combined must be different files")
     shas = (file_sha256(a.bid), file_sha256(a.ask))
     rep, parts = check(a.bid, a.ask, a.root)
     if a.write_combined:
-        rep["combined"] = {"file": str(Path(a.write_combined).resolve()), "sha256": write_combined(rep, parts, a.write_combined),
-                           "columns": list(parts[0].columns) + ["ask_open", "ask_high", "ask_low", "ask_close"]}
+        rep["combined"] = write_combined(rep, parts, a.write_combined, a.intersection)
     rep["sources_unchanged"] = (file_sha256(a.bid), file_sha256(a.ask)) == shas
     if a.out:
-        if Path(a.out).resolve() in (Path(a.bid).resolve(), Path(a.ask).resolve()):
-            raise SystemExit("refused: --out must not be an input file")
         Path(a.out).write_text(json.dumps(rep, indent=1, default=str))
     _print(rep)
     if "combined" in rep:
-        print(f"COMBINED (new file, not imported): {rep['combined']['file']}  sha256 {rep['combined']['sha256']}")
+        c = rep["combined"]
+        rep_sha = file_sha256(a.out)
+        c["import_notes"] = (f"BID/ASK combined ({c['mode']}): bid sha256 {c['bid_sha256']} ({c['bid_rows']} rows, "
+                             f"{c['bid_only']} bid-only {c['bid_only_range']}); ask sha256 {c['ask_sha256']} "
+                             f"({c['ask_rows']} rows, {c['ask_only']} ask-only {c['ask_only_range']}); overlap "
+                             f"{c['overlap_first']}..{c['overlap_last']}; {c['output_rows']} rows; report sha256 {rep_sha}")
+        print(f"COMBINED (new file, not imported): {c['file']}  sha256 {c['sha256']}  rows {c['output_rows']:,}  "
+              f"mode {c['mode']}")
+        print(f"IMPORT NOTES (pass as --notes): {c['import_notes']}")
     print(f"SOURCES UNCHANGED: {rep['sources_unchanged']}")
-    return 0 if rep["exactly_aligned"] else 2
+    return 0 if rep["exactly_aligned"] or ("combined" in rep) else 2
 
 
 if __name__ == "__main__":

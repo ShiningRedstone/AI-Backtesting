@@ -73,15 +73,24 @@ class TestBidAskCheck(unittest.TestCase):
                                       pd.read_csv(self.bid, dtype=str))           # BID values verbatim
         self.assertEqual(list(c["ask_close"]), list(self.ask_df["close"]))
         self.assertIn("EXACTLY ALIGNED: True", text)
+        self.assertEqual(rep["combined"]["mode"], "exact")
+        self.assertEqual(rep["combined"]["output_rows"], n)
+        self.assertEqual(rep["combined"]["sha256"], sha(comb))
         with self.assertRaises(SystemExit):                                         # never overwrites
-            self.run_main(self.bid, ask, "--write-combined", comb)
+            self.run_main(self.bid, ask, "--out", self.d / "r2.json", "--write-combined", comb)
+        with self.assertRaises(SystemExit):                                         # provenance report required
+            self.run_main(self.bid, ask, "--write-combined", self.d / "c3.csv")
+        for target in (self.bid, ask):                                              # never onto a source
+            with self.assertRaises(SystemExit):
+                self.run_main(self.bid, ask, "--out", self.d / "r3.json", "--write-combined", target)
+        self.assertEqual((sha(self.bid), sha(ask)), before)
 
     def test_combined_file_feeds_the_existing_import_path(self):
         """No architecture change: the existing bid/ask-close import options build the per-bar spread."""
         from edgelab.services import Services
         ask = self.write_ask(self.ask_df)
         comb = self.d / "combined.csv"
-        self.run_main(self.bid, ask, "--write-combined", comb)
+        self.run_main(self.bid, ask, "--out", self.d / "r.json", "--write-combined", comb)
         ws = self.d / "ws"
         shutil.copytree(REPO / "configs", ws / "configs")
         svc = Services(root=ws)
@@ -102,7 +111,9 @@ class TestBidAskCheck(unittest.TestCase):
         ask = self.write_ask(pd.concat([a, extra], ignore_index=True))
         comb = self.d / "combined.csv"
         with self.assertRaises(SystemExit):
-            self.run_main(self.bid, ask, "--write-combined", comb)
+            self.run_main(self.bid, ask, "--out", self.d / "r0.json", "--write-combined", comb)
+        with self.assertRaises(SystemExit):                                         # interior gaps: refused
+            self.run_main(self.bid, ask, "--out", self.d / "r0.json", "--write-combined", comb, "--intersection")
         self.assertFalse(comb.exists())
         code, text = self.run_main(self.bid, ask, "--out", self.d / "r.json")
         rep = json.loads((self.d / "r.json").read_text())
@@ -129,6 +140,72 @@ class TestBidAskCheck(unittest.TestCase):
         self.assertEqual(rep["ask"]["non_utc_offset_rows"], 1)
         self.assertEqual(len(rep["anomalies"]), 3)
         self.assertFalse(rep["exactly_aligned"])
+
+    def shifted_pair(self):
+        """The real shape: ASK downloaded one trading date EARLIER than BID (same length)."""
+        full = self.d / "full.csv"
+        write_fixture(full, start="2024-03-03", end="2024-03-16")
+        f = pd.read_csv(full, dtype=str)
+        ny = pd.to_datetime(f["timestamp"], utc=True).dt.tz_convert("America/New_York")
+        td = (ny.dt.tz_localize(None) + pd.Timedelta(hours=6)).dt.normalize()
+        first, last = td.min(), td.max()
+        bid = f[td != first].reset_index(drop=True)                               # BID: drops the first date
+        a = f[td != last].reset_index(drop=True)                                  # ASK: drops the last date
+        sp = np.round(np.random.default_rng(9).choice([3.0, 3.25, 3.5], len(a)), 3)
+        for k in ("open", "high", "low", "close"):
+            a[k] = (a[k].astype(float) + sp).map(lambda x: f"{x:.3f}")
+        bp, ap = self.d / "bid_shift.csv", self.d / "ask_shift.csv"
+        bid.to_csv(bp, index=False)
+        a.to_csv(ap, index=False)
+        return bp, ap, bid, a, int((td == first).sum()), int((td == last).sum())
+
+    def test_boundary_only_difference_writes_the_exact_intersection_with_provenance(self):
+        bp, ap, bid, ask, n_first, n_last = self.shifted_pair()
+        before = (sha(bp), sha(ap))
+        comb = self.d / "combined.csv"
+        with self.assertRaises(SystemExit):                                         # not exact without --intersection
+            self.run_main(bp, ap, "--out", self.d / "r.json", "--write-combined", comb)
+        self.assertFalse(comb.exists())
+        code, text = self.run_main(bp, ap, "--out", self.d / "r.json", "--write-combined", comb, "--intersection")
+        self.assertEqual(code, 0)
+        rep = json.loads((self.d / "r.json").read_text())
+        al, c = rep["alignment"], rep["combined"]
+        self.assertFalse(rep["exactly_aligned"])
+        self.assertTrue(rep["intersection_aligned"])
+        self.assertEqual((al["bid_only"], al["ask_only"], al["one_sided_inside_overlap"]), (n_last, n_first, 0))
+        overlap = len(bid) - n_last
+        self.assertEqual((c["mode"], c["output_rows"], al["overlap"]), ("intersection", overlap, overlap))
+        self.assertEqual((c["bid_sha256"], c["ask_sha256"]), before)
+        self.assertEqual((c["bid_rows"], c["ask_rows"], c["bid_only"], c["ask_only"]),
+                         (len(bid), len(ask), n_last, n_first))
+        self.assertLess(pd.Timestamp(c["ask_only_range"][1]), pd.Timestamp(c["overlap_first"]))   # before overlap
+        self.assertGreater(pd.Timestamp(c["bid_only_range"][0]), pd.Timestamp(c["overlap_last"]))  # after overlap
+        self.assertEqual(c["sha256"], sha(comb))
+        out = pd.read_csv(comb, dtype=str)
+        self.assertEqual(len(out), overlap)
+        exp_bid = bid.iloc[:overlap].reset_index(drop=True)                        # BID rows verbatim, timestamps untouched
+        pd.testing.assert_frame_equal(out[list(bid.columns)], exp_bid)
+        exp_ask = ask.iloc[n_first:].reset_index(drop=True)
+        self.assertEqual(list(out["timestamp"]), list(exp_ask["timestamp"]))
+        for k in ("open", "high", "low", "close"):
+            self.assertEqual(list(out[f"ask_{k}"]), list(exp_ask[k]))
+        self.assertEqual((sha(bp), sha(ap)), before)                               # sources untouched
+        self.assertIn("IMPORT NOTES (pass as --notes):", text)
+        self.assertIn(before[0], text)
+        self.assertIn(before[1], text)
+
+    def test_interior_gap_blocks_the_intersection(self):
+        bp, ap, bid, ask, n_first, n_last = self.shifted_pair()
+        a = ask.drop(index=[n_first + 100]).reset_index(drop=True)               # one ASK minute missing inside
+        a.to_csv(ap, index=False)
+        comb = self.d / "combined.csv"
+        with self.assertRaises(SystemExit):
+            self.run_main(bp, ap, "--out", self.d / "r.json", "--write-combined", comb, "--intersection")
+        self.assertFalse(comb.exists())
+        self.run_main(bp, ap, "--out", self.d / "r.json")
+        rep = json.loads((self.d / "r.json").read_text())
+        self.assertEqual(rep["alignment"]["one_sided_inside_overlap"], 1)
+        self.assertFalse(rep["intersection_aligned"])
 
     def test_refuses_same_file(self):
         with self.assertRaises(SystemExit):
