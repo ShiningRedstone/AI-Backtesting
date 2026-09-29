@@ -46,4 +46,31 @@ costs:
       providers: {}
     US100_CFD: *cfd_unconfigured
     NQ_CFD: *cfd_unconfigured
-    NAS100_HISTDATA: *cfd_unconfigured   # research proxy: no broker costs exist for it
+    # HistData research proxy. Symbol level stays UNCONFIGURED (any other provider is refused);
+    # only the HISTDATA feed gets the approved MNQ-equivalent research ASSUMPTIONS below.
+    NAS100_HISTDATA:
+      status: unconfigured
+      notes: "research proxy; only providers.HISTDATA carries assumed MNQ-equivalent costs"
+      slippage_unit: points
+      commission_per_side: null
+      slippage_ticks_market: null
+      slippage_ticks_stop: null
+      spread_points: null
+      providers:
+        HISTDATA:
+          status: assumed                 # research assumption, NOT broker-verified
+          notes: >-
+            HistData NSXUSD BID prices are a research proxy (not CME NQ/MNQ prices). Costs are
+            MNQ-equivalent research ASSUMPTIONS, not any broker's actual costs: 1 research unit =
+            $1/index point, 1 MNQ = 2 units; $1.00 per MNQ per side commission+fees = $0.50 per
+            unit per side; spread 0.50 points = 2 MNQ ticks; slippage 0.25 points = 1 MNQ tick
+            on market and stop fills. Financing none under the MNQ/futures concept.
+          commission_per_side: 0.50       # $ per research unit per side (commission + fees)
+          fees_per_side: 0
+          slippage_unit: points
+          slippage_ticks_market: 0.25     # index points
+          slippage_ticks_stop: 0.25
+          slippage_ticks_limit: 0
+          spread_source: fixed
+          spread_points: 0.50             # full spread in index points, charged once per round trip
+          financing_mode: none

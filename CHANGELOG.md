@@ -27,6 +27,13 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Sets `HISTDATA_NSXUSD_2020` / `_2021` / `_2022` / `_2024` (20 / 15 / 15 / 17 windows, 17:00-18:00 EDT, dates from the local trace; none for 2024-10-28/29) | CONFIGURED, TESTED (config); REQUIRES REAL DATA (local run must confirm every window matches bars and the gate accepts) |
 | Exclusion set for 2023 | NOT IMPLEMENTED (deliberately; 2023 stays coverage-rejected) |
 
+## HistData research cost baseline (after HistData import, before Phase 5)
+
+| Item | Status |
+|---|---|
+| `costs.symbols.NAS100_HISTDATA.providers.HISTDATA`: approved MNQ-equivalent research ASSUMPTIONS (`status: assumed`; commission 0.50/unit/side, slippage 0.25 pts market/stop, 0 limit, fixed spread 0.50 pts, financing none). Symbol level and other feeds stay unconfigured; `NAS100_CFD`/`US100_CFD`/`NQ_CFD` unchanged | CONFIGURED, TESTED |
+| These values as a broker's actual costs | NOT CLAIMED (assumed research baseline; replace per broker when verified) |
+
 ## Dataset reload fix (after HistData import, before Phase 5)
 
 | Item | Status |

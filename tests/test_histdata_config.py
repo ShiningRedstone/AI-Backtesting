@@ -34,11 +34,41 @@ class TestHistDataInstrument(unittest.TestCase):
         n = INSTRUMENTS["NAS100_CFD"]
         self.assertEqual((n.tick_size, n.tick_value, n.calendar, n.underlying), (0.01, 0.01, "CME_EQUITY", "NDX"))
 
-    def test_costs_refused_until_configured(self):
-        with self.assertRaises(CostConfigError):
+    def test_histdata_feed_has_assumed_mnq_equivalent_costs(self):
+        cm = cost_model_from_config(CFG, "NAS100_HISTDATA", provider="HISTDATA")
+        self.assertEqual((cm.status, cm.profile), ("assumed", "NAS100_HISTDATA@HISTDATA"))   # never broker_verified
+        self.assertEqual((cm.commission_per_side, cm.fees_per_side), (0.50, 0.0))           # $ per unit per side
+        self.assertEqual((cm.slippage_unit, cm.slippage_ticks_market, cm.slippage_ticks_stop,
+                          cm.slippage_ticks_limit), ("points", 0.25, 0.25, 0.0))
+        self.assertEqual((cm.spread_source, cm.spread_points), ("fixed", 0.50))
+        self.assertEqual(cm.financing_mode, "none")
+
+    def test_only_the_histdata_feed_is_configured(self):
+        with self.assertRaises(CostConfigError):                     # symbol level stays unconfigured
             cost_model_from_config(CFG, "NAS100_HISTDATA")
-        with self.assertRaises(CostConfigError):
-            cost_model_from_config(CFG, "NAS100_HISTDATA", provider="HISTDATA")
+        with self.assertRaises(CostConfigError):                     # any other feed is refused
+            cost_model_from_config(CFG, "NAS100_HISTDATA", provider="OTHERFEED")
+        for sym in ("NAS100_CFD", "US100_CFD", "NQ_CFD"):            # CFD profiles still unconfigured
+            for prov in (None, "HISTDATA"):
+                with self.assertRaises(CostConfigError):
+                    cost_model_from_config(CFG, sym, provider=prov)
+
+    def test_deterministic_round_trip_cost(self):
+        """2 research units = 1 MNQ. Market entry + stop exit: commission 2 x 0.50 x 2 = $2,
+        slippage (0.25 + 0.25) pts x $1 x 2 = $1, spread 0.50 pts x $1 x 2 = $1 -> $4 (a 10-point
+        stop risks $20, so cost = 0.2 R). Limit in / limit out pays no slippage -> $3."""
+        cm = cost_model_from_config(CFG, "NAS100_HISTDATA", provider="HISTDATA")
+        rt = cm.round_trip_base("market", "stop", 2.0, HD)
+        self.assertEqual({k: round(v, 10) for k, v in rt.items()},
+                         {"commission_usd": 2.0, "fees_usd": 0.0, "slippage_usd": 1.0, "spread_usd": 1.0,
+                          "slippage_ticks": 500.0})              # 0.50 points on the 0.001 proxy grid
+        total = sum(rt[k] for k in ("commission_usd", "fees_usd", "slippage_usd", "spread_usd"))
+        self.assertAlmostEqual(total, 4.0)
+        self.assertAlmostEqual(total / (10.0 * HD.point_value * 2.0), 0.2)
+        lim = cm.round_trip_base("limit", "limit", 2.0, HD)
+        self.assertAlmostEqual(lim["commission_usd"] + lim["slippage_usd"] + lim["spread_usd"], 3.0)
+        week = int(pd.Timedelta(days=7).value)                     # held over nights: no financing
+        self.assertEqual(cm.financing_usd(1, 20000.0, 2.0, HD, 0, week), 0.0)
 
 
 class TestHistDataCalendars(unittest.TestCase):

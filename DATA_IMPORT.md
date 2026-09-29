@@ -145,7 +145,8 @@ ds = svc.load_dataset(res["dataset_id"])       # a ValidatedDataset, re-validate
 Files: `YYYYMMDD HHMMSS;open;high;low;close;volume`, no header (import a copy with the header
 `ts;open;high;low;close;volume` prepended; never edit the raw file), bar OPEN, BID prices, volume 0
 (`--volume-type none`). Instrument `NAS100_HISTDATA` (tick 0.001: raw prices are on a 0.001 grid);
-it is a research proxy, not a tradable contract, and its costs ship unconfigured.
+it is a research proxy, not a tradable contract. Only the HISTDATA feed has costs: assumed
+MNQ-equivalent research values (`CONFIG.md`), not broker-verified.
 
 - **Timezone, evidence vs documentation:** HistData documents fixed EST without DST
   (`Etc/GMT+5`). Measured: summer FOMC 14:00 ET releases (2019-07-31, 2020-07-29, 2021-06-16,
