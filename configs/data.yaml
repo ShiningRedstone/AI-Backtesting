@@ -56,8 +56,15 @@ calendars:
   # Same single-session model as HISTDATA_NSX_R2: trading date D = D-1 18:00 -> D 16:15 (New York,
   # DST-safe). Under the earlier CME-style 18:00-17:00 assumption, 58,680 of the 90,453 "missing" bars
   # were this recurring 16:15-17:00 closure (45 bars x 1,304 trading dates), not data loss.
-  # NOT established: holidays / early closes (14 whole missing trading days are unresolved and stay
-  # visible as missing days). The instrument keeps calendar_status: provisional_unverified until
+  # Official regular hours (Dukascopy range-of-markets page for USATECH.IDX/USD, as supplied by the
+  # user): summer Sun-Fri 22:00-20:15 GMT, winter 23:00-21:15 GMT, daily break 20:15-22:00 / 21:15-23:00
+  # GMT = 18:00 -> 16:15 New York in both regimes when "summer" follows US DST; 0 outside-session bars
+  # across 5 years (incl. the US/EU DST-mismatch weeks) supports that reading.
+  # NOT established: holidays / early closes. The 14 whole missing trading days (2021-12-24, 2022-04-15,
+  # 2022-12-26, 2023-01-02, 2023-07-04, 2023-12-25, 2024-01-01, 2024-03-29, 2024-12-25, 2025-01-01,
+  # 2025-04-18, 2025-12-25, 2026-01-01, 2026-04-03) and the early-close-shaped gaps stay visible as
+  # warnings until Dukascopy's Trading Breaks Calendar entries for those dates are recorded as evidence
+  # (it could not be retrieved from the build environment). The instrument keeps calendar_status: provisional_unverified until
   # the inspector has been re-run under THIS calendar on the real file.
   DUKASCOPY_USATECH_OBSERVED:
     timezone: America/New_York

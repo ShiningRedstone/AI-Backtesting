@@ -209,8 +209,22 @@ API.
      were this recurring 16:15-17:00 closure (45 bars × 1,304 trading dates).
    - Under the observed schedule, about 31,773 bars (1.825%) remain missing. That is a WARN, and
      assumes the file really has no bars at 16:15-16:59; re-inspecting confirms it.
+   - The regular hours match Dukascopy's official range-of-markets entry for USATECH.IDX/USD, as
+     supplied by the user: summer Sun-Fri 22:00-20:15 GMT, winter 23:00-21:15 GMT. That is
+     18:00-16:15 New York time, provided "summer" follows US DST. There are 0 outside-session bars
+     across 5 years, including the US/EU DST-mismatch weeks, which supports that reading.
    - The 14 whole missing trading days and early closes are not resolved, and no holiday dates are
-     entered.
+     entered. The days are:
+     2021-12-24, 2022-04-15, 2022-12-26, 2023-01-02, 2023-07-04, 2023-12-25, 2024-01-01, 2024-03-29,
+     2024-12-25, 2025-01-01, 2025-04-18, 2025-12-25, 2026-01-01, 2026-04-03.
+   - They coincide with US exchange full closures. This alone is not evidence: the same file has
+     bars on other US holidays, for example 2023-04-07 (Good Friday 2023), 2022-07-04, 2024-07-04
+     and 2025-07-04.
+   - A date is entered in `holidays` / `early_closes` only with the corresponding entry from
+     Dukascopy's Trading Breaks Calendar (date, instrument, GMT times) quoted in a comment. That
+     calendar could not be retrieved from the build environment.
+   - Genuine feed gaps, such as the long intra-session gaps on 2025-11-28, stay missing-bar warnings
+     in any case.
    - Every backtest, search, validation and control is refused (HTTP `409 instrument_identity`)
      until the real file has been inspected and the calendar confirmed or replaced.
    - Then set `calendar_status: verified` and `calendar_evidence: "<what the inspection showed>"`.

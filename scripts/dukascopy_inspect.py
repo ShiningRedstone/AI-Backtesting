@@ -103,7 +103,7 @@ def main(argv=None) -> int:
         ds = validate_and_freeze(df, inst, cal, "1m", 1, "DUKASCOPY", "DRY_RUN_NOT_STORED", cfg.get("validation"),
                                  source_detail={"dry_run": True}, volume_type=facts["volume_type"])
         rep["validation"] = ds.report.to_dict() if hasattr(ds.report, "to_dict") else str(ds.report)
-        rep["gap_analysis"] = gap_analysis(ds)
+        rep["gap_analysis"] = gap_analysis(ds, max_listed=1_000_000)       # every gap, for classification
     except DataIntegrityError as exc:
         rep["validation"] = exc.report.to_dict() if hasattr(exc.report, "to_dict") else str(exc.report)
         rep["validation_failed"] = True
@@ -144,8 +144,11 @@ def _summary(r: dict) -> None:
               f"days with bars {g['coverage']['trading_days_with_bars']}/{g['coverage']['expected_trading_days']}")
         print(f"missing trading days ({len(g['coverage']['missing_trading_days'])}): {g['coverage']['missing_trading_days'][:60]}")
         print(f"coverage by year: {g['coverage']['by_year']}")
-        for x in g["largest_gaps"][:15]:
-            print(f"  {x['start']}  {x['missing_bars']:5d} bars  {x['trading_date']} {x['weekday']}  {x['position']}  {x['length_class']}")
+        for x in g["largest_gaps"][:25]:
+            print(f"  {x['start']}  {x['missing_bars']:5d} bars  {x['trading_date']} {x['weekday']}  {x['position']:17s} "
+                  f"{x['length_class']:10s} +{x['minutes_after_session_open']}m after open, "
+                  f"{x['minutes_before_session_close']}m before close")
+        print(f"(all {g['gaps_listed']} gaps are in the --out JSON under gap_analysis.largest_gaps)")
     else:
         print(g)
 

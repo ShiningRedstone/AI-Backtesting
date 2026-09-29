@@ -3,6 +3,15 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Dukascopy gap attribution (after Phase 9)
+
+| Item | Status |
+|---|---|
+| Gap analysis fix: gap runs split at trading-date boundaries. An early-close tail on D and a wholly missing D+1 were merged into one `session_close` gap, so the real-file report showed 14 missing days but 0 `whole_trading_day` gaps and distorted position counts. | FIXED, TESTED (regression reproduces the old symptom) |
+| Gaps carry `minutes_after_session_open` / `minutes_before_session_close`; the summary adds missing-bar totals per position and length; the inspector's JSON lists every gap | IMPLEMENTED, TESTED |
+| Official regular USATECH.IDX/USD hours (user-supplied from Dukascopy's range-of-markets page) match `DUKASCOPY_USATECH_OBSERVED` | DOCUMENTED |
+| Holidays / early closes for the 14 missing days and early-close-shaped gaps | NOT ENTERED: Dukascopy's Trading Breaks Calendar was not retrievable (egress blocked); no dates inferred from US holidays |
+
 ## Dukascopy calendar from the real-file inspection (after Phase 9)
 
 | Item | Status |

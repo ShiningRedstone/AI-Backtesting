@@ -38,14 +38,26 @@ def gap_analysis(ds, max_listed: int = 200) -> dict:
     missing = np.setdiff1d(exp_ns, ts, assume_unique=True)
     step = tf * 60_000_000_000
     exp_pos = np.searchsorted(exp_ns, missing)
-    # runs of consecutive EXPECTED bars (a run may span a session pause only if nothing was expected there)
-    breaks = np.flatnonzero(np.diff(exp_pos) != 1) + 1 if len(missing) else np.array([], int)
-    runs = np.split(np.arange(len(missing)), breaks) if len(missing) else []
     tds_exp = cal.trading_dates(expected).astype(str)
+    # runs of consecutive EXPECTED bars of ONE trading date: an early-close tail on D and a wholly
+    # missing D+1 are two gaps, never one (they are consecutive in the expected grid across the pause)
+    if len(missing):
+        new_date = tds_exp[exp_pos[1:]] != tds_exp[exp_pos[:-1]]
+        breaks = np.flatnonzero((np.diff(exp_pos) != 1) | new_date) + 1
+        runs = np.split(np.arange(len(missing)), breaks)
+    else:
+        runs = []
+    # position of every expected bar within its session (minutes after open / before close)
+    first_of_day = np.r_[True, tds_exp[1:] != tds_exp[:-1]]
+    last_of_day = np.r_[tds_exp[1:] != tds_exp[:-1], True]
+    day_id = np.cumsum(first_of_day) - 1
+    open_ns = exp_ns[first_of_day][day_id]
+    close_ns = exp_ns[last_of_day][day_id] + step
     have_td = set(np.unique(cal.trading_dates(idx)).astype(str).tolist())
     per_day_expected = pd.Series(1, index=tds_exp).groupby(level=0).size()
     gaps = []
-    counts: dict = {"by_length": {}, "by_position": {}, "by_weekday": {}}
+    counts: dict = {"by_length": {}, "by_position": {}, "by_weekday": {}, "missing_bars_by_position": {},
+                    "missing_bars_by_length": {}}
     for r in runs:
         first, last = missing[r[0]], missing[r[-1]]
         p0, p1 = exp_pos[r[0]], exp_pos[r[-1]]
@@ -64,10 +76,14 @@ def gap_analysis(ds, max_listed: int = 200) -> dict:
         wd = pd.Timestamp(td).day_name()[:3]
         for k, v in (("by_length", length), ("by_position", pos), ("by_weekday", wd)):
             counts[k][v] = counts[k].get(v, 0) + 1
+        for k, v in (("missing_bars_by_position", pos), ("missing_bars_by_length", length)):
+            counts[k][v] = counts[k].get(v, 0) + n
         gaps.append({"start": pd.Timestamp(first, tz="UTC").isoformat(),
                      "end": (pd.Timestamp(last, tz="UTC") + pd.Timedelta(nanoseconds=step)).isoformat(),
                      "missing_bars": n, "trading_date": str(td), "weekday": wd,
                      "length_class": length, "position": pos,
+                     "minutes_after_session_open": int((first - open_ns[p0]) // 60_000_000_000),
+                     "minutes_before_session_close": int((close_ns[p1] - (last + step)) // 60_000_000_000),
                      "likely": ("unlisted holiday or full-day outage (check the exchange/provider calendar)"
                                 if pos == "whole_trading_day" else
                                 "late open / early close vs the calendar (calendar may not match the source)"

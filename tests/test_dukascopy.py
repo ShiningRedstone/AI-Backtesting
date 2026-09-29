@@ -206,6 +206,53 @@ class TestObservedDukascopyCalendar(unittest.TestCase):
         self.assertEqual(self.cal.holidays, frozenset())                         # no holiday dates invented
 
 
+class TestGapRunsSplitAtTradingDates(unittest.TestCase):
+    """Regression: an early-close tail on D and a wholly missing D+1 are consecutive in the expected grid
+    (D 16:14 -> D+1's session opens at D 18:00). They must be two gaps: a session_close gap on D and a
+    whole_trading_day gap on D+1 - not one merged session_close gap (the real-file report showed 14
+    missing days but no whole_trading_day gap). Genuine mid-session blocks stay intra-session."""
+
+    def test_early_close_tail_and_following_whole_day_are_separate_gaps(self):
+        from edgelab.core.config import load_config
+        from edgelab.data.calendar import load_calendars
+        from edgelab.data.quality import gap_analysis
+        from edgelab.data.validation import validate_and_freeze
+        cfg = load_config(REPO / "configs")
+        cal = load_calendars(cfg)["DUKASCOPY_USATECH_OBSERVED"]
+        inst = load_instruments(cfg)["NQ_DUKASCOPY"]
+        ts = session_minutes("2024-03-03", "2024-04-27")
+        ny = ts.tz_convert("America/New_York")
+        day = ny.strftime("%Y-%m-%d")
+        td = (ny.tz_localize(None) + pd.Timedelta(hours=6)).normalize()
+        m = ny.hour * 60 + ny.minute
+        tail = (day == "2024-03-28") & (m >= 13 * 60 + 15) & (m < 16 * 60 + 15)      # 13:15-16:15 absent (180 bars)
+        whole = td == pd.Timestamp("2024-03-29")                                        # trading date absent (1335)
+        block = (day == "2024-04-10") & (m >= 10 * 60) & (m < 10 * 60 + 40)            # genuine feed gap (40)
+        keep = ts[~(tail | whole | block)]
+        n = len(keep)
+        c = 18000 + np.arange(n) * 0.001
+        df = pd.DataFrame({"ts": keep.as_unit("ns"), "open": c, "high": c + 1, "low": c - 1, "close": c,
+                           "volume": np.full(n, 0.5)})
+        ds = validate_and_freeze(df, inst, cal, "1m", 1, "DUKASCOPY", "TEST_GAPS", cfg.get("validation"),
+                                 volume_type="unknown")
+        g = gap_analysis(ds)
+        self.assertEqual(g["summary"]["missing_bars"], 180 + 1335 + 40)
+        self.assertEqual(g["summary"]["by_position"], {"whole_trading_day": 1, "session_close": 1, "intra_session": 1})
+        self.assertEqual(g["summary"]["missing_bars_by_position"],
+                         {"whole_trading_day": 1335, "session_close": 180, "intra_session": 40})
+        by_pos = {x["position"]: x for x in g["largest_gaps"]}
+        self.assertEqual(by_pos["whole_trading_day"]["trading_date"], "2024-03-29")
+        self.assertEqual(g["coverage"]["missing_trading_days"], ["2024-03-29"])
+        close = by_pos["session_close"]
+        self.assertEqual((close["trading_date"], close["missing_bars"], close["minutes_before_session_close"]),
+                         ("2024-03-28", 180, 0))
+        intra = by_pos["intra_session"]
+        self.assertEqual(intra["missing_bars"], 40)
+        self.assertEqual(intra["likely"], "feed gap (no bars published)")                 # stays a warning, not hidden
+        self.assertEqual(intra["minutes_after_session_open"], 16 * 60)                    # 18:00 -> 10:00 next day
+        self.assertEqual(ds.report.get("missing_trading_days").status, "WARN")
+
+
 class TestResearchRefusals(DukascopyBase):
     def test_backtest_refused_while_calendar_is_unverified(self):
         with self.assertRaises(InstrumentIdentityError) as cm:
