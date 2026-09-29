@@ -18,6 +18,7 @@
     python -m edgelab.cli research rank SEARCH_ID [--metric M] [--min-sample-label L]
     python -m edgelab.cli research job SEARCH_SPEC_FILE     (background job; progress; Ctrl-C cancels)
     python -m edgelab.cli report RUN_ID [RUN_ID ...]       (Phase 5: descriptive report, one strategy)
+    python -m edgelab.cli validate oos|walkforward STRATEGY DATASET_ID [--split DATE | --train-months N --test-months M]
 
 Add --json to any command for machine-readable output.
 """
@@ -140,6 +141,18 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("report", help="Phase 5: descriptive research report over stored runs of one strategy")
     p.add_argument("run_ids", nargs="+", help="RUN_ ids (one fixed strategy, one run per dataset)")
 
+    p = sub.add_parser("validate", help="fixed-strategy OOS split or walk-forward (+ seeded Monte Carlo)")
+    p.add_argument("kind", choices=("oos", "walkforward"))
+    p.add_argument("strategy", help="strategy file or STR_ id (used unchanged, frozen)")
+    p.add_argument("dataset_id")
+    p.add_argument("--split", help="oos: first instant of the out-of-sample window (UTC if no offset)")
+    p.add_argument("--train-months", type=int, help="walkforward: train window length")
+    p.add_argument("--test-months", type=int, help="walkforward: test window length (= step)")
+    p.add_argument("--anchored", action="store_true", help="walkforward: train from the dataset start")
+    p.add_argument("--record", action="store_true", help="store each window as a run record")
+    p.add_argument("--sims", type=int, default=1000, help="Monte Carlo simulations (default 1000)")
+    p.add_argument("--seed", type=int, default=0, help="Monte Carlo seed (default 0)")
+
     p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
     p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
     p.add_argument("target", help="search spec file (YAML/JSON), or a SRCH_ id for rank")
@@ -198,6 +211,21 @@ def main(argv: list[str] | None = None) -> int:
             return _strategy(svc, a, ap)
         elif a.cmd == "research":
             return _research(svc, a)
+        elif a.cmd == "validate":
+            try:
+                if a.kind == "oos":
+                    if not a.split:
+                        raise ValueError("oos needs --split")
+                    r = svc.evaluate_oos(a.strategy, a.dataset_id, a.split, a.record, a.sims, a.seed)
+                else:
+                    if not (a.train_months and a.test_months):
+                        raise ValueError("walkforward needs --train-months and --test-months")
+                    r = svc.walk_forward(a.strategy, a.dataset_id, a.train_months, a.test_months,
+                                         a.anchored, a.record, a.sims, a.seed)
+                _print(r, True)
+            except ValueError as exc:
+                print(f"validation refused: {exc}", file=sys.stderr)
+                return 2
         elif a.cmd == "report":
             try:
                 _print(svc.research_report(a.run_ids), True)

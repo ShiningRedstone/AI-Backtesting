@@ -165,6 +165,11 @@ edgelab/analytics/research.py  pooled / per-dataset metrics, stability counts, c
 edgelab/services.py            + research_report(run_ids)
 edgelab/cli.py                 + `report RUN_ID ...`
 edgelab/web/app.py             + GET /api/results/report?run_ids=...
+edgelab/research/validation.py OOS split / walk-forward windows, frozen definitions, seeded
+                               trade-resampling Monte Carlo (ADR-47)
+edgelab/services.py            + evaluate_oos, walk_forward; research_report gains monte_carlo;
+                               _run_cell/_record_cell pass a run status (default IN_SAMPLE)
+edgelab/cli.py                 + `validate oos|walkforward STRATEGY DATASET_ID ...`
 ```
 
 ## Decision records
@@ -629,6 +634,27 @@ edgelab/web/app.py             + GET /api/results/report?run_ids=...
   excluded).
 - **Deferred:** UI page, Monte Carlo, walk-forward/OOS, distributions/plots, weekday/month
   breakdowns.
+
+### ADR-47 Validation of FIXED strategies: time windows over one dataset, seeded trade resampling
+- **Problem:** nothing split data in time, walk-forward was not representable, run statuses
+  `OUT_OF_SAMPLE` / `WALK_FORWARD` existed but were never set, and there was no Monte Carlo.
+- **Chosen:** windows are UTC bar-open ranges `[start, end]`, consecutive windows 1 ns apart (no bar
+  in two windows). Each window runs through the existing `_run_cell(period=...)` path, i.e. on a
+  re-validated `restrict_to_period` dataset linked to its parent, so indicators restart at the window
+  start (causal; early bars may give no signals) and no position crosses a boundary. The strategy
+  document is frozen (JSON-canonical copy + hash, re-checked after every window) and every window must
+  compile to one `strategy_id`. OOS: `[start, split)` = train (`IN_SAMPLE`), `[split, end]` =
+  `OUT_OF_SAMPLE`. Walk-forward: consecutive non-overlapping test windows (`WALK_FORWARD`, step = test
+  length) each preceded by a rolling or anchored train window; nothing is re-fitted. Runs are
+  recorded only on request, notes carry a `VAL_...` id. Monte Carlo resamples OBSERVED per-trade R with
+  `numpy.random.default_rng(seed)`: `bootstrap` (with replacement; i.i.d. assumption, not established)
+  and `shuffle` (permutation; total R fixed, tests drawdown sequence dependence). It is not a market
+  simulation. With a fixed strategy a split measures stability across time, not a selection
+  procedure; reports say so.
+- **Deferred:** randomized-entry controls through research (`RandomEntry` exists only as a code
+  strategy used by `scripts/phase1_demo.py`, with fixed-point stops, so it is not directly comparable
+  to DSL strategies with feature-based stops); walk-forward across several stored datasets (windows are
+  within one dataset; the HistData datasets are one per year); HTTP/UI for validation.
 
 ## Known limitations (Phase 1)
 

@@ -35,6 +35,8 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | `Services.research_report(run_ids)`, CLI `report RUN_ID ...`, `GET /api/results/report?run_ids=...` (one fixed strategy; mixed strategies and repeated datasets refused) | IMPLEMENTED, TESTED |
 | Research page UI, Monte Carlo, walk-forward/OOS, distributions, weekday/month breakdowns | NOT IMPLEMENTED (deferred) |
 | Real five-year EMA pipeline baseline analysed through the report | REQUIRES the local store (runs are local) |
+| Validation of fixed strategies (ADR-47): OOS split (`IN_SAMPLE` / `OUT_OF_SAMPLE` runs), rolling/anchored walk-forward (`WALK_FORWARD` runs), frozen definition checks, seeded bootstrap/shuffle Monte Carlo of observed trades; `Services.evaluate_oos`, `Services.walk_forward`, CLI `validate`; `research_report` gains `monte_carlo` | IMPLEMENTED, TESTED |
+| Randomized-entry control through research; walk-forward across several datasets; validation HTTP/UI | NOT IMPLEMENTED (deferred) |
 
 ## HistData research cost baseline (after HistData import, before Phase 5)
 

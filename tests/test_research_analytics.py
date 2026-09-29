@@ -149,6 +149,9 @@ class TestResearchReportService(unittest.TestCase):
         self.assertEqual(rep["cost_status"], ["assumed"])
         self.assertAlmostEqual(rep["cost_sensitivity"]["breakeven_cost_multiplier"], 2.5)
         self.assertEqual(rep["stability"]["groups_net_positive"], 1)
+        mc = rep["monte_carlo"]
+        self.assertAlmostEqual(mc["shuffle"]["observed_total_r"], rep["pooled"]["net_r"])
+        self.assertEqual(mc, self.svc.research_report([self.r19, self.r20])["monte_carlo"])   # seeded
         json.dumps(rep)                                                   # strict-JSON contract
 
     def test_labels_keep_proxy_and_assumed_cost_caveats(self):

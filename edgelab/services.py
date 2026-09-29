@@ -315,7 +315,8 @@ class Services:
 
     def _run_cell(self, src: Any, dataset_id: str, record: bool = False, *,
                   parent_strategy_id: str | None = None, mutation: str | None = None,
-                  notes: str | None = None, period: tuple | None = None, lock=None) -> dict:
+                  notes: str | None = None, period: tuple | None = None, lock=None,
+                  status: str = "IN_SAMPLE") -> dict:
         """One (strategy, dataset) cell through the existing engine: load (re-validated) ->
         [optional period restriction, re-validated] -> compile -> cost model (CFD refusal) ->
         bind -> causality-checked backtest with the strategy's OWN sizing -> metrics ->
@@ -343,12 +344,13 @@ class Services:
         run_id = None
         if record:
             run_id = self._record_cell(res, met, synthetic, notes=notes, parent_strategy_id=parent_strategy_id,
-                                       mutation=mutation, lock=lock)
+                                       mutation=mutation, lock=lock, status=status)
         return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
                 "metrics": met, "synthetic": synthetic, "run_id": run_id}
 
     def _record_cell(self, res, met: Mapping, synthetic: bool, *, notes: str | None = None,
-                     parent_strategy_id: str | None = None, mutation: str | None = None, lock=None) -> str:
+                     parent_strategy_id: str | None = None, mutation: str | None = None, lock=None,
+                     status: str = "IN_SAMPLE") -> str:
         """The run-record step of `_run_cell` (also used by the parallel search parent, which records
         results computed in worker processes). Synthetic data is always labelled first."""
         from edgelab.research.runs import record_run
@@ -358,7 +360,7 @@ class Services:
         elif notes is None:
             notes = "single backtest (Strategy Lab)"
         with (lock if lock is not None else nullcontext()):
-            return record_run(self.store, self.cfg, res, met, notes=notes,
+            return record_run(self.store, self.cfg, res, met, notes=notes, status=status,
                               parent_strategy_id=parent_strategy_id, mutation=mutation)
 
     def run_search(self, spec: Any, workers: int | None = None) -> dict:
@@ -633,7 +635,8 @@ class Services:
                           "n_trades": len(trades), "trades_shown": len(t),
                           "trades": t.to_dict("records")})
 
-    def research_report(self, run_ids: list[str], hour_timezone: str = "America/New_York") -> dict:
+    def research_report(self, run_ids: list[str], hour_timezone: str = "America/New_York",
+                        mc_sims: int = 1000, mc_seed: int = 0) -> dict:
         """Phase 5: descriptive analytics over STORED runs of ONE fixed strategy on distinct
         datasets (e.g. one run per year). Pooled + per-dataset metrics, stability counts, canonical
         session and entry-hour breakdowns, exact cost sensitivity at the configured multipliers,
@@ -675,9 +678,97 @@ class Services:
             "sessions": ra.session_breakdown(pooled, self.sessions, thr),
             "hours": ra.hour_breakdown(pooled, hour_timezone, thr),
             "cost_sensitivity": ra.cost_sensitivity_table(pooled, mults),
-            "deferred": ["Monte Carlo", "walk-forward / out-of-sample", "trade-distribution plots",
+            "monte_carlo": self._monte_carlo(pooled, mc_sims, mc_seed),
+            "deferred": ["randomized-entry control comparison", "trade-distribution plots",
                          "weekday/month breakdowns", "Research page UI"],
         })
+
+    @staticmethod
+    def _monte_carlo(trades, n_sims: int, seed: int) -> dict:
+        from edgelab.research.validation import monte_carlo
+        r = trades["net_r"].to_numpy(float) if len(trades) else []
+        return {m: monte_carlo(r, n_sims, seed, m) for m in ("bootstrap", "shuffle")}
+
+    # ------------------------------------------------------------ validation (fixed strategies)
+    def _window_cell(self, frozen: Mapping, frozen_hash: str, dataset_id: str, window, status: str,
+                     record: bool, note: str) -> dict:
+        from edgelab.analytics import research as ra
+        from edgelab.research.validation import copy_frozen, freeze_definition
+        cell = self._run_cell(copy_frozen(frozen), dataset_id, record, period=(window.start, window.end),
+                              notes=note, status=status)
+        if freeze_definition(frozen)[1] != frozen_hash:                  # nothing may alter the frozen definition
+            raise RuntimeError("frozen strategy definition changed during validation")
+        res = cell["result"]
+        return {"window": window.to_dict(), "status": status, "run_id": cell["run_id"],
+                "strategy_id": cell["strategy"].strategy_id,
+                "dataset_id": res.dataset["dataset_id"], "parent_dataset_id": res.dataset.get("parent_dataset_id"),
+                "cost_status": res.assumptions["cost_status"], "cost_profile": res.assumptions["costs"]["profile"],
+                "trades_hash": res.trades_hash,
+                "metrics": ra._pick(cell["metrics"], ra.REPORT_METRICS),
+                "_trades": res.trades, "_record": {"assumptions": res.assumptions, "dataset": res.dataset,
+                                                   "notes": note if not cell["synthetic"] else "SYNTHETIC"}}
+
+    def _validation_output(self, kind: str, vid: str, strategy_ids: set, frozen_hash: str, dataset_id: str,
+                           cells: list[dict], extra: dict) -> dict:
+        from edgelab.analytics import research as ra
+        if len(strategy_ids) != 1:
+            raise RuntimeError(f"windows compiled to different strategies: {sorted(strategy_ids)}")
+        labels = ra.research_labels([c["_record"] for c in cells], load_instruments(self.cfg))
+        labels.append("Fixed strategy: no window was used to choose parameters, so this measures stability "
+                      "across time; it is not a test of a selection procedure.")
+        clean = [{k: v for k, v in c.items() if not k.startswith("_")} for c in cells]
+        return _jsonable({"validation": kind, "validation_id": vid, "strategy_id": next(iter(strategy_ids)),
+                          "definition_hash": frozen_hash, "dataset_id": dataset_id,
+                          "cost_status": sorted({c["cost_status"] for c in cells}),
+                          "labels": labels, "windows": clean, **extra})
+
+    def evaluate_oos(self, src: Any, dataset_id: str, split_at: Any, record: bool = False,
+                     mc_sims: int = 1000, mc_seed: int = 0) -> dict:
+        """Temporal holdout of ONE fixed strategy: [start, split) = train (run status IN_SAMPLE),
+        [split, end] = out-of-sample (OUT_OF_SAMPLE). Same frozen definition and cost profile on both;
+        each window is a re-validated restricted dataset linked to its parent."""
+        from edgelab.research.validation import freeze_definition, oos_windows, validation_id
+        frozen, fh = freeze_definition(self._definition(src))
+        m = self.store.get_manifest(dataset_id)
+        train, oos = oos_windows(m.start, m.end, split_at)
+        vid = validation_id("oos", fh, dataset_id, [train.to_dict(), oos.to_dict()])
+        cells = [self._window_cell(frozen, fh, dataset_id, w, st, record, f"{vid} OOS evaluation: {w.role} window")
+                 for w, st in ((train, "IN_SAMPLE"), (oos, "OUT_OF_SAMPLE"))]
+        return self._validation_output("oos", vid, {c["strategy_id"] for c in cells}, fh, dataset_id, cells,
+                                       {"monte_carlo_oos": self._monte_carlo(cells[1]["_trades"], mc_sims, mc_seed)})
+
+    def walk_forward(self, src: Any, dataset_id: str, train_months: int, test_months: int,
+                     anchored: bool = False, record: bool = False, mc_sims: int = 1000, mc_seed: int = 0) -> dict:
+        """Walk-forward of ONE fixed strategy over one dataset: consecutive non-overlapping test
+        windows (run status WALK_FORWARD), each preceded by its train window (IN_SAMPLE; rolling or
+        anchored). Nothing is re-fitted between windows. Pooled OOS = all test-window trades."""
+        from edgelab.analytics import research as ra
+        from edgelab.research.validation import freeze_definition, validation_id, walk_forward_windows
+        frozen, fh = freeze_definition(self._definition(src))
+        m = self.store.get_manifest(dataset_id)
+        segs = walk_forward_windows(m.start, m.end, train_months, test_months, anchored)
+        vid = validation_id("walk_forward", fh, dataset_id,
+                            [{"train": s["train"].to_dict(), "test": s["test"].to_dict()} for s in segs])
+        cells, tests = [], {}
+        for sg in segs:
+            for w, st in ((sg["train"], "IN_SAMPLE"), (sg["test"], "WALK_FORWARD")):
+                c = self._window_cell(frozen, fh, dataset_id, w, st, record,
+                                      f"{vid} walk-forward segment {sg['index']}: {w.role} window")
+                c["segment"], c["partial"] = sg["index"], sg["partial"]
+                cells.append(c)
+                if w.role == "test":
+                    tests[f"segment {sg['index']}"] = c["_trades"]
+        test_rows = [{"segment": c["segment"], "partial": c["partial"], **c["metrics"]}
+                     for c in cells if c["window"]["role"] == "test"]
+        pooled = ra.pooled_trades(tests)
+        return self._validation_output(
+            "walk_forward", vid, {c["strategy_id"] for c in cells}, fh, dataset_id, cells,
+            {"scheme": "anchored" if anchored else "rolling", "train_months": train_months,
+             "test_months": test_months,
+             "oos_pooled": ra.pooled_summary(tests, self.cfg.get("sample_size")),
+             "oos_segments": test_rows,
+             "oos_stability": ra.stability_summary(test_rows),
+             "monte_carlo_oos": self._monte_carlo(pooled, mc_sims, mc_seed)})
 
     def list_import_files(self, import_dirs: list[str]) -> list[dict]:
         out = []
