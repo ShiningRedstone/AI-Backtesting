@@ -95,6 +95,80 @@ class TestTimestamps(Base):
         self.assertIn("localize", str(cm.exception))
 
 
+class TestExplicitOffsets(Base):
+    """Real-data finding (first CFD file): a feed mixing `Z` and `-04:00` offsets was refused by
+    pandas ("Mixed timezones detected"). Explicit offsets are absolute instants and convert to
+    UTC exactly; naive values still need source_timezone; a mix of the two is refused."""
+
+    def write(self, name, stamps, **extra):
+        n = len(stamps)
+        base = self.df.iloc[:n]
+        pd.DataFrame({"time": stamps, "open": base["open"].to_numpy(), "high": base["high"].to_numpy(),
+                      "low": base["low"].to_numpy(), "close": base["close"].to_numpy(),
+                      "volume": base["volume"].to_numpy(), **extra}).to_csv(self.tmp / name, index=False)
+        return ImportOptions(str(self.tmp / name), "NAS100_CFD", "P", "CFD", "1m", source_timezone="UTC",
+                             columns={"ts": "time"})
+
+    def parse(self, stamps, source_timezone="UTC"):
+        from edgelab.data.importer import parse_timestamps
+        o = ImportOptions("unused.csv", "NAS100_CFD", "P", "CFD", "1m", source_timezone=source_timezone)
+        return parse_timestamps(pd.DataFrame({"ts": stamps}), o)
+
+    def test_all_utc_z(self):
+        ts = self.parse(["2025-10-02T13:14:00Z", "2025-10-02T13:15:00Z"])
+        self.assertEqual(list(ts.astype(str)), ["2025-10-02 13:14:00+00:00", "2025-10-02 13:15:00+00:00"])
+
+    def test_mixed_explicit_offsets_convert_to_exact_utc(self):
+        ts = self.parse(["2025-10-02T13:14:00Z", "2026-04-03T09:10:00-04:00", "2026-01-05T09:30:00-05:00",
+                         "2026-01-05T15:30:00+0100", "2026-01-05T14:31:00Z"])
+        self.assertEqual(list(ts.astype(str)), ["2025-10-02 13:14:00+00:00", "2026-04-03 13:10:00+00:00",
+                                                "2026-01-05 14:30:00+00:00", "2026-01-05 14:30:00+00:00",
+                                                "2026-01-05 14:31:00+00:00"])
+        with self.assertRaises(ImportFailed):                      # explicit offsets + a "+Nh" shift
+            self.parse(["2025-10-02T13:14:00Z", "2026-04-03T09:10:00-04:00"], "America/New_York+7h")
+
+    def test_mixed_offsets_import_without_shifting_any_bar(self):
+        utc = pd.DatetimeIndex(self.df["ts"])                       # a week of 1m bars across US DST
+        ny = utc.tz_convert("America/New_York")
+        stamps = [(u.strftime("%Y-%m-%dT%H:%M:%SZ") if i % 2 == 0 else n.isoformat())
+                  for i, (u, n) in enumerate(zip(utc, ny))]         # alternate Z / -05:00 / -04:00
+        self.assertTrue(any(s.endswith("-05:00") for s in stamps) and any(s.endswith("-04:00") for s in stamps))
+        r = import_dataset(self.write("mixed.csv", stamps), CFG, self.store)
+        ds = load_validated(self.store, CFG, r.dataset_id)
+        np.testing.assert_array_equal(ds.bars.ts_ns, utc.as_unit("ns").asi8)      # identical instants
+        np.testing.assert_allclose(ds.bars.close, self.df["close"].to_numpy())
+        self.assertEqual(ds.manifest.timestamp_convention, "bar_open_utc")
+        insp = inspect_file(self.write("mixed2.csv", stamps), CFG)
+        self.assertNotIn("normalize_error", insp)
+        self.assertTrue(insp["monotonic"])
+        self.assertEqual((insp["duplicate_timestamps"], insp["inferred_bar_minutes"]), (0, 1.0))
+
+    def test_naive_timestamps_still_need_source_timezone(self):
+        naive = ["2024-03-06 09:30:00", "2024-03-06 09:31:00"]
+        self.assertEqual(list(self.parse(naive, "America/New_York").astype(str)),
+                         ["2024-03-06 14:30:00+00:00", "2024-03-06 14:31:00+00:00"])   # declared zone, not UTC
+        o = self.write("naive.csv", naive)
+        o.source_timezone = None
+        with self.assertRaises(ImportFailed) as cm:
+            import_dataset(o, CFG, self.store)
+        self.assertIn("source_timezone", str(cm.exception))
+
+    def test_explicit_and_naive_mix_is_refused(self):
+        for stamps in (["2025-10-02T13:14:00Z", "2025-10-02 13:15:00"],
+                       ["2025-10-02 13:14:00", "2025-10-02T13:15:00-04:00"]):
+            with self.assertRaises(ImportFailed) as cm:
+                self.parse(stamps)
+            self.assertIn("refusing to guess", str(cm.exception))
+
+    def test_malformed_timestamps_still_fail(self):
+        for stamps in (["2025-10-02T13:14:00Z", "not a time"], ["2025-10-02T25:14:00Z", "2025-10-02T13:15:00Z"],
+                       ["2025-10-02T13:14:00+99:00", "2025-10-02T13:15:00Z"]):
+            with self.subTest(stamps=stamps):
+                with self.assertRaises(ImportFailed):
+                    self.parse(stamps)
+        self.assertEqual(self.store.list_datasets(), [])
+
+
 class TestDocumentedLayouts(Base):
     """Every layout shown in DATA_IMPORT.md is exercised here."""
 

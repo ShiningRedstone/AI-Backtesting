@@ -521,6 +521,19 @@ scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worke
   `run_across_datasets` output is unchanged; it is not used by batch search (it sizes with the
   config default, not the strategy's own sizing).
 
+### ADR-42 Explicit UTC offsets may differ within one file (Phase 2 importer modified)
+- **Problem:** the first real CFD export mixed `...Z` and `...-04:00` timestamps. `pd.to_datetime`
+  refuses mixed offsets ("Mixed timezones detected"), so the file could not even be inspected.
+- **Options:** (a) `utc=True` always (would silently treat naive values as UTC: a guess);
+  (b) require the user to rewrite the file; (c) convert only when every value states its offset.
+- **Chosen:** (c). In `parse_timestamps`, if every non-blank value ends in `Z` or `+/-HH[:MM]` after a
+  time, the values are absolute instants and are parsed with `utc=True` (exact conversion, bar-open
+  semantics and nanosecond resolution unchanged). Naive values still need `source_timezone`; a mix
+  of explicit and naive values is refused; malformed values still fail. A `+Nh` server-clock shift
+  on explicit offsets is still refused. All other import behaviour is unchanged.
+- **Verified:** a 1m week across US DST written with alternating `Z` / `-05:00` / `-04:00` stamps
+  imports to exactly the original UTC nanoseconds; the prior importer tests pass unchanged.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and

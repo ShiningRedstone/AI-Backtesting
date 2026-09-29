@@ -151,6 +151,9 @@ def _col(raw: pd.DataFrame, name: str | None, what: str) -> pd.Series:
     return raw[name]
 
 
+_EXPLICIT_OFFSET = re.compile(r"\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}(?::?\d{2})?)$", re.IGNORECASE)
+
+
 def parse_timestamps(raw: pd.DataFrame, o: ImportOptions) -> pd.DatetimeIndex:
     if o.date_column or o.time_column:
         s = _col(raw, o.date_column, "date").str.strip() + " " + _col(raw, o.time_column, "time").str.strip()
@@ -158,8 +161,18 @@ def parse_timestamps(raw: pd.DataFrame, o: ImportOptions) -> pd.DatetimeIndex:
         s = _col(raw, o.columns.get("ts", "ts"), "timestamp")
     if o.epoch_unit:
         return pd.DatetimeIndex(pd.to_datetime(pd.to_numeric(s), unit=o.epoch_unit, utc=True))
+    # Values that carry their own UTC offset ("Z", "+02:00", "-0400") are absolute instants and may
+    # differ in offset (e.g. a feed that switches from Z to local offsets across DST); they convert
+    # to UTC exactly. utc=True is used ONLY when every present value is explicit - on naive values
+    # it would silently assume UTC. A mix of explicit and naive values is refused, never guessed.
+    present = s.notna() & (s.str.strip() != "")
+    explicit = s[present].str.strip().str.contains(_EXPLICIT_OFFSET, na=False)
+    if explicit.any() and not explicit.all():
+        raise ImportFailed("normalize", f"{int((~explicit).sum())} of {len(explicit)} timestamps have no UTC offset "
+                           "while the others do; refusing to guess their timezone")
+    all_explicit = bool(len(explicit)) and bool(explicit.all())
     try:
-        ts = pd.to_datetime(s, format=o.datetime_format) if o.datetime_format else pd.to_datetime(s)
+        ts = pd.to_datetime(s, format=o.datetime_format, utc=all_explicit)
     except (ValueError, TypeError) as exc:
         raise ImportFailed("normalize", f"cannot parse timestamps ({exc}); set datetime_format") from exc
     ts = pd.DatetimeIndex(ts)

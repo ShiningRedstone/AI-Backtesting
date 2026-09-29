@@ -3,6 +3,14 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Real-data import fix (after Phase 4, before Phase 5)
+
+| Item | Status |
+|---|---|
+| Finding: the first real CFD file (`time,open,high,low,close,volume`; stamps such as `2025-10-02T13:14:00Z` and `2026-04-03T09:10:00-04:00`) failed inspection with "Mixed timezones detected" | FOUND (real data) |
+| **Phase 2 importer change:** timestamps that all carry an explicit offset (`Z`, `+/-HH:MM`) are converted to UTC exactly even when offsets differ; naive stamps still require `source_timezone`; explicit + naive mixes and malformed stamps are refused (ADR-42) | IMPLEMENTED, TESTED |
+| Whether the file's stamps mark bar open or close, its price basis, volume meaning and broker costs | REQUIRES REAL DATA (user must state them; not inferred) |
+
 ## Phase 4: Batch Research & Search
 
 | Item | Status |
