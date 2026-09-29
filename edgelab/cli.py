@@ -20,6 +20,8 @@
     python -m edgelab.cli report RUN_ID [RUN_ID ...]       (Phase 5: descriptive report, one strategy)
     python -m edgelab.cli validate oos|walkforward STRATEGY DATASET_ID [--split DATE | --train-months N --test-months M]
     python -m edgelab.cli validate control STRATEGY DATASET_ID [--controls N --seed S]   (random-entry control)
+    python -m edgelab.cli prop configs | list | validate FILE_OR_ID | show PROP_ID
+    python -m edgelab.cli prop simulate RUN_ID --config FILE_OR_ID [--config ...] [--accounts N] [--record]
 
 Add --json to any command for machine-readable output.
 """
@@ -155,6 +157,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0, help="Monte Carlo / control base seed (default 0)")
     p.add_argument("--controls", type=int, default=20, help="control: random-entry realizations (default 20)")
 
+    p = sub.add_parser("prop", help="Phase 6 prop-account simulation over a stored run (read-only)")
+    p.add_argument("action", choices=("configs", "list", "validate", "simulate", "show"))
+    p.add_argument("target", nargs="?", help="validate: rule-set file or id; simulate: RUN_ id; show: PROP_ id")
+    p.add_argument("--config", action="append", default=[],
+                   help="simulate: rule-set file or id from configs/prop (repeat: one account per config)")
+    p.add_argument("--accounts", type=int, default=1, help="simulate: identical accounts per --config (default 1)")
+    p.add_argument("--record", action="store_true", help="simulate: store the simulation under <data>/prop_simulations")
+
     p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
     p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
     p.add_argument("target", help="search spec file (YAML/JSON), or a SRCH_ id for rank")
@@ -230,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 print(f"validation refused: {exc}", file=sys.stderr)
                 return 2
+        elif a.cmd == "prop":
+            return _prop(svc, a)
         elif a.cmd == "report":
             try:
                 _print(svc.research_report(a.run_ids), True)
@@ -395,6 +407,50 @@ def _research_job(svc, a) -> int:
     st = svc.job_status(jid)
     _print(st if a.json else {k: st[k] for k in ("job_id", "search_id", "state", "error", "progress")}, a.json)
     return {"completed": 0, "cancelled": 130}.get(st["state"], 1)
+
+
+
+def _prop_source(x: str):
+    from pathlib import Path
+    return Path(x).read_text() if Path(x).is_file() else x
+
+
+def _prop(svc, a) -> int:
+    from edgelab.prop.rules import PropConfigError
+    from edgelab.prop.simulator import PropDataError
+    try:
+        if a.action == "configs":
+            _print([{k: c[k] for k in ("file", "id", "name", "valid", "synthetic_test_only", "config_hash", "errors")}
+                    for c in svc.prop_configs()], a.json)
+        elif a.action == "list":
+            _print(svc.list_prop_simulations(), a.json)
+        elif not a.target:
+            raise ValueError(f"prop {a.action} needs a target")
+        elif a.action == "validate":
+            r = svc.validate_prop_config(_prop_source(a.target))
+            _print(r, True)
+            return 0 if r["valid"] else 2
+        elif a.action == "show":
+            _print(svc.get_prop_simulation(a.target), True)
+        else:
+            if not a.config or a.accounts < 1:
+                raise ValueError("simulate needs at least one --config and --accounts >= 1")
+            accounts = [{"account_id": f"A{i + 1}", "config": _prop_source(c)}
+                        for i, c in enumerate(c for c in a.config for _ in range(a.accounts))]
+            r = svc.prop_simulate(a.target, accounts, a.record)
+            if a.json:
+                _print(r, True)
+            else:
+                _print({"simulation_id": r["simulation_id"], "recorded": r["recorded"], "labels": r["labels"],
+                        "lineage": r["lineage"], "strategy_result": r["strategy_result"],
+                        "accounts": [x["summary"] for x in r["accounts"]]}, True)
+    except PropConfigError as exc:
+        print("prop rule set refused:\n  " + "\n  ".join(exc.errors), file=sys.stderr)
+        return 2
+    except (PropDataError, ValueError, KeyError) as exc:
+        print(f"prop simulation refused: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

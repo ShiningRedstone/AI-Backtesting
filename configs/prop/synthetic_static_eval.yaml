@@ -1,0 +1,29 @@
+# SYNTHETIC / TEST-ONLY prop rule set. It does NOT describe any real prop firm or program.
+# Numbers are illustrative placeholders for exercising the simulator. Enter a real program's
+# rules yourself from that firm's current official documentation before relying on any result.
+kind: edgelab.prop_rules
+schema_version: 1
+id: SYNTH_STATIC_EVAL
+name: Synthetic static-drawdown evaluation (test-only)
+description: Illustrative evaluation with a static drawdown floor and a daily loss limit.
+synthetic_test_only: true
+account:
+  starting_balance: 50000
+  currency: USD
+trading_day:
+  timezone: America/New_York
+  reset_time: "17:00"
+target:
+  profit: 3000
+  stop_on_target: true
+drawdown:
+  max: 2500
+  mode: static
+daily_loss:
+  max: 1000
+  action: terminate
+detection: end_of_trade
+min_trading_days: 5
+position:
+  max_units: 10          # compared with the trade's `contracts` column (instrument units)
+  action: terminate

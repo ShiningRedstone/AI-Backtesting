@@ -19,7 +19,7 @@ result under stated assumptions*, not a forecast.
 | 4 Research engine | strategy x dataset batch search (strategy ids, Mode A variation batches, Mode B proposal batches, families), deterministic planning with a max-cells refusal, durable resumable SQLite search storage, honest trial accounting, in-sample ranking and shortlist, background jobs with progress, cancellation and restart reconciliation, process-parallel execution, benchmark, Research CLI / API / web page | **done** (see CHANGELOG.md) |
 | 5 Analytics | breakdowns by hour/session/weekday/month/year/event, distributions, rolling | **next** |
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
-| 7 Prop simulator | evaluation, funded, payout, multi-account | planned |
+| 7 Prop simulator | evaluation, funded, payout, multi-account | **prop-account simulation layer done** (requested as "Phase 6"): versioned rule sets, evaluation rules, multi-account, lineage, web page (PROP_SIMULATION.md); funded/payout phases not built |
 | 8 Reports | HTML dashboard, PDF | planned |
 | 9–11 | paper trading, notifications, human discretion, isolated live adapter (default off) | planned |
 
@@ -221,3 +221,18 @@ DATA REQUIRED (CFD research):
 No real market data has been imported in this build. All results so far are on synthetic data.
 
 See `ARCHITECTURE.md` for design decisions and `CONFIG.md` for every setting.
+
+## Prop-account simulation in one screen
+
+```bash
+python -m edgelab.cli prop configs                                   # SYNTHETIC test-only example rule sets
+python -m edgelab.cli prop simulate RUN_2026_00001 --config SYNTH_STATIC_EVAL --accounts 2
+python -m edgelab.web                                                # Prop Simulation page
+```
+
+- Replays the **stored trades** of a run through account rules: target, static or trailing drawdown,
+  daily loss with an explicit reset, minimum days, size limits and scaling, consistency, sessions.
+  Nothing about the strategy, engine or stored run changes.
+- Rules the trade records cannot support honestly are refused by name. No real firm's rules ship.
+- The result shows the strategy result and the account result separately, with full lineage. Passing
+  is not evidence of profitability. See PROP_SIMULATION.md; packaging plan in DESKTOP_PACKAGING.md.

@@ -3,6 +3,27 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 6 (as requested): Prop-firm simulation layer
+
+Roadmap row 7 ("Prop-Firm Simulation"), evaluation rules only. It sits above the engine and reads stored runs.
+
+| Item | Status |
+|---|---|
+| Versioned prop rule sets (`kind: edgelab.prop_rules`, `schema_version: 1`), with strict validation listing every error, a rules-only hash, and refusal by name of rules the trade records cannot support (trailing from intra-trade highs, payouts, news, weekend holding) (ADR-49) | IMPLEMENTED, TESTED |
+| Rules: target, minimum trading days, static drawdown, trailing drawdown (closed-balance or end-of-day reference, optional lock), daily loss (terminate or pause the day) with an explicit reset timezone and time, maximum position units with scaling tiers (violations recorded, never clipped), consistency (best-day share), evaluation deadline, session entry window and flat-by time, payout eligibility (reported only) | IMPLEMENTED, TESTED (synthetic trades) |
+| Account replay: chronological (exit, entry, trade_no) order; overlapping positions refused; P&L booked on the exit's trading day; `AccountStatus` enum; per-trade progression (balance, peak, drawdown, day P&L, headrooms, target progress, trading days) and per-day table | IMPLEMENTED, TESTED |
+| Detection `end_of_trade`, and `intratrade_bound` (conservative bar-resolution MAE bound; refused for trades crossing the reset); same-trade conflicts (a breach beats the target; drawdown takes precedence when both breach) | IMPLEMENTED, TESTED |
+| Multiple independent accounts per simulation (same or different rule sets, optional start); no broker routing | IMPLEMENTED, TESTED |
+| Lineage (run, strategy, stored definition/logic hash, dataset, period, cost profile/status, verified trades hash, rule-set ids/hashes, ordering, simulator/code version); deterministic `PROP_` ids; optional storage in `<data>/prop_simulations/`; source run verified unchanged after every simulation | IMPLEMENTED, TESTED |
+| Report with the strategy result (the source run's metrics, unchanged) kept separate from the prop-account results; no composite score; labels (not evidence of profitability; SYNTHETIC rules; data and cost caveats) | IMPLEMENTED, TESTED |
+| `Services.prop_configs / validate_prop_config / prop_simulate / list_prop_simulations / get_prop_simulation`, CLI `prop ...`, `/api/prop/*` | IMPLEMENTED, TESTED |
+| Web: Prop Simulation page; Datasets page gains an Eligible column (reasons from `backtest_readiness`) | IMPLEMENTED, TESTED (browser e2e) |
+| Strategy workspace (list, open, edit, validate, save a new version or duplicate, lineage) | VERIFIED (existing Phase 3.5 tests; definition-hash preservation assertions added) |
+| Synthetic test-only example rule sets `configs/prop/synthetic_{static,trailing}_eval.yaml` | IMPLEMENTED; no real firm's rules shipped |
+| Real stored run through the simulator (`prop_smoke_real.py`) | REQUIRES REAL DATA (local store; the script was verified on a synthetic store) |
+| Funded phases, payouts, resets; firm-specific commissions; tick-level intra-trade paths | NOT IMPLEMENTED (deliberately) |
+| Windows `.exe` | NOT IMPLEMENTED; architecture and blockers in DESKTOP_PACKAGING.md |
+
 ## Real-data import fix (after Phase 4, before Phase 5)
 
 | Item | Status |

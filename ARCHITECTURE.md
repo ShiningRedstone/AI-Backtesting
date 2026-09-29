@@ -176,6 +176,29 @@ edgelab/strategy/compiler.py   signals_from_features split into _entry_allowed/_
 edgelab/services.py            + random_entry_control; CLI `validate control`
 ```
 
+## Module map (Phase 6 additions: prop-account simulation)
+
+```
+edgelab/prop/rules.py          versioned prop rule sets: strict validation, named refusals, rules-only
+                               config hash (PropRules, PropConfigError) (ADR-49)
+edgelab/prop/simulator.py      account replay over a stored trade stream: AccountStatus enum, trading-day
+                               labels, end-of-trade / intra-trade-bound detection, multi-account,
+                               deterministic simulation ids (PropDataError when records are insufficient)
+edgelab/prop/service.py        read-only run loading, trades-hash verification, lineage, labels,
+                               <data>/prop_simulations/PROP_*.json storage
+edgelab/services.py            + prop_configs, validate_prop_config, prop_simulate, list_prop_simulations,
+                               get_prop_simulation; Services.data_root attribute
+edgelab/cli.py                 + `prop configs|list|validate|simulate|show`
+edgelab/web/app.py             + /api/prop/configs, /validate, /simulate, /simulations[/<id>];
+                               PropConfigError -> 422 prop_config, PropDataError -> 422 prop_data
+web/src/pages/Prop.tsx         Prop Simulation page (run + accounts + rule sets -> outcome, violations,
+                               progression; strategy result shown separately)
+web/src/pages/Data.tsx         + Eligible column (existing backtest_readiness reasons)
+configs/prop/*.yaml            SYNTHETIC TEST-ONLY example rule sets (outside the research config hash)
+prop_smoke_real.py             local read-only smoke test on a stored real run
+PROP_SIMULATION.md, DESKTOP_PACKAGING.md
+```
+
 ## Decision records
 
 ### ADR-1 Storage backend
@@ -689,6 +712,45 @@ edgelab/services.py            + random_entry_control; CLI `validate control`
   clustering in time is part of what differs, since control fires are spread uniformly over
   eligible bars.
 
+### ADR-49 Prop-account simulation replays stored trades above the engine (Phase 6)
+- **Problem:** prop-firm rules (targets, static or trailing drawdown, daily loss, sizes, sessions)
+  must be applied to strategies without turning the engine into a firm-specific simulator, without
+  hard-coding any firm, and without claiming precision the trade records do not have.
+- **Chosen:** a separate layer (`edgelab/prop/`) consumes the STORED trades of one run.
+  - It verifies them against the run's `trades_hash` and replays them in (exit, entry, trade_no)
+    order, per account, through a versioned rule set (YAML, `kind: edgelab.prop_rules`,
+    `schema_version: 1`).
+  - Trades are used exactly as recorded (size, `net_usd` after stated costs). Sizes are never
+    clipped; an oversize trade is a recorded violation.
+  - Two detection modes:
+    - `end_of_trade`: closed balance after each exit.
+    - `intratrade_bound`: additionally, before the exit, the conservative bound
+      `balance - mae_points x (risk_usd / risk_points) - cost_usd`, from the engine's
+      bar-resolution MAE.
+  - The daily reset is explicit (timezone + time; days labelled by the date they end), and P&L is
+    booked on the exit's day.
+  - Same-trade conflicts are fixed rules: an intra-trade breach beats a target; both breaches are
+    recorded, and the drawdown takes precedence in the status.
+  - Results carry lineage (run, strategy, definition/logic hash as stored, dataset, period, cost
+    profile/status, verified trades hash, rule-set ids and hashes, ordering, simulator/code
+    version) and a deterministic `PROP_` id.
+  - They are stored, on request, as their own JSON documents; the run table is never written.
+    Each simulation re-reads the source afterwards and asserts it is unchanged.
+- **Refused, not approximated** (the records lack the data):
+  - trailing drawdown from intra-trade equity highs (it needs the order of MFE vs MAE);
+  - intra-trade detection on trades crossing the reset (it needs the MAE's timestamp);
+  - overlapping positions (they need a joint path);
+  - payouts, news rules and weekend holding.
+- **Rejected:**
+  - Adding account rules to the backtester: this would couple research to one firm's semantics
+    and alter the strategy result.
+  - Re-simulating bars for intra-trade paths: that would be a second market simulator.
+  - A composite "prop score".
+- **Minor changes to earlier modules:** additive `Services` methods plus a `data_root` attribute;
+  additive routes and error mappings in `web/app.py`; an additive CLI command; a dataset
+  Eligible column showing the existing `backtest_readiness` reasons. No engine, DSL, store or
+  metric change; prior tests unchanged.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and
@@ -762,3 +824,18 @@ edgelab/services.py            + random_entry_control; CLI `validate control`
 - The service lock is held while each cell's dataset is loaded and re-validated (it reads the
   shared SQLite connection); the backtest itself runs without it.
 - No real market or CFD data has been imported: every Phase 4 result so far is on synthetic data.
+
+## Known limitations (Phase 6 prop simulation)
+
+- Evaluation-phase rules only: funded phases, payouts, resets and refunds are not modelled.
+- The intra-trade check is a bar-resolution bound (it can overstate adverse excursions; the entry
+  bar is included in full), not a tick path. The time of an intra-trade breach is only known to lie
+  inside the trade; `time_to_breach` reports the exit.
+- Ending balances after a terminal breach use the breaching trade's closed P&L (where a firm would
+  have liquidated is unknown). An entry-time `terminate` books no P&L for that trade.
+- Trades carry the backtest's cost model; a firm's own commissions/fees are not re-applied.
+- One source run per simulation (years/datasets are not concatenated).
+- Sizes are compared in the instrument units of the trade records (NAS100_HISTDATA: 1 MNQ = 2 units);
+  no automatic contract conversion.
+- No real firm's rules are shipped; the examples are synthetic and test-only.
+- Windows `.exe` packaging is not built; blockers are listed in DESKTOP_PACKAGING.md.

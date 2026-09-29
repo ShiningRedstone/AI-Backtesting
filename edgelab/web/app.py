@@ -29,6 +29,7 @@ BATCH_ID = re.compile(r"^VB_[0-9A-F]{12}$")
 RUN_ID = re.compile(r"^RUN_\d{4}_\d{5}$")
 SEARCH_ID = re.compile(r"^SRCH_[0-9A-F]{12}$")
 JOB_ID = re.compile(r"^JOB_[0-9A-F]{12}$")
+PROP_SIM_ID = re.compile(r"^PROP_[0-9A-F]{16}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
 
 
@@ -94,6 +95,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         from edgelab.data.store import SearchStorageUnsupported
         from edgelab.engine.backtester import BacktestError
         from edgelab.engine.costs import CostConfigError
+        from edgelab.prop.rules import PropConfigError
+        from edgelab.prop.simulator import PropDataError
         from edgelab.research.jobs import JobConflict
         from edgelab.research.ranking import RankingError
         from edgelab.research.search import SearchSpecError
@@ -108,6 +111,11 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],
                                       "details": details}}), 422
+        if isinstance(e, PropConfigError):
+            return jsonify({"error": {"kind": "prop_config", "message": "The prop rule set is not valid.",
+                                      "reason": "; ".join(e.errors),
+                                      "issues": [{"severity": "error", "message": m} for m in e.errors],
+                                      "details": details}}), 422
         if isinstance(e, StrategyValidationError):
             return jsonify({"error": {"kind": "validation", "message": "The strategy is not valid.",
                                       "issues": [i.to_dict() for i in e.result.issues],
@@ -118,6 +126,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                   "Backtest unavailable: the broker/provider cost profile is unconfigured. "
                   "Configure verified costs before running research."),
                  (BacktestError, 422, "backtest", "The backtest was stopped."),
+                 (PropDataError, 422, "prop_data",
+                  "The stored trades cannot support these account rules honestly; nothing was simulated."),
                  (RankingError, 422, "ranking", "The ranking request was refused."),
                  (JobConflict, 409, "job_conflict", "Another search job is still active; one runs at a time."),
                  (SearchStorageUnsupported, 409, "search_storage_unsupported",
@@ -371,6 +381,42 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.get("/api/results/<rid>")
     def result(rid):
         return jsonify(call(svc.get_run, _id(rid, RUN_ID, "run id")))
+
+    # ------------------------------------------------------------------ prop simulation (Phase 6)
+    @app.get("/api/prop/configs")
+    def prop_configs():
+        return jsonify(call(svc.prop_configs))
+
+    @app.post("/api/prop/validate")
+    def prop_validate():
+        cfg = body().get("config")
+        if not isinstance(cfg, (dict, str)):
+            raise _bad("config must be a rule-set object, YAML text or a config id")
+        return jsonify(call(svc.validate_prop_config, cfg))
+
+    @app.post("/api/prop/simulate")
+    def prop_simulate():
+        b = body()
+        rid = _id(b.get("run_id"), RUN_ID, "run id")
+        accounts = b.get("accounts")
+        if not isinstance(accounts, list) or not all(isinstance(a, dict) for a in accounts):
+            raise _bad("accounts must be a list of {account_id?, config, start?}")
+        for a in accounts:
+            if a.get("account_id") is not None:
+                _id(a["account_id"], SAFE_ID, "account id")
+            if a.get("start") is not None and not isinstance(a["start"], str):
+                raise _bad("account start must be an ISO timestamp string")
+            if not isinstance(a.get("config"), (dict, str)):
+                raise _bad("each account needs a config (id, object or YAML text)")
+        return jsonify(call(svc.prop_simulate, rid, accounts, bool(b.get("record", True))))
+
+    @app.get("/api/prop/simulations")
+    def prop_simulations():
+        return jsonify(call(svc.list_prop_simulations))
+
+    @app.get("/api/prop/simulations/<sid>")
+    def prop_simulation(sid):
+        return jsonify(call(svc.get_prop_simulation, _id(sid, PROP_SIM_ID, "simulation id")))
 
     # ------------------------------------------------------------------ research (Phase 4)
     def _search_spec(b: dict) -> dict:

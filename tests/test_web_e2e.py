@@ -35,6 +35,12 @@ def _get(url):
         return json.loads(r.read())
 
 
+def _post(url, body):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())
+
+
 @unittest.skipIf(sync_playwright is None, "playwright not installed")
 class TestBrowserFlow(unittest.TestCase):
     @classmethod
@@ -222,6 +228,35 @@ class TestBrowserFlow(unittest.TestCase):
         pg.goto(f"{self.base}/#/results")
         self.assertIn(run_id, self.tid(pg, "runs-demo").inner_text())     # kept apart from research runs
         self.assertEqual(self.errors, [])
+
+    def test_10_prop_simulation_and_dataset_eligibility(self):
+        """Phase 6: choose a stored run + two accounts with different rule sets, run, inspect."""
+        sid = _get(self.base + "/api/strategies")[0]["strategy_id"]
+        fut = next(d for d in _get(self.base + "/api/datasets") if d["asset_type"] == "FUTURE")
+        run_id = _post(self.base + "/api/backtests", {"strategy": sid, "dataset_id": fut["dataset_id"]})["run_id"]
+        before = _get(f"{self.base}/api/results/{run_id}")
+        pg = self.page()
+        pg.goto(self.base + "/#/prop")
+        self.tid(pg, "prop-run").select_option(run_id)
+        self.tid(pg, "prop-config-0").select_option("SYNTH_STATIC_EVAL")
+        self.tid(pg, "prop-add-account").click()
+        self.tid(pg, "prop-config-1").select_option("SYNTH_TRAILING_EVAL")
+        self.tid(pg, "prop-run-btn").click()
+        self.tid(pg, "prop-result").wait_for(timeout=60000)
+        self.assertIn(run_id, self.tid(pg, "prop-strategy-result").inner_text())
+        table = self.tid(pg, "prop-account-results").inner_text()
+        self.assertIn("SYNTH_STATIC_EVAL", table)
+        self.assertIn("SYNTH_TRAILING_EVAL", table)
+        self.assertIn("not evidence that the strategy is profitable", self.tid(pg, "prop-result").inner_text())
+        self.tid(pg, "prop-detail-A1").click()
+        self.tid(pg, "prop-progression-A1").wait_for()
+        self.assertEqual(_get(f"{self.base}/api/results/{run_id}"), before)          # source run untouched
+        self.tid(pg, "prop-sims").wait_for()
+        self.assertEqual(self.errors, [])
+        pg.goto(self.base + "/#/datasets")
+        cfd = pg.locator("[data-testid^='eligible-NAS100_CFD']").first
+        self.assertIn("not eligible", cfd.inner_text())
+        self.assertIn("eligible", pg.locator("[data-testid^='eligible-NQ_FUTURE']").first.inner_text())
 
     def test_5_mobile_navigation(self):
         pg = self.page(390, 844)

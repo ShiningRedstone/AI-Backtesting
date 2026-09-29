@@ -108,6 +108,8 @@ class TestWebApi(unittest.TestCase):
         stored = self.get(f"/api/strategies/{sid}")
         again = self.post("/api/strategies/validate", {"definition": stored["definition"]})
         self.assertEqual(again["identity"]["strategy_id"], sid)                   # reload -> same identity
+        self.assertEqual(stored["definition_hash"], r["definition_hash"])         # definition hash preserved
+        self.assertEqual(again["identity"]["definition_hash"], r["definition_hash"])
         self.assertFalse(self.save(stored["definition"])["created"])              # idempotent library
         noop = self.save(stored["definition"], parent_strategy_id=sid, method="manual_edit")
         self.assertFalse(noop["created"])
@@ -116,6 +118,8 @@ class TestWebApi(unittest.TestCase):
         edited = copy.deepcopy(d)
         edited["exit"]["stop"]["points"] = 12
         e = self.save(edited, parent_strategy_id=sid, method="manual_edit")
+        self.assertNotEqual(e["strategy_id"], sid)                                # a rule change is a new version
+        self.assertEqual(self.get(f"/api/strategies/{sid}")["definition_hash"], r["definition_hash"])   # parent intact
         lin = self.get(f"/api/strategies/{e['strategy_id']}/lineage")
         self.assertEqual((lin["records"][0]["generation_method"], lin["records"][0]["parent_strategy_id"]), ("manual_edit", sid))
         draft = self.post(f"/api/strategies/{sid}/duplicate", {"name": "api_copy"})["draft"]

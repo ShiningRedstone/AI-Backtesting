@@ -48,9 +48,10 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | Strategy Builder | Visual editor for the DSL: General · Market & Sessions · Parameters · Entry · Exit · Sizing · Review, with live backend validation and DSL preview | `render_strategy`, validator, compiler |
 | Families | Hypotheses and their instances, as a lineage tree and table | `family_detail` |
 | Variations | Mode A batches with reproducibility metadata | batch records |
-| Datasets | Library, metadata and validation report, import over the existing pipeline | Phase 2 importer |
+| Datasets | Library with provider/instrument/timeframe, validation status, cost status and an **Eligible** column (with the reasons a dataset cannot run); metadata, validation report and caveats; import over the existing pipeline | Phase 2 importer, `backtest_readiness` |
 | Results | Recorded single backtests (status `IN_SAMPLE`); synthetic runs listed separately | Phase 1 run registry |
 | Research | Phase 4 batch search: spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
+| Prop Simulation | Choose a stored run and one or more accounts (each with a rule set from `configs/prop/` or custom YAML, optional start), run, then view the source strategy result and the prop-account results side by side but separately: outcome, breaches, violations with detection mode, day table and per-trade progression. Recorded simulations are listed. See PROP_SIMULATION.md | `/api/prop/*` |
 | AI Discovery | Placeholder: no model is connected | — |
 | Settings | Read-only configuration: cost profile status, engine config, sessions, instruments | config |
 
@@ -147,8 +148,10 @@ Every route is a thin call into `edgelab.services`.
 | POST | `/api/backtests/readiness`, `/api/backtests` | `backtest_readiness`, `backtest_strategy(record=True)` |
 | GET | `/api/results`, `/api/results/{run_id}` | run registry |
 | GET | `/api/results/report?run_ids=RUN_...,RUN_...` | Phase 5 descriptive report over stored runs of one strategy (no UI page yet) |
+| GET | `/api/prop/configs`, `/api/prop/simulations`, `/api/prop/simulations/{PROP_id}` | `prop_configs`, `list_prop_simulations`, `get_prop_simulation` |
+| POST | `/api/prop/validate` `{config}` · `/api/prop/simulate` `{run_id, accounts: [{account_id?, config, start?}], record?}` | `validate_prop_config`, `prop_simulate` (reads the run; never writes it) |
 
-Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "details"?}}`. The kinds are `validation`, `compile`, `variation`, `cost_unconfigured`, `backtest`, `import_failed`, `not_found`, `bad_request`, `forbidden`, `parse`, `invalid_request` and `internal`. The UI shows `message`, `reason` and `issues`; stack traces appear only under **Technical details**.
+Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "details"?}}`. The kinds are `validation`, `compile`, `variation`, `cost_unconfigured`, `backtest`, `prop_config`, `prop_data`, `import_failed`, `not_found`, `bad_request`, `forbidden`, `parse`, `invalid_request` and `internal`. The UI shows `message`, `reason` and `issues`; stack traces appear only under **Technical details**.
 
 ## Security
 

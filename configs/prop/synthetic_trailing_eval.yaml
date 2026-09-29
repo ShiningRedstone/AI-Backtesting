@@ -1,0 +1,39 @@
+# SYNTHETIC / TEST-ONLY prop rule set. It does NOT describe any real prop firm or program.
+# Numbers are illustrative placeholders for exercising the simulator. Enter a real program's
+# rules yourself from that firm's current official documentation before relying on any result.
+kind: edgelab.prop_rules
+schema_version: 1
+id: SYNTH_TRAILING_EVAL
+name: Synthetic trailing-drawdown evaluation (test-only)
+description: Illustrative evaluation with an end-of-day trailing floor locked at the starting balance,
+  intra-trade (MAE-bound) detection and a consistency rule.
+synthetic_test_only: true
+account:
+  starting_balance: 50000
+  currency: USD
+trading_day:
+  timezone: America/New_York
+  reset_time: "17:00"
+target:
+  profit: 3000
+  stop_on_target: true
+drawdown:
+  max: 2000
+  mode: trailing
+  trailing_reference: end_of_day_balance
+  lock_floor_at: 50000
+daily_loss:
+  max: 1000
+  action: pause_day
+detection: intratrade_bound
+min_trading_days: 5
+consistency:
+  max_best_day_share: 0.5
+payout_eligibility:
+  min_trading_days: 5
+  min_profit: 500
+position:
+  max_units: 10
+  action: terminate
+  scaling:
+    - {min_profit: 1500, max_units: 20}

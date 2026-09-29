@@ -154,3 +154,33 @@ export interface Ranking {
   in_sample: boolean; status: string; validated: boolean; ranked: RankedRow[]; label: string; note: string;
 }
 export interface Shortlist { strategy_ids: string[]; selected_at: string; in_sample: boolean; validated: boolean; note: string }
+
+// ---------------------------------------------------------------- prop simulation (Phase 6)
+export interface PropConfigRow {
+  file: string; id: string | null; name: string; valid: boolean; errors: string[]; config_hash: string | null;
+  synthetic_test_only: boolean | null; text: string;
+}
+export interface PropViolation { rule: string; at: string; trade_no: number; detail: string; detection: string }
+export interface PropElapsed { at: string; calendar_days: number; trading_days: number }
+export interface PropAccountSummary {
+  account_id: string; prop_config_id: string; prop_config_hash: string; synthetic_test_only_rules: boolean;
+  account_start: string | null; status: string; survived: boolean; starting_balance: number; ending_balance: number;
+  net_pnl_usd: number; net_r: number; trade_count: number; trades_not_processed: number;
+  trades_skipped_daily_loss_pause: number; target_usd: number | null; profit_target_reached: boolean;
+  profit_target_balance_touched: boolean; drawdown_breach: boolean; daily_loss_breach: boolean; rule_violation: boolean;
+  trading_days: number; max_drawdown_usd_closed: number; max_drawdown_usd_intratrade_bound: number | null;
+  max_daily_loss_usd_closed: number; max_daily_loss_usd_intratrade_bound: number | null;
+  time_to_target: PropElapsed | null; time_to_breach: PropElapsed | null; violation_reason: string | null;
+  violations: PropViolation[]; incomplete_reasons: string[]; best_day_share_of_profit: number | null;
+  payout_eligible: boolean | null; trades_crossing_reset: number; trades_end_of_data: number; detection: string;
+}
+export interface PropAccountResult { summary: PropAccountSummary; progression: Record<string, unknown>[]; days: Record<string, unknown>[] }
+export interface PropSimulation {
+  simulation_id: string; created_at: string; recorded: boolean; labels: string[];
+  lineage: Record<string, unknown>; strategy_result: Record<string, unknown>;
+  accounts: PropAccountResult[]; account_configs: { account_id: string; prop_config_id: string; prop_config_hash: string; start: string | null }[];
+}
+export interface PropSimRow {
+  simulation_id: string; created_at: string; source_run_id: string; strategy_id: string; dataset_id: string;
+  accounts: { account_id: string; prop_config_id: string; status: string }[];
+}

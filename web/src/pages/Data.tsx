@@ -33,7 +33,7 @@ export function DatasetsPage() {
       ) : (
         <TableWrap testId="datasets-table"><table>
           <thead><tr><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Start</th><th>End</th><th>Bars</th>
-            <th>Validation</th><th>Price basis</th><th>Spread</th><th>Costs</th><th /></tr></thead>
+            <th>Validation</th><th>Price basis</th><th>Spread</th><th>Costs</th><th>Eligible</th><th /></tr></thead>
           <tbody>{data.map((d) => (
             <tr key={d.dataset_id}>
               <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}</td>
@@ -42,12 +42,18 @@ export function DatasetsPage() {
               <td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>
               <td>{d.price_basis}</td><td>{d.has_spread ? "per bar" : "none"}</td>
               <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"} title={d.cost.reason}>{d.cost.status}</Badge></td>
+              <td data-testid={`eligible-${d.dataset_id}`}>{d.runnable ? <Badge tone="ok">eligible</Badge>
+                : <Badge tone="error" title={d.reasons.join("; ")}>not eligible</Badge>}
+                {!d.runnable && <div className="small muted">{d.reasons.join("; ")}</div>}</td>
               <td className="row-actions"><button className="linklike" onClick={() => setOpen(open === d.dataset_id ? null : d.dataset_id)}
                 data-testid={`inspect-${d.dataset_id}`}>{open === d.dataset_id ? "Close" : "Inspect"}</button></td>
             </tr>))}
           </tbody>
         </table></TableWrap>)}
       {open && <DatasetDetail id={open} />}
+      <p className="muted small">Eligible = the stored dataset passed validation and has a configured cost profile (the strategy
+        timeframe is checked when a backtest or search is set up). Source files refused at import (e.g. failed coverage) never
+        become stored datasets; their reasons are in the import report. Inspect a dataset for its caveats.</p>
       <p className="muted small">Delete/archive: not supported — stored datasets are immutable and content-addressed; research runs reference them.</p>
     </div>
   );

@@ -12,7 +12,11 @@ strategies as aggressively as it discovers them. The final product is a unified 
 
 ## Current state
 
-**Phases 1, 2, 3, 3.5 and 4 COMPLETE. Next: Phase 5 (Analytics).**
+**Phases 1, 2, 3, 3.5 and 4 COMPLETE.** Since then, as separate user-requested tasks: Phase 5 analytics
+(`analytics/research.py`), fixed-strategy OOS/walk-forward/Monte Carlo (`research/validation.py`), the
+matched random-entry control (`research/controls.py`), and the prop-account simulation layer
+(`edgelab/prop/`, requested as "Phase 6"; roadmap row 7, evaluation rules only; see PROP_SIMULATION.md,
+ADR-49). Windows `.exe` packaging is planned, not built (DESKTOP_PACKAGING.md).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

@@ -17,6 +17,8 @@ so the same functions back the CLI today and HTTP endpoints later:
                          get_run, list_import_files
   RESEARCH (Phase 4)     validate_search, plan_search, run_search, list_searches, get_search,
                          rank_search, select_shortlist, start_search_job, job_status, cancel_job
+  PROP (Phase 6)         prop_configs, validate_prop_config, prop_simulate, list_prop_simulations,
+                         get_prop_simulation (account rules over a stored run's trades; read-only)
 
 Nothing here fabricates data: when something is unavailable the response says so. Nothing
 here judges strategies: backtest results are returned with their sample-size labels only.
@@ -64,6 +66,7 @@ class Services:
         self.root = Path(root)
         st = self.cfg["storage"]
         data_root = self.root / st.get("root", "data")
+        self.data_root = data_root
         self.store = open_store(self.cfg, root=data_root)
         fcfg = self.cfg.get("features", {})
         self.cache = FeatureCache(data_root / fcfg.get("cache_dir", "feature_cache"),
@@ -855,3 +858,28 @@ class Services:
                 if p.is_file() and p.suffix.lower() in (".csv", ".txt"):
                     out.append({"path": str(p.relative_to(self.root.resolve())), "bytes": p.stat().st_size})
         return out
+
+    # ============================================================ PROP SIMULATION (Phase 6)
+    def prop_configs(self) -> list[dict]:
+        """Prop rule sets in configs/prop (outside the research config hash), each validated."""
+        from edgelab.prop import service as ps
+        return _jsonable(ps.list_configs(self.root))
+
+    def validate_prop_config(self, src: Any) -> dict:
+        from edgelab.prop import service as ps
+        return _jsonable(ps.validate_config(self.root, src))
+
+    def prop_simulate(self, run_id: str, accounts: list[Mapping], record: bool = False) -> dict:
+        """Replay a STORED run's trades through one or more prop accounts. The run is read, its
+        trades hash re-verified, and it is proven unchanged afterwards; the simulation is recorded
+        (record=True) as its own document under <data>/prop_simulations, never in the run table."""
+        from edgelab.prop import service as ps
+        return _jsonable(ps.simulate(self, run_id, accounts, record))
+
+    def list_prop_simulations(self) -> list[dict]:
+        from edgelab.prop import service as ps
+        return _jsonable(ps.list_simulations(self.data_root))
+
+    def get_prop_simulation(self, simulation_id: str) -> dict:
+        from edgelab.prop import service as ps
+        return _jsonable(ps.get_simulation(self.data_root, simulation_id))
