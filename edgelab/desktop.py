@@ -172,11 +172,18 @@ def run(argv=None) -> int:
     args = parse_args(argv)
     ui = "none" if args.no_browser else args.ui
     from edgelab import runtime
-    base = Path(args.data_root).expanduser() if args.data_root else runtime.user_data_root()
-    base = base.resolve()
-    root = base / "demo" if args.demo else base
-    logs = root / "logs"
-    lock = InstanceLock(logs / LOCK_FILE)
+    notice = None
+    if args.demo:                                     # synthetic demo: <data root>/demo, as before
+        base = (Path(args.data_root).expanduser() if args.data_root else runtime.user_data_root()).resolve()
+        root, source, explicit = base / "demo", "--demo", True
+    else:
+        root, source = runtime.resolve_workspace(args.data_root)
+        explicit = source in ("--data-root", runtime.DATA_ROOT_ENV)
+        if root is not None and not explicit and not runtime.inspect_workspace(root)["valid"]:
+            notice = (f"The saved research workspace {root} is not available: "
+                      + "; ".join(runtime.inspect_workspace(root)["problems"]) + ". Choose a workspace.")
+            root = None                               # never silently create an empty one in its place
+    logs = (root / "logs") if root is not None else runtime.settings_path().parent / "logs"
     try:
         if args.demo:                                 # before anything is written into the demo root
             from edgelab.web.demo import create_demo_workspace
@@ -186,43 +193,70 @@ def run(argv=None) -> int:
         show_error(str(exc))
         return 1
     except OSError as exc:
-        show_error(f"Cannot create the data folder {root}: {exc}")
+        show_error(f"Cannot create the folder {logs}: {exc}")
         return 1
     _redirect_missing_streams(logs)                   # windowed exe: no console, keep output in a log
-    if not lock.acquire():
-        return _hand_off(root, logs, ui)
+    lock = None
+    if root is not None:
+        lock = InstanceLock(logs / LOCK_FILE)
+        if not lock.acquire():
+            return _hand_off(root, logs, ui)
     if ui == "window":
         from edgelab.desktop_window import window_runtime_problem
         problem = window_runtime_problem()            # before anything starts: never a silent fallback
         if problem:
             _log(logs, problem)
             show_error(problem)
-            lock.release()
+            if lock is not None:
+                lock.release()
             return 1
     server = None
-    svc = None
+    host = None
     try:
         _check_timezones()
         runtime.build_manifest()                      # packaged: refuse early without code identity
-        if args.demo:
-            ws = runtime.init_workspace(root)
-        else:
+        if root is not None and explicit and not args.demo:
             from edgelab.web.demo import is_demo_root
             if is_demo_root(root):
                 raise StartupError(f"{root} is a demo workspace; start it with --demo")
-            ws = runtime.init_workspace(root)
+            runtime.init_workspace(root)              # an explicitly named folder may be created (CLI)
         from dataclasses import replace
         from edgelab.web.app import create_app
-        from edgelab.web.config import load_web_config
+        from edgelab.web.config import WebConfig, load_web_config
+        from edgelab.workspace_host import WorkspaceHost
         from werkzeug.serving import make_server
-        web = replace(load_web_config(root), host=HOST, port=args.port or 8765)
-        app = create_app(root, demo=args.demo, web=web)
-        svc = app.config["EDGELAB"]["services"]
-        if svc.store.backend != "sqlite":
-            raise StartupError(f"the desktop app requires the SQLite store (got {svc.store.backend}); set "
-                               "storage.backend: sqlite or auto in configs/storage.yaml")
+
+        def app_factory(ws: Path):
+            web = replace(load_web_config(ws) if (ws / "configs").is_dir() else WebConfig(), host=HOST,
+                          port=args.port or 8765)
+            app = create_app(ws, demo=args.demo, web=web)
+            if app.config["EDGELAB"]["services"].store.backend != "sqlite":
+                raise StartupError("the desktop app requires the SQLite store; set storage.backend: sqlite "
+                                   "in configs/storage.yaml")
+            return app
+
+        state: dict = {}
+
+        def on_switch(old: Path | None, new: Path) -> None:        # runtime.json follows the workspace
+            if old is not None:
+                try:
+                    (old / "logs" / RUNTIME_FILE).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if state.get("info"):
+                state["info"].update(data_root=str(new))
+                (new / "logs").mkdir(parents=True, exist_ok=True)
+                (new / "logs" / RUNTIME_FILE).write_text(json.dumps(state["info"], indent=1))
+
+        host = WorkspaceHost(app_factory, lambda ws: InstanceLock(ws / "logs" / LOCK_FILE),
+                             on_switch=on_switch, notice=notice)
+        if root is not None:
+            if args.demo:
+                runtime.init_workspace(root)
+            host.open(root, source=source, persist=False, lock=lock, allow_demo=args.demo)
+            lock = None                               # owned by the host now
         try:
-            server = make_server(HOST, args.port, app, threaded=True)  # port 0 -> OS-assigned free port
+            server = make_server(HOST, args.port, host, threaded=True)  # port 0 -> OS-assigned free port
         except SystemExit:                            # werkzeug reports a busy port by exiting
             raise StartupError(f"port {args.port} on {HOST} is already in use; start without --port to use "
                                "a free port") from None
@@ -230,23 +264,24 @@ def run(argv=None) -> int:
         import secrets
         from edgelab.desktop_window import WindowController, install_control
         token = secrets.token_hex(24)
-        controller = WindowController(url, root / "webview") if ui == "window" else None
-        install_control(app, token, ui, controller)
+        controller = WindowController(url, runtime.settings_path().parent / "webview") if ui == "window" else None
+        if controller is not None:
+            host.browse = controller.browse_folder
+        install_control(host.shell, token, ui, controller, served=host.served)
         threading.Thread(target=server.serve_forever, name="edgelab-http", daemon=True).start()
         wait_ready(url, args.ready_timeout)
         from edgelab.core.identity import code_version
-        info = {"pid": os.getpid(), "url": url, "port": server.server_port, "data_root": str(root),
+        info = {"pid": os.getpid(), "url": url, "port": server.server_port,
+                "data_root": str(host.root) if host.root else None, "workspace_source": host.source,
                 "demo": args.demo, "ui": ui, "control_token": token,
                 "runtime": runtime.runtime_info(), "code_version": code_version(),
-                "config_differences_from_bundled_defaults": ws["config_differences"],
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+        state["info"] = info
         (logs / RUNTIME_FILE).write_text(json.dumps(info, indent=1))
-        print(f"EdgeLab running at {url}\n  data: {root}\n  build: {runtime.build_label()}\n  ui: {ui}\n"
+        print(f"EdgeLab running at {url}\n  workspace: {host.root or 'none selected (first run)'} ({host.source})\n"
+              f"  build: {runtime.build_label()}\n  ui: {ui}\n"
               + ("Close the EdgeLab window to stop." if ui == "window" else
                  "Keep this window open while you use EdgeLab; close it (or press Ctrl+C) to stop."), flush=True)
-        if ws["config_differences"]:
-            print("  note: your configs differ from this build's bundled defaults in: "
-                  + ", ".join(ws["config_differences"]) + " (not changed automatically)", flush=True)
         stop = threading.Event()
         _stop_on_signals(stop)
         if ui == "window":
@@ -270,22 +305,16 @@ def run(argv=None) -> int:
         if server is not None:
             server.shutdown()
             server.server_close()
-        if svc is not None:
+        current = host.root if host is not None else root
+        if host is not None:
+            host.close()
+        if lock is not None:
+            lock.release()
+        for d in {logs, (current / "logs") if current is not None else logs}:
             try:
-                jm = svc._jobs                        # cancel a running background search cleanly
-                if jm is not None:
-                    for j in jm.list():
-                        if j.get("state") in ("queued", "running"):
-                            jm.cancel(j["job_id"])
-                    jm.join(timeout=30)
-            finally:
-                with svc.lock:
-                    svc.store.close()
-        try:
-            (logs / RUNTIME_FILE).unlink(missing_ok=True)
-        except OSError:
-            pass
-        lock.release()
+                (d / RUNTIME_FILE).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _hand_off(root: Path, logs: Path, ui: str) -> int:
@@ -355,8 +384,13 @@ def main(argv=None) -> int:
         from edgelab.cli import main as cli_main
         rest = argv[1:]
         if "--root" not in rest:
-            root = runtime.user_data_root()
-            runtime.init_workspace(root)
+            root, source = runtime.resolve_workspace()
+            if source == runtime.DATA_ROOT_ENV:
+                runtime.init_workspace(root)          # explicitly named by the user: may be created
+            if root is None:
+                print("No research workspace is selected: open EdgeLab and choose one, or pass --root DIR.",
+                      file=sys.stderr)
+                return 2
             rest = ["--root", str(root), *rest]
         return cli_main(rest)
     return run(argv)

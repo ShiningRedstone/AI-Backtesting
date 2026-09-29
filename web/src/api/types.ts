@@ -240,3 +240,14 @@ export interface ProposalReport {
   accepted: { strategy_id: string; name?: string; family_id?: string; [k: string]: unknown }[];
   rejected: { index?: number; name?: string; reasons?: unknown; [k: string]: unknown }[];
 }
+
+// ---------------------------------------------------------------- research workspace
+export interface WorkspaceInfo {
+  path: string; exists: boolean; valid: boolean; empty?: boolean; has_store: boolean; store_backend: string | null;
+  store_path: string | null; data_root?: string; writable: boolean; demo: boolean; datasets: number; runs: number;
+  strategies: number; prop_simulations: number; has_feature_cache: boolean; problems: string[]; source?: string;
+}
+export interface WorkspaceState {
+  current: WorkspaceInfo | null; switchable: boolean; notice: string | null; settings_path: string | null;
+  default: { path: string; info: WorkspaceInfo } | null; browse_available: boolean;
+}

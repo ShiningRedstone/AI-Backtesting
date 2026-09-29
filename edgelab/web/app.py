@@ -163,6 +163,15 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         return jsonify({**s, "demo": demo, "root": str(root), "frontend": bundle_status(), "runtime": runtime_info(),
                         "test_status": tests.read_text().strip() if tests.exists() else None})
 
+    @app.get("/api/workspace")
+    def workspace():
+        """Read-only here: `python -m edgelab.web` serves one fixed --root. The desktop app's workspace
+        host answers this route itself (with switching)."""
+        from edgelab import runtime
+        return jsonify({"current": {**runtime.inspect_workspace(root), "source": "--root (development server)"},
+                        "switchable": False, "notice": None, "default": None, "browse_available": False,
+                        "settings_path": None})
+
     @app.get("/api/options")
     def options():
         return jsonify(call(svc.builder_options, web.builder_timeframes))

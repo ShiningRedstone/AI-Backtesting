@@ -3,6 +3,7 @@ import { go, href, useRoute } from "../app/router";
 import { useApi } from "../app/context";
 import { LineageTable, LineageTree, MetricsView, SYNTHETIC_NOTICE, VariationResults } from "../components/strategy";
 import { EquityChart, SCOPE, ScopeBadge } from "../components/strategy/lab";
+import { ChooseWorkspaceLink } from "../components/workspace";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, TableWrap, fmt, shortTime } from "../components/ui";
 
 // =========================================================================== families
@@ -148,7 +149,7 @@ function RunList() {
       <header className="page-head"><h1>Results</h1></header>
       <Banner tone="info">Single backtests recorded in the run registry (status IN_SAMPLE). Listed chronologically — no ranking, no
         “best strategy”, no significance verdict. Analytics, OOS and robustness arrive in Phases 5–6.</Banner>
-      <Card title="Research runs">{real.length ? table(real, "runs-real") : <Empty>No research runs yet.</Empty>}</Card>
+      <Card title="Research runs">{real.length ? table(real, "runs-real") : <Empty>No stored research runs in this workspace. <ChooseWorkspaceLink /></Empty>}</Card>
       <Card title="Synthetic demonstrations">
         <p className="muted small">{SYNTHETIC_NOTICE} Kept separate from research runs.</p>
         {demo.length ? table(demo, "runs-demo") : <Empty>None.</Empty>}

@@ -12,6 +12,9 @@ import { DatasetsPage, DiscoveryPage, SettingsPage } from "../pages/Data";
 import { ResearchPage } from "../pages/ResearchEngine";
 import { PropPage } from "../pages/Prop";
 import { ComparePage } from "../pages/Compare";
+import { WelcomePage } from "../components/workspace";
+import type { WorkspaceState } from "../api/types";
+import { useApi } from "./context";
 
 const NAV: { path: string; label: string; match: string; planned?: boolean }[] = [
   { path: "/", label: "Dashboard", match: "" },
@@ -112,6 +115,9 @@ function ShellBody() {
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [route.parts.join("/")]);
   const active = route.parts[0] ?? "";
+  const ws = useApi<WorkspaceState>("/api/workspace");
+  const firstRun = !!ws.data && ws.data.switchable && !ws.data.current && active !== "settings";
+  const wsName = ws.data?.current?.path.split(/[\\/]/).filter(Boolean).pop();
   return (
     <div className={`shell${menu ? " menu-open" : ""}`}>
       <header className="topbar">
@@ -120,6 +126,9 @@ function ShellBody() {
         {demo && <Badge tone="demo">DEMO</Badge>}
         <Search />
         <span className="spacer" />
+        {ws.data && <a className="topbar-link" href={href("/settings")} data-testid="ws-chip"
+          title={ws.data.current ? `Research workspace: ${ws.data.current.path}` : "No research workspace selected"}>
+          {ws.data.current ? <>Workspace: <b>{wsName}</b></> : <Badge tone="warn">no workspace</Badge>}</a>}
         <StatusDot />
         <a className="topbar-link" href={href("/settings")}>Settings</a>
       </header>
@@ -132,7 +141,7 @@ function ShellBody() {
         <div className="nav-foot muted small">Research tool · no live trading · no broker connections</div>
       </nav>
       <div className="scrim" onClick={() => setMenu(false)} />
-      <main className="main"><Page /></main>
+      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <Page />}</main>
       <Toasts />
     </div>
   );

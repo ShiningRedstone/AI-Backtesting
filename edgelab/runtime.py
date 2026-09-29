@@ -137,6 +137,156 @@ def config_differences(user_configs: Path, defaults: Path) -> list[str]:
     return out
 
 
+# ------------------------------------------------------------------------------------ research workspace
+# A research workspace is a folder with configs/ + data/ (the store, datasets, runs, strategy
+# library, feature cache, prop simulations). The app REMEMBERS which one is selected in its own
+# settings file, which lives OUTSIDE every workspace (never inside a research store). Selecting a
+# workspace is a pointer change: nothing is copied, migrated, re-imported or deleted.
+SETTINGS_ENV = "EDGELAB_SETTINGS"
+SETTINGS_SCHEMA = 1
+STORE_TABLES = ("datasets", "runs")
+
+
+def settings_path(environ: Mapping[str, str] | None = None, system: str | None = None) -> Path:
+    """The app settings file. Windows: %APPDATA%\\EdgeLab\\settings.json; macOS:
+    ~/Library/Preferences/EdgeLab/settings.json; other: $XDG_CONFIG_HOME/edgelab/settings.json.
+    ``EDGELAB_SETTINGS`` overrides it (tests, portable setups)."""
+    env = os.environ if environ is None else environ
+    if env.get(SETTINGS_ENV):
+        return Path(env[SETTINGS_ENV]).expanduser()
+    system = system or platform.system()
+    home = Path(env.get("USERPROFILE") or env.get("HOME") or Path.home())
+    if system == "Windows":
+        base = Path(env["APPDATA"]) if env.get("APPDATA") else home / "AppData" / "Roaming"
+        return base / APP_NAME / "settings.json"
+    if system == "Darwin":
+        return home / "Library" / "Preferences" / APP_NAME / "settings.json"
+    base = Path(env["XDG_CONFIG_HOME"]) if env.get("XDG_CONFIG_HOME") else home / ".config"
+    return base / "edgelab" / "settings.json"
+
+
+def load_settings(path: Path | None = None) -> dict:
+    p = path or settings_path()
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(updates: Mapping, path: Path | None = None) -> dict:
+    """Merge ``updates`` into the settings file (written atomically)."""
+    p = path or settings_path()
+    data = {**load_settings(p), **dict(updates), "schema": SETTINGS_SCHEMA}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1) + "\n")
+    os.replace(tmp, p)
+    return data
+
+
+def resolve_workspace(data_root: str | Path | None = None, environ: Mapping[str, str] | None = None) -> tuple[Path | None, str]:
+    """(workspace, source) by precedence: --data-root, EDGELAB_DATA_ROOT, the saved selection;
+    (None, "none") when nothing was chosen (first run). The default location is used only once it
+    has been selected: it is never picked silently."""
+    env = os.environ if environ is None else environ
+    if data_root:
+        return Path(data_root).expanduser().resolve(), "--data-root"
+    if env.get(DATA_ROOT_ENV):
+        return Path(env[DATA_ROOT_ENV]).expanduser().resolve(), DATA_ROOT_ENV
+    saved = load_settings(settings_path(env)).get("workspace")
+    if saved:
+        return Path(saved).expanduser().resolve(), "saved selection"
+    return None, "none"
+
+
+def _count_files(d: Path, pattern: str) -> int:
+    return sum(1 for _ in d.glob(pattern)) if d.is_dir() else 0
+
+
+def inspect_workspace(path: str | Path) -> dict:
+    """READ-ONLY check of a candidate workspace: nothing is created, opened for writing or
+    migrated. The SQLite store is opened with ``mode=ro``. Returns counts and every problem."""
+    import sqlite3
+    root = Path(path).expanduser()
+    out: dict = {"path": str(root), "exists": root.is_dir(), "valid": False, "has_store": False,
+                 "store_backend": None, "store_path": None, "writable": False, "demo": False,
+                 "datasets": 0, "runs": 0, "strategies": 0, "prop_simulations": 0, "has_feature_cache": False,
+                 "problems": []}
+    if not root.is_dir():
+        out["problems"].append("the folder does not exist")
+        return out
+    root = root.resolve()
+    out["path"] = str(root)
+    if is_frozen() and _inside(root, resource_dir()):
+        out["problems"].append("the folder is inside the application bundle")
+        return out
+    out["demo"] = (root / "DEMO_WORKSPACE").exists()
+    if out["demo"]:
+        out["problems"].append("this is a synthetic demo workspace (start it with --demo)")
+    if not (root / "configs").is_dir():
+        out["problems"].append("no configs/ folder: this is not an EdgeLab research workspace")
+        return out
+    try:
+        from edgelab.core.config import load_config
+        cfg = load_config(root / "configs")
+    except Exception as exc:                                   # noqa: BLE001 - reported to the user
+        out["problems"].append(f"configs/ cannot be loaded: {exc}")
+        return out
+    st = cfg["storage"]
+    data_root = root / st.get("root", "data")
+    backend = st.get("backend", "auto")
+    if backend == "duckdb" or (backend == "auto" and _duckdb_available()):
+        out["problems"].append(f"storage backend {backend!r} would use DuckDB; the desktop app uses the SQLite store "
+                               "(set storage.backend: sqlite)")
+    out["store_backend"] = "sqlite"
+    db = data_root / st["sqlite_path"]
+    out["store_path"] = str(db)
+    out["data_root"] = str(data_root)
+    out["writable"] = os.access(root, os.W_OK) and (not data_root.exists() or os.access(data_root, os.W_OK))
+    if not out["writable"]:
+        out["problems"].append("the workspace is not writable by this user")
+    if db.is_file():
+        try:
+            con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+            try:
+                tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                missing = [t for t in STORE_TABLES if t not in tables]
+                if missing:
+                    out["problems"].append(f"the SQLite file has no EdgeLab tables {missing}")
+                else:
+                    out["has_store"] = True
+                    out["datasets"] = con.execute("SELECT COUNT(*) FROM datasets").fetchone()[0]
+                    out["runs"] = con.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            out["problems"].append(f"the SQLite store cannot be opened: {exc}")
+    lib = data_root / "strategy_library"                        # the path Services uses
+    out["strategies"] = _count_files(lib / "instances", "*.json")
+    out["prop_simulations"] = _count_files(data_root / "prop_simulations", "PROP_*.json")
+    out["has_feature_cache"] = (data_root / cfg.get("features", {}).get("cache_dir", "feature_cache")).is_dir()
+    out["valid"] = not out["problems"]
+    out["empty"] = out["valid"] and not out["has_store"] and out["strategies"] == 0
+    return out
+
+
+def _duckdb_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("duckdb") is not None
+
+
+def create_workspace(path: str | Path) -> dict:
+    """Create a NEW workspace in an empty or missing folder (bundled default configs copied).
+    Refuses a folder that already has content, so an existing workspace is never re-initialised."""
+    root = Path(path).expanduser()
+    if root.exists() and (not root.is_dir() or any(root.iterdir())):
+        raise ValueError(f"{root} already exists and is not empty; choose an empty folder, or open it as an "
+                         "existing workspace")
+    init_workspace(root)
+    return inspect_workspace(root)
+
+
 # ------------------------------------------------------------------------------------ build manifest
 @lru_cache(maxsize=1)
 def _load_manifest(path: str) -> dict:

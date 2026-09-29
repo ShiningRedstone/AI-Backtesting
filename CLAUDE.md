@@ -19,6 +19,8 @@ matched random-entry control (`research/controls.py`), and the prop-account simu
 ADR-49), and desktop packaging hardening ("Phase 7": `edgelab/runtime.py`, `edgelab/desktop.py`,
 `packaging/`, `build_windows.ps1`; ADR-50, DESKTOP_PACKAGING.md; `EdgeLab.exe` must be built on Windows), and the
 Strategy Lab ("Phase 8": `research/lab.py`, Research/Validate tabs, Compare page, AI Proposals gate page; ADR-51).
+Desktop: native window (ADR-52) and research-workspace selection (`runtime.resolve_workspace`, `workspace_host.py`,
+Settings → Research Workspace; ADR-53).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

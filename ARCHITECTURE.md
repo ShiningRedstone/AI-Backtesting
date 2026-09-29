@@ -794,6 +794,33 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-53 Research workspace selection is a pointer, resolved in one place (desktop change)
+- **Problem:** a packaged launch without `--data-root` silently used `%LOCALAPPDATA%\EdgeLab`
+  (`runtime.user_data_root()`), and `init_workspace` created a fresh, empty workspace there. So the
+  app showed no datasets even though the user's research lived in the development folder, and the
+  GUI had no way to point at it.
+- **Chosen:**
+  - **Resolution:** `runtime.resolve_workspace` is the single authority: `--data-root`, then
+    `EDGELAB_DATA_ROOT`, then the saved selection, else none (first run: the Welcome screen).
+  - **Persistence:** the selection lives in the app settings file (`runtime.settings_path`, outside
+    every workspace).
+  - **Validation:** `runtime.inspect_workspace` is read-only. It loads configs, opens the store
+    SQLite `mode=ro`, reads counts, checks writability and refuses demo folders.
+  - **Creation:** `runtime.create_workspace` works only in empty folders.
+  - **Serving:** the desktop launcher serves `edgelab.workspace_host.WorkspaceHost`, a WSGI
+    dispatcher holding one `create_app(root)` (unchanged) plus the workspace lock. `/api/workspace*`
+    switches by validating, locking, cancelling the old job, closing the old store, swapping and
+    saving the selection. With no workspace, the UI is still served and other API calls answer 409
+    `no_workspace`.
+  - **Development:** the server (`python -m edgelab.web`) reports its fixed root read-only.
+- **Rejected:**
+  - auto-detecting or auto-migrating a development folder (guessing, and mutation);
+  - copying data into the default location;
+  - storing the selection inside a workspace (it would conflict between workspaces);
+  - a second, GUI-only storage path.
+- **Unchanged:** the web app, services, store, engine and research code; `--data-root` / `--demo`
+  semantics; the per-workspace single-instance lock.
+
 ### ADR-52 Native desktop window: pywebview over the existing loopback app (desktop change)
 - **Problem:** the packaged app showed its UI in the user's default browser. The product needs its own
   window, without a new UI stack or backend changes.
@@ -1011,3 +1038,27 @@ tests/test_desktop_window.py   deterministic window lifecycle tests (fake GUI lo
   It is not bundled or auto-installed; a missing runtime gets a clear message.
 - The packaged Linux build has no GTK/Qt, so window mode there fails with a clear message
   (use `--ui browser`).
+
+## Module map (research workspace selection)
+
+```
+edgelab/runtime.py             + settings_path / load_settings / save_settings, resolve_workspace (one authority),
+                               inspect_workspace (read-only validation), create_workspace (empty folders only) (ADR-53)
+edgelab/workspace_host.py      WorkspaceHost: WSGI dispatcher over one create_app(root) + lock; /api/workspace* shell;
+                               close_app (cancel job, close store)
+edgelab/desktop.py             resolves via runtime.resolve_workspace; first-run (no workspace) mode; saved-but-missing
+                               workspace -> chooser with a notice; cli pass-through uses the selected workspace
+edgelab/web/app.py             + GET /api/workspace (read-only, development server)
+web/src/components/workspace.tsx   WorkspacePanel (Settings), WelcomePage (first run), ChooseWorkspaceLink
+packaging/workspace_snapshot.py    read-only before/after check of a workspace (counts, hashes, files)
+```
+
+## Known limitations (research workspace selection)
+
+- One workspace at a time per EdgeLab window; a workspace open in another EdgeLab process is refused
+  (its lock). The development server does not take that lock, so do not run both on one folder.
+- Switching waits for an in-flight service call (it holds the service lock) and cancels a running
+  background search (resumable later as `interrupted`, Phase 4).
+- The Browse button needs the native window; in `--ui browser` mode, type the path.
+- The per-launch first-run instance holds no lock until a workspace is chosen, so two first-run windows
+  can coexist until one selects a workspace.

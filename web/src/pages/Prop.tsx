@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { PropAccountResult, PropConfigRow, PropSimRow, PropSimulation, RunRow } from "../api/types";
 import { href, useRoute } from "../app/router";
+import { ChooseWorkspaceLink } from "../components/workspace";
 import { useApi, useApp } from "../app/context";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
 
@@ -52,6 +53,8 @@ function PropWorkspace() {
         only and never changed. A passed evaluation here is a description of that trade sequence under those rules — not evidence
         that the strategy is profitable or deployable. No broker routing, no live trading.</Banner>
       <Card title="Setup">
+        {runs.data.length === 0 && <Banner tone="warn" testId="prop-no-runs">No stored research runs in this workspace. Run a backtest first,
+          or <ChooseWorkspaceLink /> that holds your runs.</Banner>}
         <Field label="Source result (stored run)" hint="Results page lists every stored run with its status and dataset.">
           <Select value={runId} onChange={setRunId} testId="prop-run" placeholder="Choose a run…"
             options={runs.data.map((r) => ({ value: r.run_id, label: `${r.run_id} · ${r.strategy_name ?? r.strategy_id} · ${r.dataset_id} · ${r.status}${r.synthetic ? " · SYNTHETIC" : ""}` }))} />

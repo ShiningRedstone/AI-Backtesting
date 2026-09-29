@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Research workspace selection (desktop)
+
+| Item | Status |
+|---|---|
+| Root cause of the empty Datasets page: a packaged launch without `--data-root` silently created/used an empty `%LOCALAPPDATA%\EdgeLab` workspace | FIXED |
+| One workspace authority `runtime.resolve_workspace` (`--data-root` → `EDGELAB_DATA_ROOT` → saved selection → first run); selection saved in the app settings file outside every workspace (ADR-53) | IMPLEMENTED, TESTED |
+| Read-only workspace validation (configs, SQLite `mode=ro`, tables, counts, writable, not demo) before switching; create only in empty folders; missing saved workspace → chooser with notice (never silently created) | IMPLEMENTED, TESTED |
+| Settings → Research Workspace (current location, validity, SQLite, read/write, counts; check / use / create / default; Browse… in the window); Welcome screen on first run; workspace chip in the top bar; workspace-aware empty states (Datasets, Strategy Lab, Results, Prop) | IMPLEMENTED, TESTED (API + browser) |
+| Switching: cancel job, close store, swap app, move lock and runtime.json; both workspaces unchanged (store byte-identical) | IMPLEMENTED, TESTED |
+| `packaging/workspace_snapshot.py` read-only before/after check | IMPLEMENTED |
+| Real Windows check with `C:\Users\<you>\Documents\AI-Backtesting` | REQUIRES THE USER'S MACHINE (not run here) |
+
 ## Native desktop window (after Phase 8)
 
 | Item | Status |

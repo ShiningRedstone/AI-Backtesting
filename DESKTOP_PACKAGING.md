@@ -36,8 +36,9 @@ Double-click `dist\EdgeLab\EdgeLab.exe` and the EdgeLab window opens.
 - **No developer tools:** debug mode is off.
 - **Downloads are disabled:** the UI offers none. External links, which the UI doesn't use, would
   open in the default browser.
-- **Browser storage:** WebView2 keeps it (e.g. builder drafts in `localStorage`) in
-  `<workspace>\webview\`.
+- **Browser storage:** WebView2 keeps it (e.g. builder drafts in `localStorage`) in the app settings
+  folder (`%APPDATA%\EdgeLab\webview\`), not in a workspace, because workspaces can be switched while
+  the window is open.
 
 Flags:
 
@@ -79,7 +80,8 @@ errors to `<workspace>\logs\desktop.log` plus a message box.
 ```
 EdgeLab.exe (windowed) / EdgeLabConsole.exe (console)   packaging/launcher.py -> edgelab.desktop.main
   multiprocessing.freeze_support()            first: frozen worker processes for research
-  resolve workspace (edgelab.runtime)         %LOCALAPPDATA%\EdgeLab (or --data-root / EDGELAB_DATA_ROOT)
+  resolve workspace (edgelab.runtime)         --data-root / EDGELAB_DATA_ROOT / saved selection / none (first run)
+  WorkspaceHost (edgelab.workspace_host)      serves the active workspace's app; /api/workspace* to select/switch
   init workspace (first run)                  copy bundled default configs/ once; create data/, logs/, reports/
   single-instance lock                        logs\edgelab.lock; a 2nd launch brings the running window to the front
   window runtime check (--ui window)          WebView2 present? otherwise a clear message and exit (nothing started)
@@ -116,21 +118,80 @@ EdgeLab.exe (windowed) / EdgeLabConsole.exe (console)   packaging/launcher.py ->
 | **User data** | `data/` of the root in use | `<workspace>\data\` (SQLite store, datasets, runs, strategy library, feature cache, prop simulations, `import\`) |
 | Logs / runtime | `logs/` | `<workspace>\logs\` (`desktop.log`, `runtime.json`, `edgelab.lock`, `edgelab_workspace.json`) |
 
-**Workspace location:** `%LOCALAPPDATA%\EdgeLab` by default.
+## Research workspace (which folder EdgeLab works on)
 
-- Override it with `EdgeLab.exe --data-root D:\Research\EdgeLab` or the `EDGELAB_DATA_ROOT`
-  environment variable.
-- `--demo` uses a separate synthetic workspace, `<workspace>\demo`.
+A **research workspace** is a folder with `configs\` and `data\`. It holds:
+
+- the SQLite store (datasets and research runs);
+- the strategy library;
+- the feature cache;
+- prop simulations.
+
+Your development folder (`C:\Users\<you>\Documents\AI-Backtesting`) is a workspace. So is any folder
+EdgeLab creates.
+
+**How the app chooses one.** `edgelab.runtime.resolve_workspace` is the one authority, for the GUI,
+the launcher and the CLI pass-through alike. It checks, in order:
+
+1. `--data-root DIR` (explicit; not remembered);
+2. the `EDGELAB_DATA_ROOT` environment variable (explicit; not remembered);
+3. the workspace you **selected in the app** (remembered);
+4. otherwise, the first run: the **Welcome to EdgeLab** screen asks you to open an existing
+   workspace or create a new one.
+
+The default location `%LOCALAPPDATA%\EdgeLab` is used only once you select or create it there. It is
+never picked silently.
+
+**Choosing a workspace in the GUI:** *Settings → Research Workspace*, or the Welcome screen:
+
+1. Type a folder path, or click **Browse…** (a folder dialog, in the EdgeLab window).
+2. **Check folder** validates it **read-only**:
+   - the folder has `configs/`, and the configuration loads;
+   - the store is SQLite, and the database opens with `mode=ro` and has EdgeLab's tables;
+   - the folder is writable, and is not a demo workspace;
+   - it then shows the counts of datasets, runs, strategies and prop simulations.
+3. **Use this workspace** is enabled only for a valid folder. On switching:
+   - the previous workspace's background search is cancelled and its store closed;
+   - its lock is released, and the new workspace's lock is taken (one EdgeLab per workspace);
+   - the page reloads onto the new workspace. The top bar always shows the active workspace.
+4. **Create new workspace** works only in an empty or new folder: default configs are copied in,
+   and the store is created on first use. **Open default workspace** selects or creates
+   `%LOCALAPPDATA%\EdgeLab`.
+
+**Persistence.** The selection is saved in the app's own settings file, outside every workspace
+and never inside a research store:
+
+- Windows: `%APPDATA%\EdgeLab\settings.json`;
+- macOS: `~/Library/Preferences/EdgeLab/settings.json`;
+- Linux: `~/.config/edgelab/settings.json`;
+- or wherever `EDGELAB_SETTINGS` points.
+
+The next launch reconnects to that workspace. If it has gone missing (for example a disconnected
+drive), EdgeLab says so and shows the workspace chooser. It never creates an empty workspace in its
+place.
+
+**Safety.** Selecting a workspace is a pointer change:
+
+- nothing is copied, merged, migrated, re-imported or deleted;
+- dataset contents, their hashes and stored run records are never changed.
+
+Opening a workspace adds only runtime folders where missing (`logs\`, `data\import\`, `reports\`).
+Listing strategies rebuilds the strategy library's derived `index.json`, exactly as in development.
+`packaging\workspace_snapshot.py` checks this before and after (see below).
+
+Other rules:
+
+- `--demo` uses a separate synthetic workspace, `<data root>\demo`.
 - A workspace inside the bundle is refused.
-- Only `configs/` is ever copied into a workspace: no data and no repository files.
+- Only `configs/` is ever copied into a *new* workspace: no data and no repository files.
 
 **When a new build ships different default configs:** the launcher lists the files where your
 copy differs from the bundled defaults, and never changes them. User configuration belongs to the
 user, and its content feeds the research config hash.
 
 Development keeps working as before. `python -m edgelab.web` serves the repository root, and
-`python -m edgelab.desktop` runs the desktop launcher from source against the per-user workspace
-(or `--data-root`).
+`python -m edgelab.desktop` runs the desktop launcher from source with the same workspace rules
+(`--data-root`, or the selection saved in the app settings, or the Welcome screen).
 
 ## Build / version metadata (reproducibility)
 
@@ -304,24 +365,32 @@ pywebview GUI loop over the real launcher, server, lock and store:
 - WebView2 registry detection;
 - redirecting the windowed exe's output to a log.
 
-## Existing repository data (future migration path)
+## Using your existing development workspace
 
-Nothing is migrated automatically, and the developer checkout's `data/` is never touched by the
-packaged app unless you point it there explicitly. Options, in order of safety:
+Open it in place: *Settings → Research Workspace* (or the Welcome screen) →
+`C:\Users\<you>\Documents\AI-Backtesting` → **Check folder** → **Use this workspace**.
 
-1. **Copy (recommended when ready):**
-   1. Close both EdgeLab processes.
-   2. Copy `C:\Users\<you>\Documents\AI-Backtesting\data` to `%LOCALAPPDATA%\EdgeLab\data`.
-   3. Copy the repository's `configs\` to `%LOCALAPPDATA%\EdgeLab\configs`, so the config hash and
-      the cost, exclusion and calendar definitions of your existing runs match.
+- EdgeLab uses that folder's `configs\` and `data\` where they are, so the config hash and the
+  cost, exclusion and calendar definitions of your existing runs stay the same.
+- New runs record the packaged build id.
+- Don't run `python -m edgelab.web` on the same folder at the same time as EdgeLab.
 
-   The original stays untouched as a backup. The copied store re-verifies dataset hashes on load.
-2. **Point the app at the checkout:** `EdgeLab.exe --data-root C:\Users\<you>\Documents\AI-Backtesting`.
-   It uses that root's `configs/` and `data/` in place, only adds `logs/` (git-ignored) and
-   `data/import/`, and new runs record the packaged build id. Never run it at the same time as
-   `python -m edgelab.web` on that root.
-3. A guided, verified migration command (copy, then hash-check every dataset and run) is future
-   work.
+Verify that nothing changed (read-only):
+
+```powershell
+python packaging\workspace_snapshot.py C:\Users\<you>\Documents\AI-Backtesting --out before.json
+#   ... open the workspace in EdgeLab, browse Datasets / Strategy Lab / Results / Prop ...
+python packaging\workspace_snapshot.py C:\Users\<you>\Documents\AI-Backtesting --compare before.json
+```
+
+The comparison expects:
+
+- the dataset/run counts, dataset content hashes and run trades hashes all unchanged;
+- no file changes besides the derived strategy-library index (and feature-cache entries, only if a
+  feature was computed).
+
+Copying a workspace elsewhere (for example into `%LOCALAPPDATA%\EdgeLab`) is never done
+automatically. A guided, verified copy command is future work.
 
 ## Current limitations
 

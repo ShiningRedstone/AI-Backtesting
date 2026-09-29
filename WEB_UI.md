@@ -54,7 +54,8 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | Research | Phase 4 batch search: spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
 | Prop Simulation | Choose a stored run and one or more accounts (each with a rule set from `configs/prop/` or custom YAML, optional start), run, then view the source strategy result and the prop-account results side by side but separately: outcome, breaches, violations with detection mode, day table and per-trade progression. Recorded simulations are listed. See PROP_SIMULATION.md | `/api/prop/*` |
 | AI Proposals | Mode B gate in the GUI: paste a machine-readable proposal batch, check it (nothing saved), then save the accepted proposals as ordinary library strategies (lineage `mode_b_proposal`). No model is connected or called | `ingest_proposals`, `proposal_menu` |
-| Settings | Read-only configuration: cost profile status, engine config, sessions, instruments | config |
+| Settings | **Research Workspace** (desktop app: current folder with validity, SQLite, read/write, dataset/run/strategy/prop counts; check a folder read-only, use it, create a new one, open the default; development server: shows its fixed `--root`); read-only configuration: cost profile status, engine config, sessions, instruments | `/api/workspace*`, config |
+| Welcome (desktop, first run) | Shown instead of the pages while no research workspace is selected: open an existing workspace or create a new one | `/api/workspace*` |
 
 ## Strategy Lab workflow (Phase 8)
 
@@ -179,6 +180,8 @@ Every route is a thin call into `edgelab.services`.
 | POST | `/api/backtests/readiness`, `/api/backtests` | `backtest_readiness`, `backtest_strategy(record=True)` |
 | GET | `/api/results`, `/api/results/{run_id}` | run registry |
 | GET | `/api/results/report?run_ids=RUN_...,RUN_...` | Phase 5 descriptive report over stored runs of one strategy (no UI page yet) |
+| GET | `/api/workspace` | current workspace (read-only on the development server) |
+| POST | `/api/workspace/inspect` `{path}` · `/api/workspace/select` `{path}` · `/api/workspace/create` `{path}` · `/api/workspace/browse` | desktop app only (`edgelab.workspace_host`): read-only check, switch (persisted), create in an empty folder, native folder dialog |
 | GET | `/api/strategies/{id}/research` | `strategy_research` (machine-readable provenance + stored runs) |
 | GET | `/api/compare?source=lineage\|strategy\|batch\|search\|runs&id=...` | `compare_runs` (unranked) |
 | GET | `/api/results/{run_id}/curve` | `run_curve` |

@@ -7,6 +7,7 @@ import { useApi, useApp } from "../app/context";
 import { BacktestPanel, LineageTable, LineageTree, METHOD_LABEL, VariationBuilder, changesText } from "../components/strategy";
 import type { TreeNode } from "../components/strategy";
 import { BatchResearch, ProvenanceCard, RunsTable, ValidationPanel } from "../components/strategy/lab";
+import { ChooseWorkspaceLink } from "../components/workspace";
 import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TextInput, fmt, shortTime } from "../components/ui";
 import type { StrategyDoc } from "../dsl/types";
 
@@ -98,7 +99,8 @@ export function LibraryPage() {
       </div>
       <ErrorPanel error={actErr} />
       {loading && !data ? <Loading label="Loading strategies…" /> : !rows.length ? (
-        <Empty>{data?.length ? "No strategies match the filter." : <>No saved strategies yet. <a href={href("/builder?new=1")}>Create one</a>.</>}</Empty>
+        <Empty>{data?.length ? "No strategies match the filter." : <span data-testid="library-empty">No saved strategies in this research workspace. <a href={href("/builder?new=1")}>Create one</a> in the
+          Strategy Builder, or <ChooseWorkspaceLink /> that holds your strategies.</span>}</Empty>
       ) : (
         <TableWrap testId="library-table">
           <table>

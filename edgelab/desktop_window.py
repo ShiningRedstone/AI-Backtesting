@@ -127,6 +127,19 @@ class WindowController:
             pass
         return True
 
+    def browse_folder(self) -> str | None:
+        """Native folder picker in the EdgeLab window (None if cancelled or no window)."""
+        if self.window is None or self.state["closed"]:
+            return None
+        import webview
+        kind = getattr(getattr(webview, "FileDialog", None), "FOLDER", None)
+        if kind is None:
+            kind = getattr(webview, "FOLDER_DIALOG")
+        picked = self.window.create_file_dialog(kind)
+        if not picked:
+            return None
+        return str(picked[0] if isinstance(picked, (list, tuple)) else picked)
+
     def navigate(self, route: str) -> bool:
         if self.window is None or self.state["closed"]:
             return False
@@ -136,23 +149,23 @@ class WindowController:
         return True
 
 
-def install_control(app, token: str, ui: str, controller: WindowController | None = None) -> dict:
+def install_control(app, token: str, ui: str, controller: WindowController | None = None,
+                    served: dict | None = None) -> dict:
     """Loopback control routes on the launcher's app (never part of `python -m edgelab.web`).
     Every call needs the per-launch token from runtime.json. Also counts what the app served, so
     it can be shown that the UI loaded inside the window."""
     from flask import jsonify, request
-    served: dict[str, int] = {}
+    counting_here = served is None
+    served = {} if served is None else served                  # the workspace host counts across apps
 
     def authorized() -> bool:
         return hmac.compare_digest(request.headers.get(TOKEN_HEADER, ""), token)
 
-    @app.after_request
-    def _count(resp):                                           # noqa: ANN001
-        p = request.path
-        key = p if not p.startswith("/api/") else "/".join(p.split("/")[:3])
-        if not p.startswith("/api/desktop/"):
-            served[key] = served.get(key, 0) + 1
-        return resp
+    if counting_here:
+        @app.after_request
+        def _count(resp):                                       # noqa: ANN001
+            count_request(served, request.path)
+            return resp
 
     @app.get("/api/desktop/status")
     def desktop_status():
@@ -180,3 +193,9 @@ def install_control(app, token: str, ui: str, controller: WindowController | Non
         return jsonify({"navigated": True, "url": controller.state["last_url"]})
 
     return served
+
+
+def count_request(served: dict, path: str) -> None:
+    key = path if not path.startswith("/api/") else "/".join(path.split("/")[:3])
+    if not path.startswith("/api/desktop/"):
+        served[key] = served.get(key, 0) + 1

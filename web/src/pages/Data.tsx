@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { DatasetRow, ProposalReport } from "../api/types";
+import type { DatasetRow, ProposalReport, WorkspaceState } from "../api/types";
+import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
@@ -29,7 +30,8 @@ export function DatasetsPage() {
           {showImport ? "Close import" : "Import Dataset"}</Button></div></header>
       {showImport && <ImportPanel onDone={() => { reload(); }} />}
       {loading && !data ? <Loading label="Loading datasets…" /> : !data?.length ? (
-        <Empty>No datasets. Import one (existing Phase 2 pipeline) — EdgeLab never fabricates market data.</Empty>
+        <Empty><span data-testid="datasets-empty">No datasets in this workspace.</span> Open the research workspace that holds your datasets
+          (<ChooseWorkspaceLink />), or import one into this workspace (existing Phase 2 pipeline). EdgeLab never fabricates market data.</Empty>
       ) : (
         <TableWrap testId="datasets-table"><table>
           <thead><tr><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Start</th><th>End</th><th>Bars</th>
@@ -186,11 +188,16 @@ export function DiscoveryPage() {
 // =========================================================================== settings
 export function SettingsPage() {
   const { data: c, error } = useApi<ConfigView>("/api/config");
-  if (error) return <ErrorPanel error={error} />;
+  const ws = useApi<WorkspaceState>("/api/workspace");
+  const wsCard = <Card title="Research Workspace" testId="settings-workspace">
+    {ws.error ? <ErrorPanel error={ws.error} /> : ws.data ? <WorkspacePanel state={ws.data} /> : <Loading label="Loading workspace…" />}</Card>;
+  if (error?.kind === "no_workspace") return <div className="page"><header className="page-head"><h1>Settings</h1></header>{wsCard}</div>;
+  if (error) return <div className="page"><header className="page-head"><h1>Settings</h1></header>{wsCard}<ErrorPanel error={error} /></div>;
   if (!c) return <Loading label="Loading configuration…" />;
   return (
     <div className="page">
       <header className="page-head"><h1>Settings</h1></header>
+      {wsCard}
       <Banner tone="info">Read-only view. Configuration lives in <code>configs/*.yaml</code> (see CONFIG.md); edit the files and restart.
         {" "}{c.credentials}.</Banner>
       <div className="grid-cards">

@@ -127,7 +127,8 @@ class TestNativeWindowLifecycle(unittest.TestCase):
                     seen["datasets"] = json.loads(r.read())
 
             wv = fake_webview(script)
-            with use_webview(wv), \
+            settings = Path(d) / "app" / "settings.json"
+            with use_webview(wv), mock.patch.dict("os.environ", {"EDGELAB_SETTINGS": str(settings)}), \
                     mock.patch.object(dw, "window_runtime_problem", return_value=None), \
                     redirect_stdout(io.StringIO()):
                 code = desktop.run(["--data-root", str(root)])          # default: the native window
@@ -141,7 +142,8 @@ class TestNativeWindowLifecycle(unittest.TestCase):
             self.assertEqual((w.kw["width"], w.kw["height"], w.kw["resizable"]), (dw.SIZE[0], dw.SIZE[1], True))
             self.assertEqual(wv.starts[0]["debug"], False)                 # no developer tooling
             self.assertEqual(wv.starts[0]["private_mode"], False)
-            self.assertEqual(Path(wv.starts[0]["storage_path"]), root.resolve() / "webview")
+            self.assertEqual(Path(wv.starts[0]["storage_path"]), settings.parent / "webview")   # app-level, not per workspace
+            self.assertFalse(settings.exists())                     # --data-root is explicit: nothing persisted
             self.assertEqual(wv.starts[0]["gui"], "edgechromium" if sys.platform == "win32" else None)
             self.assertFalse(wv.settings["ALLOW_DOWNLOADS"])
             st = seen["status"]
