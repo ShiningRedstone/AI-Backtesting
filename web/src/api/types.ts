@@ -259,6 +259,7 @@ export interface RunSummary {
   parent_strategy_id: string | null; dataset_id: string; dataset_name: string | null; parent_dataset_id: string | null;
   provider: string; instrument: string; timeframe: string; period: { start: string; end: string };
   cost_profile: string | null; cost_status: string | null; config_hash: string; trades_hash: string;
+  cost_scenario?: string | null; cost_basis?: string | null;
   metrics: Record<string, number | string | null>; prop_simulations: number;
 }
 export interface CompareRow extends RunSummary {

@@ -75,6 +75,8 @@ class CostModel:
     # ---- after Phase 9 ----
     commission_mode: str = "per_unit"      # per_unit | notional
     commission_per_million: float = 0.0    # USD per USD 1,000,000 traded notional per side (notional mode)
+    scenario: str = ""                     # named research-cost scenario ("" = none declared)
+    basis: str = ""                        # the user's statement of where the numbers come from
     status: str = "assumed"
     profile: str = ""
 
@@ -163,6 +165,36 @@ class CostModel:
 _REQUIRED_WHEN_CONFIGURED = ("commission_per_side", "slippage_ticks_market", "slippage_ticks_stop")
 
 
+SCENARIO_NAME = r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,63}$"
+
+
+def _check_scenario(merged: dict, status: str, symbol: str, provider: str | None) -> None:
+    """A profile that declares ``scenario`` (even as null) may only be used as a NAMED research-cost
+    scenario: a name, a non-empty ``basis`` (the user's source statement), status assumed or
+    broker_verified, notional commission with ``commission_per_million``, and market + stop slippage
+    in points. Nothing is defaulted; a missing item refuses with the exact field."""
+    import re
+    where = f"costs.symbols.{symbol}{'.providers.' + provider if provider else ''}"
+    errs = []
+    if not (isinstance(merged.get("scenario"), str) and re.match(SCENARIO_NAME, merged["scenario"])):
+        errs.append("scenario: a name for this research-cost scenario (letters, digits, _ - .)")
+    if not (isinstance(merged.get("basis"), str) and merged["basis"].strip()):
+        errs.append("basis: your statement of the source of every number (not broker-verified unless it is)")
+    if status not in ("assumed", "broker_verified"):
+        errs.append("status: assumed or broker_verified")
+    if merged.get("commission_mode") != "notional":
+        errs.append("commission_mode: notional")
+    if merged.get("commission_per_million") is None:
+        errs.append("commission_per_million: USD per USD 1,000,000 traded notional per side")
+    if merged.get("slippage_unit") != "points":
+        errs.append("slippage_unit: points")
+    for k in ("slippage_ticks_market", "slippage_ticks_stop"):
+        if merged.get(k) is None:
+            errs.append(f"{k}: slippage in points")
+    if errs:
+        raise CostConfigError(f"cost scenario at {where} is incomplete - set: " + "; ".join(errs))
+
+
 def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None = None,
                            provider: str | None = None, allow_unconfigured: bool = False) -> CostModel:
     """Resolve costs: ``costs.default`` <- ``costs.symbols.<SYMBOL>`` <-
@@ -182,6 +214,8 @@ def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None =
         profile = f"{symbol}@{provider}"
     status = merged.pop("status", "assumed")
     notes = merged.pop("notes", None)  # documentation only
+    if "scenario" in merged and status != "unconfigured":
+        _check_scenario(merged, status, symbol, provider)
     required = _REQUIRED_WHEN_CONFIGURED
     if merged.get("commission_mode") == "notional":             # the per-million rate replaces the per-unit amount
         required = ("commission_per_million",) + tuple(k for k in required if k != "commission_per_side")
@@ -205,7 +239,7 @@ def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None =
         multiplier = cfg.get("backtest", {}).get("cost_multiplier", 1.0)
     merged["multiplier"] = float(multiplier)
     str_fields = {"slippage_unit", "spread_source", "financing_mode", "rollover_time", "rollover_timezone",
-                  "commission_mode"}
+                  "commission_mode", "scenario", "basis"}
     kw = {}
     for k, v in merged.items():
         if k in str_fields:

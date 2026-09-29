@@ -61,6 +61,7 @@ All money values are per contract (futures) or per unit (CFDs) per side.
 | `slippage_ticks_market` / `_stop` / `_limit` | adverse slippage per fill, in `slippage_unit` |
 | `spread_source` | `fixed` (use `spread_points`) or `dataset` (per-bar `spread` column) |
 | `spread_points` | full spread in points; charged once per round trip |
+| `scenario` / `basis` | a named research-cost scenario and the user's statement of the source of its numbers. A profile that declares `scenario` (even `null`) refuses until the scenario is complete: a name, a non-empty `basis`, `status` `assumed` or `broker_verified`, `commission_mode: notional` with `commission_per_million`, and market + stop slippage in points. Both are recorded in every run's cost assumptions |
 | `financing_mode` | `none` (there is no holding cost), `annual_rate` (one constant annual rate), or `not_modeled` (holding costs exist but are NOT charged; recorded as such on every run) |
 | `financing_long_rate` / `financing_short_rate` | annual rate; + = cost, - = credit |
 | `financing_day_count` | 360 or 365 |

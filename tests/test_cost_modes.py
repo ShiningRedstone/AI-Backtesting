@@ -68,9 +68,84 @@ class TestDukascopyTemplate(unittest.TestCase):
             cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertIn("commission_per_million", str(cm.exception))
         prov["commission_per_million"] = 1.0
+        with self.assertRaises(CostConfigError):                                   # scenario + basis still missing
+            cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
+        prov.update(scenario="test_scenario", basis="test inputs only")
         m = cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertEqual((m.commission_mode, m.spread_source, m.financing_mode, m.commission_per_side),
                          ("notional", "dataset", "not_modeled", 0.0))
+
+
+class TestNamedCostScenario(unittest.TestCase):
+    """A profile declaring `scenario` is usable only as a complete, named, sourced assumption."""
+
+    def setUp(self):
+        from edgelab.core.config import load_config
+        self.cfg = copy.deepcopy(load_config("configs"))
+        self.prov = self.cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
+
+    def model(self):
+        return cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
+
+    def test_each_required_field_is_named_when_missing(self):
+        self.prov["status"] = "assumed"
+        with self.assertRaises(CostConfigError) as cm:
+            self.model()
+        msg = str(cm.exception)
+        for field in ("scenario:", "basis:", "commission_per_million:", "slippage_ticks_market:", "slippage_ticks_stop:"):
+            self.assertIn(field, msg)
+        self.prov.update(scenario="s1", basis="   ", commission_per_million=1.0, slippage_ticks_market=0.0,
+                         slippage_ticks_stop=0.0)                                   # test inputs only
+        with self.assertRaises(CostConfigError) as cm:
+            self.model()
+        self.assertIn("basis:", str(cm.exception))                                 # blank basis refused
+        self.prov.update(basis="stated source", slippage_unit="ticks")
+        with self.assertRaises(CostConfigError) as cm:
+            self.model()
+        self.assertIn("slippage_unit: points", str(cm.exception))
+        self.prov.update(slippage_unit="points", scenario="bad name!")
+        with self.assertRaises(CostConfigError):
+            self.model()
+
+    def test_complete_scenario_keeps_status_and_is_recorded(self):
+        self.prov.update(scenario="dukascopy_tier_assumption_v1", basis="test inputs only",
+                         commission_per_million=1.0, slippage_ticks_market=0.0, slippage_ticks_stop=0.0)
+        for status in ("assumed", "broker_verified"):                              # the distinction is preserved
+            self.prov["status"] = status
+            m = self.model()
+            self.assertEqual((m.status, m.scenario, m.basis), (status, "dukascopy_tier_assumption_v1", "test inputs only"))
+            d = m.to_dict()                                                         # what every run record stores
+            self.assertEqual((d["scenario"], d["basis"], d["status"]), ("dukascopy_tier_assumption_v1",
+                                                                         "test inputs only", status))
+        self.prov["status"] = "unconfigured"                                       # unconfigured still refuses
+        with self.assertRaises(CostConfigError):
+            self.model()
+
+    def test_profiles_without_scenario_are_unaffected(self):
+        m = cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA")
+        self.assertEqual((m.status, m.scenario, m.basis), ("assumed", "", ""))
+
+    def test_scenario_is_surfaced_on_stored_runs(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from edgelab.research.lab import run_summary
+        from edgelab.services import Services
+        from tests.test_workspace import EMA, make_workspace
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        made = make_workspace(root, runs=False)
+        svc = Services(root=root)
+        self.addCleanup(svc.store.close)
+        svc.cfg["costs"]["symbols"]["NAS100_HISTDATA"]["providers"]["HISTDATA"].update(
+            scenario="test_scn", basis="test inputs only", commission_mode="notional", commission_per_million=2.0)
+        out = svc.backtest_strategy(EMA, made["dataset_id"], record=True)
+        rec, _ = svc.store.load_run(out["run_id"])
+        self.assertEqual((rec["assumptions"]["costs"]["scenario"], rec["assumptions"]["costs"]["basis"]),
+                         ("test_scn", "test inputs only"))
+        row = run_summary({**rec, "run_id": out["run_id"]})
+        self.assertEqual((row["cost_scenario"], row["cost_basis"], row["cost_status"]),
+                         ("test_scn", "test inputs only", "assumed"))
 
 
 class TestBacktestUsesTradePrices(unittest.TestCase):

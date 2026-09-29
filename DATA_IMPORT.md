@@ -282,6 +282,18 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
      trades on them are refused.
    - The alternative is a fixed spread (`spread_source: fixed`, `spread_points`) taken from evidence
      you cite. A constant ignores the fact that Dukascopy's spread is variable.
+   - **Named research-cost scenario (required).** The Dukascopy profile declares `scenario` and
+     `basis`, so no status change takes effect until all of the following are set in
+     `costs.symbols.NQ_DUKASCOPY.providers.DUKASCOPY`:
+     - `scenario`: a name;
+     - `basis`: your source statement for every number. A currently published Dukascopy tier is
+       NOT proof of the 2021-2026 rate, and the basis should say so;
+     - `commission_per_million`;
+     - `slippage_ticks_market` and `slippage_ticks_stop`, both in points;
+     - `status`: `assumed`, or `broker_verified` only with broker evidence for this period.
+
+     Any missing field refuses, with the exact field named. Every run records the scenario and
+     basis, and the Strategy Lab run tables show the scenario name, with the basis on hover.
    - **Notional commission versus research units.** Dukascopy's commission is charged on USD traded
      notional. EdgeLab computes notional as price × `point_value` × size.
      - For `NQ_DUKASCOPY`, `point_value` = 1 is a provisional RESEARCH UNIT (`economics:

@@ -155,7 +155,7 @@ export function RunsTable({ runs, testId = "lab-runs" }: { runs: RunSummary[]; t
           <td><a href={href(`/results/${r.run_id}`)}><Mono>{r.run_id}</Mono></a><div className="small muted">{shortTime(r.created_at)}</div></td>
           <td><ScopeBadge status={r.status} />{r.synthetic && <Badge tone="demo">synthetic</Badge>}</td>
           <td className="small">{r.dataset_name ?? r.dataset_id}{r.parent_dataset_id && <div className="muted">window of {r.parent_dataset_id}</div>}</td>
-          <td className="small">{r.provider} · {r.timeframe}</td><td className="small">{r.cost_status}</td>
+          <td className="small">{r.provider} · {r.timeframe}</td><td className="small" title={r.cost_basis ?? ""}>{r.cost_status}{r.cost_scenario ? ` · ${r.cost_scenario}` : ""}</td>
           <td>{fmt(r.metrics.trade_count)}</td><td className="mono">{num(r.metrics.net_r, 2)}</td><td className="mono">{num(r.metrics.expectancy_r)}</td>
           <td className="mono">{num(r.metrics.profit_factor)}</td><td className="mono">{num(r.metrics.max_drawdown_r, 2)}</td><td>{r.prop_simulations}</td>
           <td className="row-actions"><a href={href(`/results/${r.run_id}`)}>Open</a><a href={href(`/prop?run=${r.run_id}`)}>Prop simulation</a></td>
@@ -368,7 +368,7 @@ export function CompareTable({ rows, selected, onSelect }: { rows: CompareRow[];
             {params.map((p) => <td key={p} className="mono">{fmt(r.parameters[p])}</td>)}
             {COMPARE_COLS.map((c) => <td key={c.key} className="mono" title={c.key === "breakeven" ? r.breakeven_note ?? undefined : undefined}>
               {num(c.get(r), c.key === "trade_count" ? 0 : 3)}</td>)}
-            <td className="small">{fmt(r.metrics.sample_label)}</td><td className="small">{r.cost_status}</td><td>{r.prop_simulations}</td>
+            <td className="small">{fmt(r.metrics.sample_label)}</td><td className="small" title={r.cost_basis ?? ""}>{r.cost_status}{r.cost_scenario ? ` · ${r.cost_scenario}` : ""}</td><td>{r.prop_simulations}</td>
           </tr>))}
         </tbody></table></TableWrap>
       {shown.some((r) => r.synthetic) && <Banner tone="demo">{SYNTHETIC_NOTICE}</Banner>}

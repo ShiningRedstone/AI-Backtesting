@@ -14,6 +14,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Time-varying financing rates, tiered commission by cumulative volume | NOT IMPLEMENTED |
 | `scripts/dukascopy_bid_ask_check.py`: read-only BID/ASK alignment + spread report through the production parser; combined file only on exact alignment, never overwriting; no import | IMPLEMENTED, TESTED (synthetic) |
 | Notional commission relies on `NQ_DUKASCOPY`'s provisional research-unit `point_value` (not a broker-verified contract mapping) | DOCUMENTED CAVEAT |
+| Named research-cost scenario (`scenario` + `basis` on a cost profile): declaring it makes a complete, sourced, notional-commission, points-slippage scenario mandatory; recorded in every run's cost assumptions and shown in Strategy Lab run tables; Dukascopy template declares it (null) and stays `unconfigured` | IMPLEMENTED, TESTED |
 | BID/ASK check `--intersection`: combined file = exact overlap when one-sided timestamps are boundary-only (interior gaps refuse); `--out` provenance required (source SHA-256s, row/one-sided counts and ranges, overlap range, output rows/SHA-256) + `import_notes` for the manifest's provider_notes | IMPLEMENTED, TESTED (synthetic) |
 
 ## Dukascopy research eligibility: partial calendar verification (after Phase 9)

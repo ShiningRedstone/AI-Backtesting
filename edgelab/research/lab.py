@@ -57,6 +57,8 @@ def run_summary(rec: Mapping, prop_counts: Mapping[str, int] | None = None) -> d
         "instrument": d.get("instrument"), "timeframe": d.get("timeframe"),
         "period": {"start": str(d.get("start")), "end": str(d.get("end"))},
         "cost_profile": (a.get("costs") or {}).get("profile"), "cost_status": a.get("cost_status"),
+        "cost_scenario": (a.get("costs") or {}).get("scenario") or None,
+        "cost_basis": (a.get("costs") or {}).get("basis") or None,
         "config_hash": rec.get("config_hash"), "trades_hash": rec.get("trades_hash"),
         "code_version": rec.get("code_version"),
         "metrics": {k: _finite(hm.get(k)) if not isinstance(hm.get(k), str) else hm.get(k) for k in COMPARE_METRICS},

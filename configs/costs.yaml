@@ -91,6 +91,11 @@ costs:
         DUKASCOPY:
           status: unconfigured
           notes: "shape of Dukascopy CFD pricing; every number is EMPTY until evidenced (DATA_IMPORT.md)"
+          # Named research-cost scenario: REQUIRED before status can change. scenario = a name (e.g.
+          # "dukascopy_tier_assumption_v1"); basis = your statement of the source of each number
+          # (e.g. "current published tier X; not proof of the 2021-2026 rate"). Recorded on every run.
+          scenario: null
+          basis: null
           # Dukascopy publishes commission per USD 1 million traded (tiered by account/volume):
           commission_mode: notional
           commission_per_million: null     # USD per USD 1,000,000 notional per side - from YOUR tier
