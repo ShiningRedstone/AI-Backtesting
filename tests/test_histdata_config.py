@@ -71,6 +71,75 @@ class TestHistDataInstrument(unittest.TestCase):
         self.assertEqual(cm.financing_usd(1, 20000.0, 2.0, HD, 0, week), 0.0)
 
 
+class TestAssumedCostsThroughEngine(unittest.TestCase):
+    """End-to-end sanity check: the configured NAS100_HISTDATA@HISTDATA profile flows through
+    run_backtest. One scripted long, 2 research units (= 1 MNQ equivalent), market entry at 100.000,
+    10-point stop hit on the entry bar (fill 90.000), no rollover crossed. Synthetic data only."""
+
+    @classmethod
+    def setUpClass(cls):
+        from edgelab.analytics.metrics import breakeven_cost_multiplier, cost_sensitivity
+        from edgelab.data.synthetic import bars_from_ohlc
+        from edgelab.data.validation import validate_and_freeze
+        from edgelab.engine.backtester import run_backtest
+        from edgelab.engine.signals import OrderSpec
+        from tests.helpers import UTC247, Scripted, bt_cfg, flat_bar
+        df = bars_from_ohlc([flat_bar(100.0), (100.0, 100.5, 89.0, 89.5)], start="2024-01-02 00:00")
+        cls.ds = validate_and_freeze(df, HD, UTC247, "1m", 1, "HISTDATA", "HD_COST_SANITY")
+        strat = Scripted(OrderSpec("market", stop_points=10, target_points=40), {0: 1})
+        cls.backtest = staticmethod(lambda mult=None: run_backtest(
+            cls.ds, strat, cost_model_from_config(CFG, "NAS100_HISTDATA", multiplier=mult,
+                                                  provider=cls.ds.manifest.provider),
+            bt_cfg(), sizing={"mode": "fixed", "contracts": 2}))
+        cls.res = cls.backtest()
+        cls.t = cls.res.trades.iloc[0]
+        cls.sens = cost_sensitivity(cls.res.trades, (1.0, 2.0, 3.0))
+        cls.breakeven = breakeven_cost_multiplier(cls.res.trades)
+
+    def test_single_trade_setup(self):
+        t = self.t
+        self.assertEqual(len(self.res.trades), 1)
+        self.assertEqual((t.direction, t.contracts, t.entry_type, t.exit_reason), (1, 2, "market", "STOP"))
+        self.assertAlmostEqual(t.entry_price_theo, 100.0)
+        self.assertAlmostEqual(t.exit_price_theo, 90.0)
+        self.assertAlmostEqual(t.risk_usd, 20.0)                  # 10 pts x $1 x 2 units
+        self.assertAlmostEqual(t.gross_usd, -20.0)
+        self.assertAlmostEqual(t.gross_r, -1.0)
+
+    def test_cost_components_and_r(self):
+        t = self.t
+        self.assertAlmostEqual(t.commission_usd, 2.0)             # 0.50 x 2 units x 2 sides
+        self.assertAlmostEqual(t.fees_usd, 0.0)
+        self.assertAlmostEqual(t.slippage_usd, 1.0)               # (0.25 + 0.25) pts x $1 x 2
+        self.assertAlmostEqual(t.spread_usd, 1.0)                 # 0.50 pts x $1 x 2
+        self.assertAlmostEqual(t.financing_usd, 0.0)
+        self.assertAlmostEqual(t.cost_usd, 4.0)
+        self.assertAlmostEqual(t.cost_usd_base, 4.0)
+        self.assertAlmostEqual(t.cost_r, 0.2)
+        self.assertAlmostEqual(t.net_usd, -24.0)
+        self.assertAlmostEqual(t.net_r, -1.2)
+        self.assertAlmostEqual(t.entry_price_eff, 100.25)         # slippage moves effective fills
+        self.assertAlmostEqual(t.exit_price_eff, 89.75)
+
+    def test_cost_multipliers_scale_only_costs(self):
+        for k, row in zip((1.0, 2.0, 3.0), self.sens.itertuples()):
+            self.assertAlmostEqual(row.expectancy_r, -1.0 - 0.2 * k)      # post hoc, from stored base cost
+            t = self.backtest(k).trades.iloc[0]                              # and through the engine
+            self.assertAlmostEqual(t.cost_usd, 4.0 * k)
+            self.assertAlmostEqual(t.cost_r, 0.2 * k)
+            self.assertAlmostEqual(t.cost_usd_base, 4.0)
+            self.assertAlmostEqual((t.gross_usd, t.gross_r), (-20.0, -1.0))
+        self.assertAlmostEqual(self.breakeven, self.t.gross_r / self.t.cost_r_base)   # = -5.0
+        self.assertAlmostEqual(self.breakeven, -5.0)
+
+    def test_run_metadata_marks_assumed_costs(self):
+        a, d = self.res.assumptions, self.res.dataset
+        self.assertEqual((d["provider"], d["instrument"]), ("HISTDATA", "NAS100_HISTDATA"))
+        self.assertEqual(a["cost_status"], "assumed")
+        self.assertEqual((a["costs"]["status"], a["costs"]["profile"]), ("assumed", "NAS100_HISTDATA@HISTDATA"))
+        self.assertNotEqual(a["cost_status"], "broker_verified")
+
+
 class TestHistDataCalendars(unittest.TestCase):
     def test_existing_calendars_unchanged(self):
         c = CALENDARS["CME_EQUITY"]
