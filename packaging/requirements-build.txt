@@ -8,4 +8,5 @@ pyyaml>=6.0
 scipy>=1.10
 flask>=3.0
 tzdata>=2024.1          # IANA timezone database: Windows has none built in (zoneinfo needs it)
+pywebview>=5.0,<7    # native EdgeLab window (Windows: Edge WebView2 via pythonnet, installed with it)
 pyinstaller>=6.0

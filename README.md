@@ -247,8 +247,10 @@ only to rebuild the frontend):
 powershell -ExecutionPolicy Bypass -File build_windows.ps1 -Smoke   # -> dist\EdgeLab\EdgeLab.exe
 ```
 
-Double-click `dist\EdgeLab\EdgeLab.exe`. It starts the local server on 127.0.0.1 with a free port and
-opens the UI in your browser. Keep its window open while you work; close it to stop EdgeLab. Run from
+Double-click `dist\EdgeLab\EdgeLab.exe`. It starts the local server on 127.0.0.1 with a free port and opens
+EdgeLab in its **own application window** (Microsoft Edge WebView2, part of Windows 11 and installed on Windows 10 by
+Windows Update). Close the window to stop EdgeLab. `EdgeLab.exe --ui browser` uses your default browser instead;
+`EdgeLabConsole.exe` is the console variant (logs, `cli`). Run from
 source with `python -m edgelab.desktop`. Details, the data layout and the migration path for existing
 repository data are in DESKTOP_PACKAGING.md.
 

@@ -167,7 +167,7 @@ python -m edgelab.cli --help                     # data, features, strategy, res
 python -m edgelab.cli research plan|run|rank ... # Phase 4 batch search (see README)
 python -m edgelab.web                            # web app at http://127.0.0.1:8765
 python -m edgelab.web --demo                     # separate synthetic demo workspace
-python -m edgelab.desktop [--data-root DIR]      # desktop launcher from source (free loopback port, browser)
+python -m edgelab.desktop [--data-root DIR] [--ui window|browser|none]  # desktop launcher from source (own window by default)
 python packaging/build.py [--smoke]              # packaged folder build (Windows: build_windows.ps1)
 python scripts/phase1_demo.py                    # end-to-end synthetic demo (must stay identical)
 python scripts/benchmark_search.py               # Phase 4 search throughput (informational)

@@ -794,6 +794,30 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-52 Native desktop window: pywebview over the existing loopback app (desktop change)
+- **Problem:** the packaged app showed its UI in the user's default browser. The product needs its own
+  window, without a new UI stack or backend changes.
+- **Chosen:** `edgelab/desktop_window.py` hosts a pywebview window (Windows: Microsoft Edge WebView2 via
+  pythonnet/WinForms, `gui="edgechromium"`), navigated to the loopback URL the launcher already serves.
+  - The GUI loop runs on the main thread, and closing the window returns to the launcher's existing
+    shutdown path.
+  - WebView2 presence is checked from the registry before anything starts, with a clear message
+    (`--ui browser` as the explicit alternative). There is no silent fallback engine.
+  - A loopback control channel, token-protected with the per-launch token in `runtime.json` and added
+    only by the launcher, lets a second launch focus the running window. It also lets the Windows
+    integration test navigate the window and observe what it loaded.
+  - The PyInstaller spec builds `EdgeLab.exe` (windowed) and `EdgeLabConsole.exe` (console: CLI,
+    logs, headless smoke) over one bundle. The windowed exe's stdout/stderr go to
+    `logs/console.log`.
+- **Rejected:**
+  - Electron: a Node runtime and a second packaging system.
+  - CEF / Qt WebEngine: large, and duplicate what Windows already ships.
+  - Keeping the browser: not a desktop app.
+  - Bundling a fixed-version WebView2: about 150 MB, and security updates would lag the Evergreen
+    runtime.
+- **Unchanged:** the frontend, the backend, the research code, `python -m edgelab.web`, the data root,
+  the single-instance lock and the build command.
+
 ### ADR-51 Strategy Lab: read models over stored research, thin validation/proposal routes (Phase 8)
 - **Problem:** the backend could already version strategies, generate variations, run searches, OOS / walk-forward
   / random controls and prop simulations, but the GUI reached only part of it. Comparison and provenance
@@ -965,3 +989,25 @@ lab_smoke_real.py              local GUI-path smoke test on a real stored datase
   example `ema_crossover` `slow` 15 + 3k: 20 needs step 1). That is a real, hashed rule change.
 - Random-control results are shown, never stored (unchanged). Re-running one needs the same seed.
 - No external model is connected; AI Proposals accepts machine-readable batches only.
+
+## Module map (native desktop window)
+
+```
+edgelab/desktop_window.py      WindowController (pywebview/WebView2 window on the loopback URL), WebView2 registry
+                               check, install_control (/api/desktop/{status,focus,navigate}, token) (ADR-52)
+edgelab/desktop.py             --ui window|browser|none (default window); runtime check before start; second-launch
+                               hand-off (focus the running window); windowed-exe output -> logs/console.log
+packaging/edgelab.spec         EdgeLab (windowed) + EdgeLabConsole (console) over one bundle; pywebview required
+packaging/window_test_windows.py   Windows-only real-window integration test (scratch data)
+tests/test_desktop_window.py   deterministic window lifecycle tests (fake GUI loop over the real launcher)
+```
+
+## Known limitations (native desktop window)
+
+- The real WebView2 window has not been exercised in the development environment (Linux). It must be
+  verified on Windows with `packaging/window_test_windows.py` (it runs automatically with
+  `build_windows.ps1 -Smoke`).
+- Requires the Microsoft Edge WebView2 Runtime (Windows 11 built in; Windows 10 through Windows Update).
+  It is not bundled or auto-installed; a missing runtime gets a clear message.
+- The packaged Linux build has no GTK/Qt, so window mode there fails with a clear message
+  (use `--ui browser`).

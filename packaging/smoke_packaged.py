@@ -92,8 +92,12 @@ def main(argv=None) -> int:
     ap.add_argument("--data-root", help="scratch data root (must not exist); default: a temp directory")
     ap.add_argument("--keep", action="store_true", help="keep the scratch data root")
     a = ap.parse_args(argv)
-    cmd = [str(Path(a.exe).resolve())] if a.exe else shlex.split(a.cmd, posix=os.name != "nt")
-    bundle = Path(a.exe).resolve().parent if a.exe else None
+    exe = Path(a.exe).resolve() if a.exe else None
+    # headless checks drive the console launcher (pipes, Ctrl+Break); the windowed EdgeLab.exe is
+    # exercised by packaging/window_test_windows.py on Windows
+    console = exe.with_name("EdgeLabConsole" + exe.suffix) if exe else None
+    cmd = [str(console if console and console.is_file() else exe)] if exe else shlex.split(a.cmd, posix=os.name != "nt")
+    bundle = exe.parent if exe else None
     base = Path(a.data_root) if a.data_root else Path(tempfile.mkdtemp(prefix="edgelab_smoke_")) / "root"
     if base.exists():
         sys.exit(f"refusing: scratch data root {base} already exists (the smoke test only uses a fresh root)")
@@ -102,7 +106,8 @@ def main(argv=None) -> int:
 
     print("\n1-2. executable exists and launches")
     if a.exe:
-        check(Path(a.exe).is_file(), f"executable exists ({a.exe})")
+        check(exe.is_file(), f"executable exists ({exe})")
+        check(console.is_file(), f"console launcher exists ({console.name})")
     proc = start(cmd, base)
     info = wait_runtime(root / "logs" / "runtime.json", proc)
     if not check(info is not None, "launcher started and wrote logs/runtime.json"):

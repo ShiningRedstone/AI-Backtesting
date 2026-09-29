@@ -10,7 +10,9 @@ Steps (each fails loudly):
   3. generate build/edgelab_build.json from the real sources (edgelab.runtime);
   4. run PyInstaller with packaging/edgelab.spec (folder mode);
   5. copy the manifest next to the executable for humans; optionally run the packaged smoke test.
-Output: dist/EdgeLab/EdgeLab.exe (Windows) or dist/EdgeLab/EdgeLab (other platforms).
+Output: dist/EdgeLab/EdgeLab.exe (windowed desktop app) + dist/EdgeLab/EdgeLabConsole.exe (console:
+CLI, logs, headless smoke) on Windows; without .exe on other platforms. --smoke runs the headless
+packaged smoke test and, on Windows, the native-window test (packaging/window_test_windows.py).
 """
 from __future__ import annotations
 
@@ -77,14 +79,22 @@ def main(argv=None) -> int:
                     "--distpath", str(REPO / "dist"), "--workpath", str(out / "pyinstaller"),
                     str(REPO / "packaging" / "edgelab.spec")], cwd=REPO, env=env, check=True)
     app = REPO / "dist" / "EdgeLab"
-    exe = app / ("EdgeLab.exe" if os.name == "nt" else "EdgeLab")
-    if not exe.is_file():
-        sys.exit(f"PyInstaller finished but {exe} is missing")
+    ext = ".exe" if os.name == "nt" else ""
+    exe, console = app / f"EdgeLab{ext}", app / f"EdgeLabConsole{ext}"
+    for f in (exe, console):
+        if not f.is_file():
+            sys.exit(f"PyInstaller finished but {f} is missing")
     shutil.copy2(mf, app / runtime.BUILD_MANIFEST)
-    print(f"\nbuilt {exe}")
+    print(f"\nbuilt {exe}\n      {console}")
     if a.smoke:
-        step("packaged smoke test")
-        return subprocess.run([sys.executable, str(REPO / "packaging" / "smoke_packaged.py"), "--exe", str(exe)]).returncode
+        step("packaged smoke test (headless, EdgeLabConsole)")
+        code = subprocess.run([sys.executable, str(REPO / "packaging" / "smoke_packaged.py"), "--exe", str(exe)]).returncode
+        if code:
+            return code
+        if sys.platform == "win32":
+            step("native window test (EdgeLab.exe opens its own window; it closes itself when done)")
+            return subprocess.run([sys.executable, str(REPO / "packaging" / "window_test_windows.py"), "--exe", str(exe)]).returncode
+        print("native window test skipped: it needs Windows (WebView2); run packaging/window_test_windows.py there")
     return 0
 
 

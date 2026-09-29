@@ -1,10 +1,12 @@
 """EdgeLab desktop launcher: the packaged application's entry point (``EdgeLab.exe``).
 
-    EdgeLab.exe                                   start the local app, open the UI in the browser
+    EdgeLab.exe                                   start the local app in its own EdgeLab window
     EdgeLab.exe --data-root D:\\Research\\EdgeLab    use another persistent workspace
     EdgeLab.exe --demo                            separate synthetic demo workspace (<data root>\\demo)
-    EdgeLab.exe --no-browser                      start without opening a browser
-    EdgeLab.exe cli research run spec.yaml ...    the command line (edgelab.cli), same workspace rules
+    EdgeLab.exe --ui browser                      show the UI in the default web browser instead
+    EdgeLab.exe --ui none   (alias --no-browser)  headless: serve only (tests, automation)
+    EdgeLabConsole.exe ...                        the same launcher with a console (logs visible)
+    EdgeLabConsole.exe cli research run spec.yaml ...   the command line (edgelab.cli), same workspace rules
 
 Development equivalent: ``python -m edgelab.desktop`` (defaults to the per-user data root too;
 ``python -m edgelab.web`` keeps serving the repository workspace).
@@ -17,7 +19,11 @@ Behaviour:
 * One running instance per workspace (a lock file): a second launch opens the running instance's
   UI instead of starting a second server on the same store.
 * The server binds to 127.0.0.1 only, on an OS-assigned free port (or ``--port``), and the UI is
-  opened only after ``/api/health`` answers.
+  shown only after ``/api/health`` answers: by default in a native EdgeLab window (pywebview /
+  Microsoft Edge WebView2, see ``edgelab.desktop_window``); closing the window stops EdgeLab. A
+  missing WebView2 runtime is reported before anything starts (never a silent fallback).
+* A second launch on the same workspace brings the running window to the front (loopback control
+  channel, token in runtime.json) instead of starting a second server.
 * ``<workspace>/logs/runtime.json`` records pid, URL and build while running (removed on exit).
 * Ctrl+C, closing the console window, SIGTERM or Ctrl+Break stop the server, close the store and
   release the lock. Every committed write is already durable in SQLite.
@@ -155,13 +161,16 @@ def parse_args(argv):
                                         "$EDGELAB_DATA_ROOT)")
     ap.add_argument("--demo", action="store_true", help="separate synthetic demo workspace (<data root>/demo)")
     ap.add_argument("--port", type=int, default=0, help="loopback port (default: a free port)")
-    ap.add_argument("--no-browser", action="store_true", help="do not open the UI in a browser")
+    ap.add_argument("--ui", choices=("window", "browser", "none"), default="window",
+                    help="window: native EdgeLab window (default); browser: default web browser; none: headless")
+    ap.add_argument("--no-browser", action="store_true", help="alias for --ui none (headless)")
     ap.add_argument("--ready-timeout", type=float, default=60.0)
     return ap.parse_args(argv)
 
 
 def run(argv=None) -> int:
     args = parse_args(argv)
+    ui = "none" if args.no_browser else args.ui
     from edgelab import runtime
     base = Path(args.data_root).expanduser() if args.data_root else runtime.user_data_root()
     base = base.resolve()
@@ -179,12 +188,17 @@ def run(argv=None) -> int:
     except OSError as exc:
         show_error(f"Cannot create the data folder {root}: {exc}")
         return 1
+    _redirect_missing_streams(logs)                   # windowed exe: no console, keep output in a log
     if not lock.acquire():
-        info = _read_runtime(logs)
-        if info and not args.no_browser:
-            webbrowser.open(info["url"])
-        print(f"EdgeLab is already running for {root}" + (f" at {info['url']}" if info else ""))
-        return 0
+        return _hand_off(root, logs, ui)
+    if ui == "window":
+        from edgelab.desktop_window import window_runtime_problem
+        problem = window_runtime_problem()            # before anything starts: never a silent fallback
+        if problem:
+            _log(logs, problem)
+            show_error(problem)
+            lock.release()
+            return 1
     server = None
     svc = None
     try:
@@ -213,25 +227,35 @@ def run(argv=None) -> int:
             raise StartupError(f"port {args.port} on {HOST} is already in use; start without --port to use "
                                "a free port") from None
         url = f"http://{HOST}:{server.server_port}"
+        import secrets
+        from edgelab.desktop_window import WindowController, install_control
+        token = secrets.token_hex(24)
+        controller = WindowController(url, root / "webview") if ui == "window" else None
+        install_control(app, token, ui, controller)
         threading.Thread(target=server.serve_forever, name="edgelab-http", daemon=True).start()
         wait_ready(url, args.ready_timeout)
         from edgelab.core.identity import code_version
         info = {"pid": os.getpid(), "url": url, "port": server.server_port, "data_root": str(root),
-                "demo": args.demo, "runtime": runtime.runtime_info(), "code_version": code_version(),
+                "demo": args.demo, "ui": ui, "control_token": token,
+                "runtime": runtime.runtime_info(), "code_version": code_version(),
                 "config_differences_from_bundled_defaults": ws["config_differences"],
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
         (logs / RUNTIME_FILE).write_text(json.dumps(info, indent=1))
-        print(f"EdgeLab running at {url}\n  data: {root}\n  build: {runtime.build_label()}\n"
-              "Keep this window open while you use EdgeLab; close it (or press Ctrl+C) to stop.", flush=True)
+        print(f"EdgeLab running at {url}\n  data: {root}\n  build: {runtime.build_label()}\n  ui: {ui}\n"
+              + ("Close the EdgeLab window to stop." if ui == "window" else
+                 "Keep this window open while you use EdgeLab; close it (or press Ctrl+C) to stop."), flush=True)
         if ws["config_differences"]:
             print("  note: your configs differ from this build's bundled defaults in: "
                   + ", ".join(ws["config_differences"]) + " (not changed automatically)", flush=True)
-        if not args.no_browser:
-            webbrowser.open(url)
         stop = threading.Event()
         _stop_on_signals(stop)
-        while not stop.wait(0.5):
-            pass
+        if ui == "window":
+            controller.run(stop)                      # blocks until the window is closed
+        else:
+            if ui == "browser":
+                webbrowser.open(url)
+            while not stop.wait(0.5):
+                pass
         print("EdgeLab stopping…", flush=True)
         return 0
     except StartupError as exc:
@@ -262,6 +286,50 @@ def run(argv=None) -> int:
         except OSError:
             pass
         lock.release()
+
+
+def _hand_off(root: Path, logs: Path, ui: str) -> int:
+    """Another instance already serves this workspace: bring its window to the front; if it has no
+    window, show its URL in a window (or browser) of this process. Never a second server."""
+    info = _read_runtime(logs)
+    if not info:
+        show_error(f"EdgeLab is already running for {root} (it is still starting, or a previous instance is "
+                   "shutting down). Try again in a moment.")
+        return 1
+    print(f"EdgeLab is already running for {root} at {info['url']}")
+    if ui == "none":
+        return 0
+    from edgelab.desktop_window import TOKEN_HEADER
+    try:
+        req = urllib.request.Request(info["url"] + "/api/desktop/focus", data=b"{}", method="POST",
+                                     headers={TOKEN_HEADER: info.get("control_token", ""),
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            if r.status == 200:
+                return 0                              # the running window is now in front
+    except OSError:
+        pass
+    if ui == "browser":
+        webbrowser.open(info["url"])
+        return 0
+    from edgelab.desktop_window import WindowController, window_runtime_problem
+    problem = window_runtime_problem()
+    if problem:
+        show_error(problem)
+        return 1
+    WindowController(info["url"], root / "webview").run()     # a viewer onto the running backend
+    return 0
+
+
+def _redirect_missing_streams(logs: Path) -> None:
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        fh = open(logs / "console.log", "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    sys.stdout = sys.stdout or fh
+    sys.stderr = sys.stderr or fh
 
 
 def _read_runtime(logs: Path) -> dict | None:

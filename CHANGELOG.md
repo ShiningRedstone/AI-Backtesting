@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Native desktop window (after Phase 8)
+
+| Item | Status |
+|---|---|
+| `EdgeLab.exe` opens its own EdgeLab window (pywebview + Microsoft Edge WebView2) on the existing loopback app; closing it shuts the backend down cleanly (ADR-52) | IMPLEMENTED, TESTED (deterministic; frozen Linux build) |
+| WebView2 detection before start with a clear message; `--ui browser` / `--ui none` explicit alternatives; no silent fallback | IMPLEMENTED, TESTED |
+| Second launch focuses the running window (token-protected loopback control channel); never a second server | IMPLEMENTED, TESTED |
+| `EdgeLabConsole.exe` (console: CLI, logs, headless smoke) next to the windowed `EdgeLab.exe`; windowed output to `logs/console.log` | IMPLEMENTED, BUILT (Linux) |
+| Windows real-window integration test `packaging/window_test_windows.py` (runs with `build_windows.ps1 -Smoke`) | IMPLEMENTED; REQUIRES WINDOWS (not run here) |
+| Fixed-version WebView2 bundling, tray icon, installer | NOT IMPLEMENTED |
+
 ## Phase 8 (as requested): Strategy Lab and GUI-first strategy research
 
 | Item | Status |
