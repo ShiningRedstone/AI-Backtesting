@@ -705,7 +705,7 @@ class Services:
                 "cost_status": res.assumptions["cost_status"], "cost_profile": res.assumptions["costs"]["profile"],
                 "trades_hash": res.trades_hash,
                 "metrics": ra._pick(cell["metrics"], ra.REPORT_METRICS),
-                "_trades": res.trades, "_record": {"assumptions": res.assumptions, "dataset": res.dataset,
+                "_trades": res.trades, "_record": {"assumptions": res.assumptions, "dataset": res.dataset, "status": status,
                                                    "notes": note if not cell["synthetic"] else "SYNTHETIC"}}
 
     def _validation_output(self, kind: str, vid: str, strategy_ids: set, frozen_hash: str, dataset_id: str,
@@ -771,7 +771,7 @@ class Services:
              "monte_carlo_oos": self._monte_carlo(pooled, mc_sims, mc_seed)})
 
     def random_entry_control(self, src: Any, dataset_id: str, n_controls: int = 20, seed: int = 0,
-                             period: tuple | None = None) -> dict:
+                             period: tuple | None = None, sample_status: str = "IN_SAMPLE") -> dict:
         """Matched random-entry control for ONE fixed candidate (research/controls.py): the candidate
         runs once through the normal path; each seeded realization re-uses the candidate's compiled
         definition, costs, sizing and backtest config and randomizes only entry timing/direction
@@ -786,6 +786,8 @@ class Services:
         from edgelab.strategy.compiler import compile_strategy
         if not (isinstance(n_controls, int) and 1 <= n_controls <= 1000):
             raise ValueError("n_controls must be an integer in 1..1000")
+        if sample_status not in ("IN_SAMPLE", "OUT_OF_SAMPLE", "WALK_FORWARD"):      # labelling only
+            raise ValueError("sample_status must be IN_SAMPLE, OUT_OF_SAMPLE or WALK_FORWARD")
         frozen, fh = freeze_definition(self._definition(src))
         cell = self._run_cell(copy_frozen(frozen), dataset_id, False, period=period)
         ds, cand, costs, res = cell["ds"], cell["strategy"], cell["costs"], cell["result"]
@@ -823,7 +825,7 @@ class Services:
                                        "cooldown / eligible bars; direction long with the candidate's "
                                        "pre-cooldown long share; the same cooldown and engine rules then "
                                        "apply, so post-cooldown signal and trade counts are not forced"}}
-        labels = ra.research_labels([{"assumptions": a, "dataset": d,
+        labels = ra.research_labels([{"assumptions": a, "dataset": d, "status": sample_status,
                                       "notes": "SYNTHETIC" if cell["synthetic"] else ""}], load_instruments(self.cfg))
         labels.append("Random-entry control: a conditional null (entry timing and direction randomized among "
                       "the candidate's own eligible bars, calibrated to its entries before cooldown and their "
@@ -837,7 +839,7 @@ class Services:
             "dataset": {k: d.get(k) for k in ("dataset_id", "parent_dataset_id", "provider", "instrument",
                                               "timeframe", "start", "end")},
             "cost_profile": a["costs"]["profile"], "cost_status": a["cost_status"],
-            "control_config": config, "labels": labels,
+            "sample_status": sample_status, "control_config": config, "labels": labels,
             "comparison": rc.summarize(cand_m, reals),
             "realizations": reals,
             "stored_as_runs": False,

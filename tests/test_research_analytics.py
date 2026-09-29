@@ -44,6 +44,28 @@ A = trades(["2019-01-07 10:00", "2019-01-08 10:30", "2019-01-09 13:00"], [2.0, 2
 B = trades(["2020-01-06 03:00"], [-1.0], [0.2])
 
 
+class TestSampleScopeLabels(unittest.TestCase):
+    """The first caveat names the sample the runs were measured on (run status)."""
+    BASE = {"assumptions": {"cost_status": "assumed", "costs": {"profile": "P"}}, "dataset": {}}
+    IN_SAMPLE_TEXT = ("Historical, in-sample, descriptive results under the stated assumptions; "
+                      "not a forecast and not by itself evidence of a trading edge.")
+
+    def first(self, *statuses):
+        return ra.research_labels([{**self.BASE, "status": s} for s in statuses])[0]
+
+    def test_oos_first_label_does_not_say_in_sample(self):
+        for st in (("OUT_OF_SAMPLE",), ("WALK_FORWARD",), ("OUT_OF_SAMPLE", "WALK_FORWARD")):
+            label = self.first(*st)
+            self.assertNotIn("in-sample", label, st)
+            self.assertTrue(label.startswith("Historical, out-of-sample, descriptive results"), st)
+            self.assertIn("not by itself evidence of a trading edge", label)
+
+    def test_in_sample_and_default_wording_unchanged(self):
+        self.assertEqual(self.first("IN_SAMPLE"), self.IN_SAMPLE_TEXT)
+        self.assertEqual(ra.research_labels([self.BASE])[0], self.IN_SAMPLE_TEXT)     # no status recorded
+        self.assertIn("in-sample and out-of-sample", self.first("IN_SAMPLE", "OUT_OF_SAMPLE"))
+
+
 class TestPooledAndGroups(unittest.TestCase):
     def test_pooled_is_one_measurement_not_an_average(self):
         p = ra.pooled_summary({"A": A, "B": B})

@@ -149,6 +149,7 @@ class TestServiceValidation(unittest.TestCase):
             for phrase in ("MNQ-equivalent assumed costs", "not broker-verified",
                            "HistData NSXUSD CFD BID research proxy", "Fixed strategy"):
                 self.assertIn(phrase, text)
+            self.assertTrue(rep["labels"][0].startswith("Historical, in-sample and out-of-sample,"))   # train + test
 
     def test_walk_forward_segments(self):
         tests = [w for w in self.wf["windows"] if w["window"]["role"] == "test"]

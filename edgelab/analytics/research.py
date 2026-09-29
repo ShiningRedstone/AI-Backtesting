@@ -151,9 +151,20 @@ def cost_sensitivity_table(trades: pd.DataFrame, multipliers: Sequence[float]) -
             "breakeven_cost_multiplier": breakeven_cost_multiplier(trades) if len(trades) else math.nan}
 
 
+OOS_STATUSES = frozenset({"OUT_OF_SAMPLE", "WALK_FORWARD"})
+
+
+def sample_scope(records: Sequence[Mapping]) -> str:
+    """Wording for the records' run statuses; a record without a status counts as IN_SAMPLE."""
+    st = {r.get("status") or "IN_SAMPLE" for r in records}
+    if st and st <= OOS_STATUSES:
+        return "out-of-sample"
+    return "in-sample and out-of-sample" if st & OOS_STATUSES else "in-sample"
+
+
 def research_labels(records: Sequence[Mapping], instruments: Mapping | None = None) -> list[str]:
     """Caveats every report must carry, derived from what the runs recorded."""
-    labels = ["Historical, in-sample, descriptive results under the stated assumptions; "
+    labels = [f"Historical, {sample_scope(records)}, descriptive results under the stated assumptions; "
               "not a forecast and not by itself evidence of a trading edge."]
     if any(str(r.get("notes", "")).startswith("SYNTHETIC") for r in records):
         labels.append("SYNTHETIC data included - engine testing only, no market conclusions.")

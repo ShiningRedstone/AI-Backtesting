@@ -134,6 +134,16 @@ class TestRandomEntryControl(unittest.TestCase):
                                             period=("2024-02-01", "2024-03-29"))
         self.assertEqual(sub["dataset"]["parent_dataset_id"], self.did)       # period lineage
 
+    def test_oos_control_report_is_not_labelled_in_sample(self):
+        oos = self.svc.random_entry_control(EMA, self.did, n_controls=2, seed=1, period=("2024-02-15", "2024-03-29"),
+                                            sample_status="OUT_OF_SAMPLE")
+        self.assertEqual(oos["sample_status"], "OUT_OF_SAMPLE")
+        self.assertNotIn("in-sample", oos["labels"][0])
+        self.assertTrue(oos["labels"][0].startswith("Historical, out-of-sample, descriptive results"))
+        self.assertIn("in-sample", self.r1["labels"][0])                        # default stays IN_SAMPLE
+        with self.assertRaises(ValueError):
+            self.svc.random_entry_control(EMA, self.did, n_controls=1, sample_status="VALIDATED")
+
     def test_control_is_never_a_candidate_run(self):
         self.assertEqual(len(self.svc.store.list_runs()), 0)                  # nothing was recorded
         self.assertFalse(self.r1["stored_as_runs"])
