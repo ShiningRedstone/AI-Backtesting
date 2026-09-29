@@ -811,8 +811,9 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
     it (`source_verified` + evidence).
   - **Costs:** its own cost profile (`NQ_DUKASCOPY`, `providers.DUKASCOPY`), unconfigured. HistData's
     assumed profile is untouched and never applies.
-  - **Calendar:** a provisional calendar, `DUKASCOPY_NQ_PROVISIONAL`, which the validation gate
-    checks rather than trusts.
+  - **Calendar:** a source calendar the validation gate checks rather than trusts. It was
+    `DUKASCOPY_NQ_PROVISIONAL` and is now `DUKASCOPY_USATECH_OBSERVED` (18:00 to 16:15 New York,
+    measured on the real file), still `calendar_status: provisional_unverified`.
   - **Gaps:** a read-only gap classification (`data/quality.py`).
   - **Preferred dataset:** stored in `data/workspace_preferences.json`, outside runs, datasets and the
     config hash. Setting it re-validates the dataset.
@@ -1124,7 +1125,7 @@ packaging/workspace_snapshot.py    read-only before/after check of a workspace (
 ```
 configs/import_profiles.yaml   + dukascopy_utc_csv (timestamp,open,high,low,close,volume; explicit UTC offsets)
 configs/instruments.yaml       + NQ_DUKASCOPY (identity_status: provisional; research units; not CME NQ)
-configs/data.yaml              + DUKASCOPY_NQ_PROVISIONAL calendar (unmeasured; gate-checked)
+configs/data.yaml              + DUKASCOPY_USATECH_OBSERVED calendar (18:00->16:15 NY, measured on the real file; gate-checked)
 configs/costs.yaml             + NQ_DUKASCOPY / providers.DUKASCOPY (unconfigured)
 edgelab/instruments.py         + identity_info / identity_problem / check_identity, InstrumentIdentityError
 edgelab/data/quality.py        gap_analysis: gap runs by length/position/weekday, coverage by year (read-only)

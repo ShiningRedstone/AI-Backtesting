@@ -52,11 +52,14 @@ instruments:
   # Economics: NO broker or exchange contract figures are known. tick/point/size values below are
   # RESEARCH UNITS (1 unit = 1 per index point, 0.001 price grid), not CME NQ ($20/pt) and not
   # Dukascopy's contract size. Costs: configs/costs.yaml NQ_DUKASCOPY (unconfigured -> research refused).
-  # Calendar: DUKASCOPY_NQ_PROVISIONAL is NOT verified until scripts/dukascopy_inspect.py has been run
-  # on the real file (DATA_IMPORT.md).
+  # Calendar: DUKASCOPY_USATECH_OBSERVED (18:00 -> 16:15 New York) is the schedule OBSERVED in the real
+  # file's inspection. It stays provisional_unverified (research refused) until the inspector has been
+  # re-run under it on the real file and the 14 whole missing trading days are resolved or accepted
+  # (DATA_IMPORT.md).
   NQ_DUKASCOPY: {exchange: OTC, asset_class: cfd, tick_size: 0.001, tick_value: 0.001,
                  point_value: 1, min_size: 0.01, size_step: 0.01, underlying: NDX,
-                 calendar: DUKASCOPY_NQ_PROVISIONAL, calendar_status: provisional_unverified,
+                 calendar: DUKASCOPY_USATECH_OBSERVED, calendar_status: provisional_unverified,
+                 calendar_observations: "real file sha256 d92f25fc...c1d9: Sun first bar 18:00 NY, Fri last bar 16:14 NY, 16:15-18:00 NY empty, no Saturday bars; holidays unresolved (14 whole missing trading days)",
                  research_proxy: true, identity_status: user_specified,
                  source_provider: DUKASCOPY, source_symbol: "USATECH.IDX/USD",
                  source_feed_code: "E_NQ-100", source_instrument_constant: INSTRUMENT_IDX_AMERICA_E_NQ_100,

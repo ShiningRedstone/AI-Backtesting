@@ -15,7 +15,7 @@ import pandas as pd
 
 from edgelab.data.importer import ImportFailed
 from edgelab.engine.costs import CostConfigError, cost_model_from_config
-from edgelab.instruments import InstrumentIdentityError, identity_problem, load_instruments
+from edgelab.instruments import InstrumentIdentityError, identity_info, identity_problem, load_instruments
 from edgelab.services import Services
 from tests.dukascopy_fixture import session_minutes, write_fixture
 
@@ -59,7 +59,7 @@ class TestImportAndProvenance(DukascopyBase):
                          ("DUKASCOPY", "NQ_DUKASCOPY", "CFD", "USATECH.IDX/USD"))         # stated at import, never inferred
         self.assertEqual((m["price_basis"], m["volume_type"]), ("bid", "unknown"))      # source volume != exchange volume
         self.assertEqual((m["source_timezone"], m["source_timestamp_convention"]), ("UTC", "open"))
-        self.assertEqual(m["calendar"], "DUKASCOPY_NQ_PROVISIONAL")
+        self.assertEqual(m["calendar"], "DUKASCOPY_USATECH_OBSERVED")
         self.assertEqual(m["source_file_sha256"], hashlib.sha256(self.raw_bytes).hexdigest())
         self.assertEqual(self.csv.read_bytes(), self.raw_bytes)                          # source never modified
         self.assertEqual(m["source_detail"]["options"]["profile"], "dukascopy_utc_csv")
@@ -117,6 +117,93 @@ class TestImportAndProvenance(DukascopyBase):
         self.assertEqual(q["coverage"]["missing_trading_days"], [])
         before = self.svc.store.get_manifest(self.m1).to_dict()
         self.assertEqual(self.svc.store.get_manifest(self.m1).to_dict(), before)     # read-only
+
+
+class TestObservedDukascopyCalendar(unittest.TestCase):
+    """DUKASCOPY_USATECH_OBSERVED = the schedule measured in the real file: New York 18:00 -> 16:15,
+    closed 16:15-18:00 daily, Friday last bar 16:14, DST-safe. Tested through the validation gate."""
+
+    @classmethod
+    def setUpClass(cls):
+        from edgelab.core.config import load_config
+        from edgelab.data.calendar import load_calendars
+        cls.cfg = load_config(REPO / "configs")
+        cls.cal = load_calendars(cls.cfg)["DUKASCOPY_USATECH_OBSERVED"]
+        cls.inst = load_instruments(cls.cfg)["NQ_DUKASCOPY"]
+
+    def frame(self, ts: pd.DatetimeIndex) -> pd.DataFrame:
+        n = len(ts)
+        c = 18000 + np.arange(n) * 0.001
+        return pd.DataFrame({"ts": ts.as_unit("ns"), "open": c, "high": c + 1, "low": c - 1, "close": c,
+                             "volume": np.full(n, 0.5)})
+
+    def report(self, ts):
+        from edgelab.data.validation import validate_bars
+        return validate_bars(self.frame(ts), self.inst, self.cal, 1, self.cfg.get("validation"))
+
+    def test_instrument_uses_the_observed_calendar(self):
+        self.assertEqual(self.inst.calendar, "DUKASCOPY_USATECH_OBSERVED")
+        self.assertEqual((self.cal.session_open, self.cal.session_close, self.cal.timezone),
+                         ("18:00", "16:15", "America/New_York"))
+
+    def test_daily_1615_1800_closure_is_not_missing_data(self):
+        ts = session_minutes("2024-03-03", "2024-04-27")          # a complete feed of the observed schedule
+        rep = self.report(ts)
+        self.assertEqual(rep.get("missing_bars").count, 0)
+        self.assertEqual(rep.get("bars_outside_session").count, 0)
+        self.assertEqual(rep.get("missing_trading_days").count, 0)
+        # the old CME-style assumption (close 17:00) would call the closure missing: 45 bars per trading date
+        from edgelab.data.calendar import SessionCalendar
+        from edgelab.data.validation import validate_bars
+        old = SessionCalendar("OLD_ASSUMPTION", "America/New_York", "18:00", "17:00")
+        n_dates = len(set(self.cal.trading_dates(ts)))
+        # (the last trading date's 16:15-17:00 lies after the last bar, outside the checked range - the same
+        #  1,304-of-1,305 seen on the real file)
+        self.assertEqual(validate_bars(self.frame(ts), self.inst, old, 1, self.cfg.get("validation"))
+                         .get("missing_bars").count, 45 * (n_dates - 1))
+
+    def test_friday_closes_at_1615_and_later_bars_are_outside_the_session(self):
+        ny = lambda s: pd.Timestamp(s, tz="America/New_York").tz_convert("UTC")
+        exp = self.cal.expected_bar_opens(ny("2024-03-15 00:00"), ny("2024-03-17 23:59"), 1)
+        fri = exp[exp < ny("2024-03-16 00:00")]
+        self.assertEqual(fri[-1], ny("2024-03-15 16:14"))                     # last Friday bar 16:14 NY
+        self.assertEqual(exp[len(fri)], ny("2024-03-17 18:00"))               # next bar: Sunday 18:00 NY
+        ts = session_minutes("2024-03-10", "2024-03-16").append(pd.DatetimeIndex([ny("2024-03-15 16:15"),
+                                                                                 ny("2024-03-15 16:30")]))
+        rep = self.report(ts.sort_values())
+        self.assertEqual(rep.get("bars_outside_session").count, 2)             # reported, never silently accepted
+        self.assertEqual(rep.get("bars_outside_session").status, "WARN")      # 2 of ~6,700 < the 0.1% FAIL threshold
+        heavy = session_minutes("2024-03-10", "2024-03-16").append(
+            pd.date_range(ny("2024-03-15 16:15"), ny("2024-03-15 16:59"), freq="1min"))   # a whole extra 16:15-17:00
+        self.assertEqual(self.report(heavy.sort_values()).get("bars_outside_session").status, "FAIL")
+
+    def test_boundaries_are_dst_safe(self):
+        ny = lambda s: pd.Timestamp(s, tz="America/New_York").tz_convert("UTC")
+        for day, utc_close in (("2024-03-08", "2024-03-08 21:14"), ("2024-03-12", "2024-03-12 20:14"),
+                               ("2024-11-01", "2024-11-01 20:14"), ("2024-11-05", "2024-11-05 21:14")):
+            exp = self.cal.expected_bar_opens(ny(f"{day} 00:00"), ny(f"{day} 23:59"), 1)
+            closes = exp[exp.tz_convert("America/New_York").strftime("%H:%M") == "16:14"]
+            self.assertEqual(closes[0], pd.Timestamp(utc_close, tz="UTC"))    # 16:14 NY in EST and EDT
+            self.assertFalse(((exp.tz_convert("America/New_York").hour * 60 + exp.tz_convert("America/New_York").minute
+                               >= 16 * 60 + 15) & (exp.tz_convert("America/New_York").hour < 18)).any())
+
+    def test_genuine_gaps_inside_the_session_still_count(self):
+        ts = session_minutes("2024-03-03", "2024-04-27")
+        ny = ts.tz_convert("America/New_York")
+        hole = (ny.strftime("%Y-%m-%d") == "2024-03-20") & (ny.hour == 16) & (ny.minute < 15)   # 16:00-16:14
+        rep = self.report(ts[~hole])
+        self.assertEqual(rep.get("missing_bars").count, 15)
+        td = (ny.tz_localize(None) + pd.Timedelta(hours=6)).normalize()
+        rep = self.report(ts[td != pd.Timestamp("2024-03-29")])                   # a whole trading date absent
+        self.assertEqual(rep.get("missing_trading_days").count, 1)
+        self.assertEqual(rep.get("missing_trading_days").status, "WARN")          # visible, not a holiday entry
+
+    def test_calendar_stays_provisional(self):
+        idn = identity_info(self.inst)
+        self.assertEqual(idn["calendar_status"], "provisional_unverified")
+        self.assertIn("holidays unresolved", self.inst.extra["calendar_observations"])
+        self.assertIn("has not been verified", identity_problem(self.inst))
+        self.assertEqual(self.cal.holidays, frozenset())                         # no holiday dates invented
 
 
 class TestResearchRefusals(DukascopyBase):
@@ -181,9 +268,9 @@ class TestInspectionScriptIsReadOnly(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(mod["main"]([str(csv), "--root", str(root), "--out", str(root / "r.json")]), 0)
         text = out.getvalue()
-        for needle in ("rows 55,175", "duplicate timestamps 0", "monotonic True", "bars per hour (New York)",
-                       "bars per hour (UTC)", "week_first_bar_ny: {'Sun 18:00': 8}", "week_last_bar_ny: {'Fri 16:59': 8}",
-                       "minutes_of_day_rarely_present_ny: ['17:00-18:00']", "coverage by year", "missing trading days (0)",
+        for needle in ("rows 53,375", "duplicate timestamps 0", "monotonic True", "bars per hour (New York)",
+                       "bars per hour (UTC)", "week_first_bar_ny: {'Sun 18:00': 8}", "week_last_bar_ny: {'Fri 16:14': 8}",
+                       "minutes_of_day_rarely_present_ny: ['16:15-18:00']", "coverage by year", "missing trading days (0)",
                        "passes the gate"):
             self.assertIn(needle, text)
         self.assertEqual(csv.read_bytes(), before)

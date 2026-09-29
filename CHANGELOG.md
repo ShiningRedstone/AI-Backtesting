@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Dukascopy calendar from the real-file inspection (after Phase 9)
+
+| Item | Status |
+|---|---|
+| Real-file read-only inspection (user's machine; sha256 d92f25fc…c1d9, 1,709,068 rows): Sun 18:00 first bar, Fri 16:14 last bar, 16:15-18:00 NY empty, no Saturday bars | EVIDENCE (inspector output) |
+| `DUKASCOPY_USATECH_OBSERVED` (America/New_York 18:00 → 16:15, declarative, existing single-session model) replaces the CME-style provisional calendar; explains 58,680 of the 90,453 "missing" bars as the recurring 16:15-17:00 closure; remaining ≈31,773 (1.825%, WARN) stay visible | IMPLEMENTED, TESTED (synthetic fixture of the observed schedule; count computed offline from the real range) |
+| Missing-bar / outside-session thresholds unchanged; genuine in-session gaps and whole missing days still reported | TESTED |
+| 14 whole missing trading days, early closes, 141 range-spike warnings | UNRESOLVED (dates not in this environment; no holidays entered; spikes stay warning-only) |
+| `calendar_status` remains `provisional_unverified` (research refused) until the inspector is re-run under the new calendar | UNCHANGED |
+
 ## Dukascopy identity and real-import preparation (after Phase 9)
 
 | Item | Status |

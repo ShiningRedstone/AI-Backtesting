@@ -2,7 +2,8 @@
 
 Layout of the user's real file: ``timestamp,open,high,low,close,volume`` with an explicit UTC offset
 on every row, decimal (provider-defined) volume, 1m bars, real gaps. Bars follow the provisional
-calendar DUKASCOPY_NQ_PROVISIONAL (Sun 18:00 - Fri 17:00 New York, pause 17:00-18:00), so the
+calendar DUKASCOPY_USATECH_OBSERVED (Sun 18:00 - Fri 16:15 New York, daily closure 16:15-18:00, the
+schedule measured in the user's real file), so the
 UTC offset of the session boundary moves with US DST - which is what the tests check."""
 from __future__ import annotations
 
@@ -18,8 +19,9 @@ def session_minutes(start: str, end: str) -> pd.DatetimeIndex:
     """Bar-open times (UTC) inside the provisional calendar between two New York dates."""
     idx = pd.date_range(pd.Timestamp(start, tz="America/New_York"), pd.Timestamp(end, tz="America/New_York"),
                         freq="1min", inclusive="left")
-    wd, hr = idx.weekday, idx.hour
-    keep = ((wd <= 3) & (hr != 17)) | ((wd == 4) & (hr < 17)) | ((wd == 6) & (hr >= 18))
+    wd, m = idx.weekday, idx.hour * 60 + idx.minute
+    before_close, after_open = m < 16 * 60 + 15, m >= 18 * 60                   # closed 16:15-18:00 NY daily
+    keep = ((wd <= 3) & (before_close | after_open)) | ((wd == 4) & before_close) | ((wd == 6) & after_open)
     return idx[keep].tz_convert("UTC")
 
 

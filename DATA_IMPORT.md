@@ -200,8 +200,17 @@ Two independent refusals are active, and both are shown on the dataset row and r
 API.
 
 1. **The session calendar is not verified** (`calendar_status: provisional_unverified`).
-   - `DUKASCOPY_NQ_PROVISIONAL` assumes America/New_York, Sunday 18:00 to Friday 17:00, with a
-     daily break from 17:00 to 18:00 and no holidays listed. This is an assumption.
+   - The calendar is `DUKASCOPY_USATECH_OBSERVED`: America/New_York, 18:00 to 16:15, closed daily
+     16:15-18:00, with no holidays listed.
+   - This is the schedule measured in the real file's first inspection (SHA-256 `d92f25fc…c1d9`,
+     1,709,068 rows): Sunday first bar 18:00, Friday last bar 16:14, 16:15-18:00 essentially
+     empty, no Saturday bars.
+   - The earlier CME-style assumption (close 17:00) counted 90,453 missing bars. 58,680 of those
+     were this recurring 16:15-17:00 closure (45 bars × 1,304 trading dates).
+   - Under the observed schedule, about 31,773 bars (1.825%) remain missing. That is a WARN, and
+     assumes the file really has no bars at 16:15-16:59; re-inspecting confirms it.
+   - The 14 whole missing trading days and early closes are not resolved, and no holiday dates are
+     entered.
    - Every backtest, search, validation and control is refused (HTTP `409 instrument_identity`)
      until the real file has been inspected and the calendar confirmed or replaced.
    - Then set `calendar_status: verified` and `calendar_evidence: "<what the inspection showed>"`.
@@ -242,20 +251,24 @@ The script prints:
 Add `--calendar NAME` to test another calendar from `configs/data.yaml`. Nothing is imported or
 written, apart from the optional `--out` JSON.
 
-**Confirm the calendar from its output.** The provisional calendar fits only if every one of these
-holds:
+**Confirm the calendar from its output.** Re-run the command above after `git pull`, so that it
+validates under `DUKASCOPY_USATECH_OBSERVED`. The calendar fits only if every one of these holds:
 
-- the weekly first bar is `Sun 18:00` and the weekly last bar is `Fri 16:59` (New York time) across
+- the weekly first bar is `Sun 18:00` and the weekly last bar is `Fri 16:14` (New York time) across
   both DST regimes;
-- the rarely present minutes are exactly `17:00-18:00`;
+- the rarely present minutes are exactly `16:15-18:00`;
 - there are no Saturday bars;
-- validation passes with no `bars_outside_session`.
+- validation passes with `bars_outside_session` at 0, or only a handful reported as WARN.
+
+Then decide how to handle the missing trading days it lists (the 14 seen so far). Either add them
+to `holidays` / `early_closes` in `configs/data.yaml` with the evidence for each, or accept them
+as visible missing-day warnings. Never enter a date without evidence.
 
 If so, set in `configs/instruments.yaml` → `NQ_DUKASCOPY`:
 
 ```yaml
 calendar_status: verified
-calendar_evidence: "dukascopy_inspection.json <sha256>: weekly Sun 18:00 open / Fri 16:59 close, 17:00-18:00 break, no Saturday bars, 0 bars outside session"
+calendar_evidence: "dukascopy_inspection.json <sha256>, calendar DUKASCOPY_USATECH_OBSERVED: weekly Sun 18:00 open / Fri 16:14 last bar, 16:15-18:00 closure, no Saturday bars, <n> bars outside session, <n> missing days handled as <...>"
 ```
 
 If the schedule differs, for example a shorter break or a different Friday close, add a calendar

@@ -48,17 +48,21 @@ calendars:
     trading_weekdays: [mon, tue, wed, thu, fri]
     holidays: []
     early_closes: {}
-  # ---- Dukascopy Nasdaq-100 1m source (Phase 9): PROVISIONAL, not yet measured -------------
-  # The source is UTC (explicit offsets); the SESSION calendar is a separate choice. Until the
-  # user's file has been inspected (`edgelab.cli inspect ... --profile dukascopy_utc_csv` prints
-  # a session_profile), this assumes the CME equity-index Globex window (Sun 18:00 - Fri 17:00
-  # New York, daily pause 17:00-18:00). Wrong hours are NOT hidden: bars outside it fail
-  # `bars_outside_session` and missing hours raise the missing-bar ratio. No holidays listed
-  # (they surface as missing days). See DATA_IMPORT.md "Dukascopy Nasdaq-100 (primary source)".
-  DUKASCOPY_NQ_PROVISIONAL:
+  # ---- Dukascopy USATECH.IDX/USD 1m (feed E_NQ-100, BID) - OBSERVED source schedule ------------
+  # Measured by scripts/dukascopy_inspect.py on the user's real file (C:\NQ_DATA\nq_1min_5years.csv,
+  # sha256 d92f25fc5df3f59ac5291e1d4631f59ca116f074d54710e278aabe699ba4c1d9, 1,709,068 rows,
+  # 2021-09-28 22:00Z .. 2026-09-28 22:00Z): weekly first bar normally Sun 18:00 NY, last bar normally
+  # Fri 16:14 NY, 16:15-18:00 NY essentially empty every day, no Saturday bars, NY offsets -5/-4.
+  # Same single-session model as HISTDATA_NSX_R2: trading date D = D-1 18:00 -> D 16:15 (New York,
+  # DST-safe). Under the earlier CME-style 18:00-17:00 assumption, 58,680 of the 90,453 "missing" bars
+  # were this recurring 16:15-17:00 closure (45 bars x 1,304 trading dates), not data loss.
+  # NOT established: holidays / early closes (14 whole missing trading days are unresolved and stay
+  # visible as missing days). The instrument keeps calendar_status: provisional_unverified until
+  # the inspector has been re-run under THIS calendar on the real file.
+  DUKASCOPY_USATECH_OBSERVED:
     timezone: America/New_York
     session_open: "18:00"
-    session_close: "17:00"
+    session_close: "16:15"
     trading_weekdays: [mon, tue, wed, thu, fri]
     holidays: []
     early_closes: {}

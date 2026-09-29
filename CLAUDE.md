@@ -28,6 +28,7 @@ context, providers incl. deterministic mock, strict 8-stage gate, human review, 
 has NOT been imported in this repository. `NQ_DUKASCOPY` = Dukascopy USATECH.IDX/USD (feed E_NQ-100), BID, index CFD research
 proxy (not CME NQ), `identity_status: user_specified`; research stays refused while `calendar_status: provisional_unverified`
 and while its separate cost profile is `unconfigured` (read-only check: `scripts/dukascopy_inspect.py`).
+Calendar `DUKASCOPY_USATECH_OBSERVED` (NY 18:00->16:15) comes from the real-file inspection; holidays unresolved.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
