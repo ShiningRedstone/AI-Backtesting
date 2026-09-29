@@ -90,11 +90,18 @@ costs:
       providers:
         DUKASCOPY:
           status: unconfigured
-          notes: "enter commission/fees, spread, slippage and financing for YOUR access to this feed"
-          commission_per_side: null
-          fees_per_side: null
+          notes: "shape of Dukascopy CFD pricing; every number is EMPTY until evidenced (DATA_IMPORT.md)"
+          # Dukascopy publishes commission per USD 1 million traded (tiered by account/volume):
+          commission_mode: notional
+          commission_per_million: null     # USD per USD 1,000,000 notional per side - from YOUR tier
+          fees_per_side: 0
+          # Variable spread: charged from a per-bar spread series (ask_close - bid_close). The imported
+          # BID-only datasets have none, so backtests on them refuse until an ASK series is imported.
+          spread_source: dataset
+          spread_points: null
           slippage_unit: points
           slippage_ticks_market: null
           slippage_ticks_stop: null
-          spread_points: null
-          financing_mode: none
+          # Overnight holding costs may apply but follow changing benchmark rates: charged nothing and
+          # disclosed as NOT modelled (not "none").
+          financing_mode: not_modeled

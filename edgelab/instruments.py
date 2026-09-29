@@ -124,11 +124,18 @@ def identity_info(inst: Instrument) -> dict:
             "source_feed_code": ex.get("source_feed_code"), "price_basis": ex.get("price_basis"),
             "volume_semantics": ex.get("volume_semantics"), "economics": ex.get("economics"),
             "calendar": inst.calendar, "calendar_status": ex.get("calendar_status"),
+            "calendar_unverified_scope": ex.get("calendar_unverified_scope"), "calendar_caveat": calendar_caveat(inst),
             "missing_metadata": missing if status == "provisional" else [],
             "point_value": inst.point_value, "tick_size": inst.tick_size, "description": inst.description}
 
 
-CALENDAR_STATUSES = ("provisional_unverified", "verified")
+# provisional_unverified: session hours not checked against the source -> research refused.
+# regular_hours_verified: the REGULAR session hours are verified (calendar_evidence), but holidays /
+#   early closes are not (calendar_unverified_scope says exactly what is not) -> research allowed,
+#   with that caveat surfaced as a dataset limitation. Nothing in the data or its validation changes:
+#   unlisted special dates stay visible as missing bars / missing trading days.
+# verified: regular hours AND special dates verified (calendar_evidence).
+CALENDAR_STATUSES = ("provisional_unverified", "regular_hours_verified", "verified")
 
 
 def identity_problem(inst: Instrument) -> str | None:
@@ -141,8 +148,12 @@ def identity_problem(inst: Instrument) -> str | None:
                 "verified against the real source file. Run scripts/dukascopy_inspect.py on the file, confirm or "
                 "replace the calendar, then set calendar_status: verified (with calendar_evidence) in "
                 "configs/instruments.yaml. See DATA_IMPORT.md.")
-    if cal_status == "verified" and not (inst.extra or {}).get("calendar_evidence"):
-        return f"instrument {inst.symbol}: calendar_status verified needs calendar_evidence in configs/instruments.yaml"
+    if cal_status in ("verified", "regular_hours_verified") and not (inst.extra or {}).get("calendar_evidence"):
+        return (f"instrument {inst.symbol}: calendar_status {cal_status} needs calendar_evidence in "
+                "configs/instruments.yaml")
+    if cal_status == "regular_hours_verified" and not (inst.extra or {}).get("calendar_unverified_scope"):
+        return (f"instrument {inst.symbol}: calendar_status regular_hours_verified needs calendar_unverified_scope "
+                "(what is NOT verified, e.g. holidays / early closes) in configs/instruments.yaml")
     status = (inst.extra or {}).get("identity_status")
     if status is None or status in ("user_specified", "source_verified"):
         if status == "source_verified" and not (inst.extra or {}).get("identity_evidence"):
@@ -156,6 +167,16 @@ def identity_problem(inst: Instrument) -> str | None:
             f"contract economics are not established, so point value / tick value / sizing / costs "
             f"cannot be interpreted. State {need} in configs/instruments.yaml and set identity_status "
             "to user_specified (or source_verified with identity_evidence). See DATA_IMPORT.md.")
+
+
+def calendar_caveat(inst: Instrument) -> str | None:
+    """The research caveat of a partly verified calendar (None when fully verified or not applicable)."""
+    ex = inst.extra or {}
+    if ex.get("calendar_status") != "regular_hours_verified":
+        return None
+    return (f"calendar {inst.calendar}: regular session hours verified; NOT verified: "
+            f"{ex.get('calendar_unverified_scope')}. Unlisted closures stay as data gaps, and a position can be held "
+            "across an unannounced early close or holiday until the next available bar")
 
 
 def check_identity(inst: Instrument) -> None:

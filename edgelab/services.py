@@ -100,9 +100,9 @@ class Services:
         return _jsonable({"manifest": m.to_dict(), "manifest_hash": m.manifest_hash(),
                           "validation_report": self.store.get_report(dataset_id),
                           "derived_datasets": children,
-                          "identity": self._instrument_identity(m.instrument),
+                          "identity": (idn := self._instrument_identity(m.instrument)),
                           "preferred": self.preferred_dataset_id() == dataset_id,
-                          "limitations": self._limitations(m)})
+                          "limitations": self._limitations(m) + ([idn["calendar_caveat"]] if idn.get("calendar_caveat") else [])})
 
     @staticmethod
     def _limitations(m) -> list[str]:
@@ -756,9 +756,10 @@ class Services:
         identity = self._instrument_identity(m.instrument)
         if identity.get("problem"):
             reasons.append("session calendar not yet verified against the real source file (DATA_IMPORT.md)"
-                           if identity.get("calendar_status") != "verified" and identity.get("calendar_status") else
+                           if identity.get("calendar_status") == "provisional_unverified" else
                            "instrument source identity is provisional - state the source symbol, asset class "
-                           "and contract economics first (DATA_IMPORT.md)")
+                           "and contract economics first (DATA_IMPORT.md)"
+                           if identity.get("identity_status") == "provisional" else identity["problem"])
         if d.get("quality_status") == "FAIL":
             reasons.append("dataset failed validation")
         if tf_minutes is not None and timeframe_minutes(d["timeframe"]) != tf_minutes:
@@ -767,7 +768,8 @@ class Services:
         pref = (load_prefs(self.data_root).get("preferred_research_dataset") or {}).get("dataset_id")
         return {**d, "cost": cost, "synthetic": self._is_synthetic(m), "identity": identity,
                 "preferred": d["dataset_id"] == pref,
-                "limitations": self._limitations(m), "runnable": not reasons, "reasons": reasons}
+                "limitations": self._limitations(m) + ([identity["calendar_caveat"]] if identity.get("calendar_caveat") else []),
+                "runnable": not reasons, "reasons": reasons}
 
     def _instrument_identity(self, symbol: str) -> dict:
         from edgelab.instruments import identity_info, identity_problem, load_instruments

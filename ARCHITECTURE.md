@@ -1149,6 +1149,22 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   with `identity_status: user_specified`. `identity_problem` also refuses research while `calendar_status:
   provisional_unverified`, so an unverified session calendar cannot silently shape results. The refusal goes
   through the same single gate in `_run_cell`.
+- **Dukascopy-style costs:**
+  - The cost model gains `commission_mode: notional` (a per-USD-1M rate on the traded notional) and
+    `financing_mode: not_modeled` (charges nothing, but is disclosed). Both are opt-in, with a
+    single call site in the backtester.
+  - The commission is a flat rate. Dukascopy's volume tiers, which depend on cumulative traded
+    volume, are not modelled.
+  - Time-varying financing rates are not modelled.
+  - A variable spread uses the existing per-bar spread path, which needs a historical ASK series.
+- **Partial calendar verification:** a third status, `regular_hours_verified`, needs
+  `calendar_evidence` and `calendar_unverified_scope`. It allows research, and
+  `instruments.calendar_caveat` adds the unverified scope as a dataset limitation.
+  - It exists because the evidence verifies the regular hours but not the special dates. Neither
+    "verified" nor "unverified" would describe that honestly.
+  - Validation and thresholds are untouched: unverified special dates stay data-quality warnings.
+  - `NQ_DUKASCOPY` uses it. Its only remaining refusal is the unconfigured Dukascopy cost profile,
+    because no Dukascopy cost figures exist in the project records.
 - **Real data:** the real Dukascopy CSV is not in this repository. The pipeline was exercised only on
   a SYNTHETIC Dukascopy-shaped fixture. Its calendar is provisional until `inspect` evidence from the
   real file confirms or replaces it, and its holidays are not listed.

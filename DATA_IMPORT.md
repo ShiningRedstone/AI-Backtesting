@@ -194,12 +194,20 @@ dukascopy_python.fetch(INSTRUMENT_IDX_AMERICA_E_NQ_100, dukascopy_python.INTERVA
 | Economics | research units: 1 per index point on a 0.001 grid; min/step 0.01 | **not** CME ($20/pt) and not Dukascopy's contract size; no broker figures are known |
 | `identity_status` | `user_specified` (not `source_verified`) | the symbol mapping could not be checked against Dukascopy's metadata from the build environment |
 
-### Status gates (why research is refused today)
+### Status gates
 
-Two independent refusals are active, and both are shown on the dataset row and returned by the
-API.
+Two gates apply. Their state is shown on the dataset row and returned by the API.
 
-1. **The session calendar is not verified** (`calendar_status: provisional_unverified`).
+1. **Session calendar: regular hours verified, special dates not verified**
+   (`calendar_status: regular_hours_verified`). This gate is now **passed**. The three statuses are:
+   - `provisional_unverified`: the session hours have not been checked against the source.
+     Research is refused (HTTP `409 instrument_identity`).
+   - `regular_hours_verified`: the regular hours are verified. It needs `calendar_evidence` and a
+     `calendar_unverified_scope` that states exactly what is NOT verified. Research is allowed,
+     and that scope is shown as a limitation on every dataset row.
+   - `verified`: regular hours and special dates are verified. It needs `calendar_evidence`.
+
+   The evidence behind the current status:
    - The calendar is `DUKASCOPY_USATECH_OBSERVED`: America/New_York, 18:00 to 16:15, closed daily
      16:15-18:00, with no holidays listed.
    - This is the schedule measured in the real file's first inspection (SHA-256 `d92f25fc…c1d9`,
@@ -225,20 +233,58 @@ API.
      calendar could not be retrieved from the build environment.
    - Genuine feed gaps, such as the long intra-session gaps on 2025-11-28, stay missing-bar warnings
      in any case.
-   - Every backtest, search, validation and control is refused (HTTP `409 instrument_identity`)
-     until the real file has been inspected and the calendar confirmed or replaced.
-   - Then set `calendar_status: verified` and `calendar_evidence: "<what the inspection showed>"`.
-     `verified` without evidence is refused.
-2. **Costs are unconfigured.**
+   - The unverified special dates do not change validation: they stay missing bars and missing
+     trading days, reported as WARN.
+   - They are a research caveat, stated on every dataset row. A strategy can hold a position
+     across an unannounced early close or holiday, and it is then filled at the next available
+     bar.
+   - `calendar_status: verified` requires the Trading Breaks evidence described above.
+2. **Costs are unconfigured.** This is the only remaining refusal.
    - The Dukascopy profile is separate: `costs.symbols.NQ_DUKASCOPY` / `providers.DUKASCOPY`.
      HistData's `NAS100_HISTDATA@HISTDATA` never applies.
    - Backtests are refused (`409 cost_unconfigured`) until you enter commission/fees, spread,
      slippage (points) and financing, with `status: assumed` or `broker_verified` and a
      rationale in `notes`.
-   - EdgeLab does not invent them.
+   - EdgeLab does not invent them. The repository and project records contain no Dukascopy cost
+     figures: not for USATECH.IDX/USD spread, commission, slippage or financing. The file is
+     BID-only, with no spread column.
+   - A research assumption is allowed (`status: assumed`), but the numbers are yours to state, with
+     their basis in `notes`. They are never HistData's.
+   - The profile already has Dukascopy's cost shape, with every number left empty:
+     - **Commission:** `commission_mode: notional`. The rate is `commission_per_million`, in USD per
+       USD 1M traded, from your account tier.
+     - **Spread:** `spread_source: dataset`, charged from a per-bar `ask_close - bid_close` series.
+     - **Financing:** `financing_mode: not_modeled`. Dukascopy's overnight holding costs follow
+       changing benchmark rates, so they are disclosed as not modelled rather than faked with one
+       constant.
+   - **Spread needs historical ASK data.** The imported datasets are BID-only, with no spread
+     column, so backtests on them refuse in `spread_source: dataset` mode.
+   - To add a spread, download the same period with `OFFER_SIDE_ASK` and check it against the BID
+     file with the read-only alignment check:
+     `python scripts\dukascopy_bid_ask_check.py <BID.csv> <ASK.csv> --root . --out bid_ask_report.json`.
+     - It reports both SHA-256s, row counts and ranges, per-side timestamp and price anomalies, the
+       exact timestamp overlap, BID-only and ASK-only timestamps, and the spread distribution in
+       points over the overlap. Nothing is filled, interpolated or resampled.
+     - Only when both sides align exactly does `--write-combined <NEW.csv>` write a new file: the BID
+       rows verbatim, plus the ask OHLC. It never overwrites an existing file.
+     - Import that new file as a new dataset, with a new `--dataset-name`, using
+       `--bid-close-column close --ask-close-column ask_close`.
+     - If the sides do not align exactly, combining them is a user decision; the check refuses.
+   - The frozen BID-only datasets stay unchanged. Bars without an ask value get no spread, and
+     trades on them are refused.
+   - The alternative is a fixed spread (`spread_source: fixed`, `spread_points`) taken from evidence
+     you cite. A constant ignores the fact that Dukascopy's spread is variable.
+   - **Notional commission versus research units.** Dukascopy's commission is charged on USD traded
+     notional. EdgeLab computes notional as price × `point_value` × size.
+     - For `NQ_DUKASCOPY`, `point_value` = 1 is a provisional RESEARCH UNIT (`economics:
+       research_units`), not a broker-verified contract mapping. So "1 unit = USD 1 per index point"
+       is an assumption.
+     - The commission computed from it is correct only if Dukascopy's USATECH.IDX/USD contract maps
+       the same way. Any `commission_per_million` result inherits that caveat until the contract
+       size is evidenced.
 
-Import, validation, gap analysis and the Preferred-dataset setting all work while these refusals
-are active.
+Import, validation, gap analysis and the Preferred-dataset setting all work while this refusal
+is active.
 
 ### Step 1: read-only inspection of the real file (stores nothing)
 

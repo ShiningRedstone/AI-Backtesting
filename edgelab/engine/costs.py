@@ -22,6 +22,14 @@ Phase 2 (CFD readiness):
   * Overnight financing: ``financing_mode: annual_rate`` charges
     notional x rate / day_count for every rollover instant the position is held
     through (``triple_rollover_weekday`` counts 3). Rates may be negative (credit).
+
+After Phase 9 (Dukascopy-style CFD economics, both opt-in, defaults unchanged):
+  * ``commission_mode: notional`` charges ``commission_per_million`` USD per USD 1,000,000 of
+    traded notional per side (notional = |theoretical fill price| x point_value x size), instead
+    of a fixed amount per unit (``per_unit``, the default).
+  * ``financing_mode: not_modeled`` charges nothing but records that overnight holding costs
+    exist and are NOT modelled (distinct from ``none`` = there are none). A single constant
+    ``annual_rate`` cannot follow a broker's changing benchmark rate over years.
 """
 from __future__ import annotations
 
@@ -36,7 +44,7 @@ from edgelab.instruments import Instrument
 
 ORDER_TYPES = ("market", "stop", "limit")
 COST_STATUSES = ("assumed", "broker_verified", "unconfigured", "zero_for_testing")
-_NON_NEGATIVE = ("commission_per_side", "fees_per_side", "slippage_ticks_market",
+_NON_NEGATIVE = ("commission_per_side", "commission_per_million", "fees_per_side", "slippage_ticks_market",
                  "slippage_ticks_stop", "slippage_ticks_limit", "spread_points", "multiplier",
                  "financing_day_count")
 
@@ -64,6 +72,9 @@ class CostModel:
     rollover_time: str = "17:00"
     rollover_timezone: str = "America/New_York"
     triple_rollover_weekday: int | None = None   # 0=Mon .. 6=Sun; e.g. 2 for Wednesday
+    # ---- after Phase 9 ----
+    commission_mode: str = "per_unit"      # per_unit | notional
+    commission_per_million: float = 0.0    # USD per USD 1,000,000 traded notional per side (notional mode)
     status: str = "assumed"
     profile: str = ""
 
@@ -75,8 +86,10 @@ class CostModel:
             raise ValueError("slippage_unit must be ticks|points")
         if self.spread_source not in ("fixed", "dataset"):
             raise ValueError("spread_source must be fixed|dataset")
-        if self.financing_mode not in ("none", "annual_rate"):
-            raise ValueError("financing_mode must be none|annual_rate")
+        if self.financing_mode not in ("none", "annual_rate", "not_modeled"):
+            raise ValueError("financing_mode must be none|annual_rate|not_modeled")
+        if self.commission_mode not in ("per_unit", "notional"):
+            raise ValueError("commission_mode must be per_unit|notional")
         if self.status not in COST_STATUSES:
             raise ValueError(f"status must be one of {COST_STATUSES}")
 
@@ -92,13 +105,22 @@ class CostModel:
 
     # ---- round trip --------------------------------------------------------------------
     def round_trip_base(self, entry_type: str, exit_type: str, contracts: float,
-                        inst: Instrument, spread_points: float | None = None) -> dict:
+                        inst: Instrument, spread_points: float | None = None,
+                        entry_price: float | None = None, exit_price: float | None = None) -> dict:
         """Costs at 1x for one round trip, in dollars, by component.
-        ``spread_points`` overrides the fixed spread (dataset spread mode)."""
+        ``spread_points`` overrides the fixed spread (dataset spread mode). ``entry_price`` /
+        ``exit_price`` (theoretical fills) are required in notional commission mode."""
         slip_pts = self.slippage_points(entry_type, inst) + self.slippage_points(exit_type, inst)
         spread = self.spread_points if spread_points is None else spread_points
+        if self.commission_mode == "notional":
+            if entry_price is None or exit_price is None:
+                raise ValueError("notional commission needs the entry and exit prices")
+            notional = (abs(entry_price) + abs(exit_price)) * inst.point_value * contracts
+            commission = self.commission_per_million / 1_000_000 * notional
+        else:
+            commission = 2 * self.commission_per_side * contracts
         return {
-            "commission_usd": 2 * self.commission_per_side * contracts,
+            "commission_usd": commission,
             "fees_usd": 2 * self.fees_per_side * contracts,
             "slippage_usd": slip_pts * inst.point_value * contracts,
             "spread_usd": spread * inst.point_value * contracts,
@@ -108,7 +130,7 @@ class CostModel:
     # ---- financing ---------------------------------------------------------------------
     def rollovers_held(self, entry_ts_ns: int, exit_ts_ns: int) -> int:
         """Weighted count of rollover instants r with entry < r <= exit."""
-        if self.financing_mode == "none" or exit_ts_ns <= entry_ts_ns:
+        if self.financing_mode in ("none", "not_modeled") or exit_ts_ns <= entry_ts_ns:
             return 0
         tz = self.rollover_timezone
         entry = pd.Timestamp(int(entry_ts_ns), tz="UTC").tz_convert(tz)
@@ -160,7 +182,12 @@ def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None =
         profile = f"{symbol}@{provider}"
     status = merged.pop("status", "assumed")
     notes = merged.pop("notes", None)  # documentation only
-    if status == "unconfigured" or any(merged.get(k) is None for k in _REQUIRED_WHEN_CONFIGURED):
+    required = _REQUIRED_WHEN_CONFIGURED
+    if merged.get("commission_mode") == "notional":             # the per-million rate replaces the per-unit amount
+        required = ("commission_per_million",) + tuple(k for k in required if k != "commission_per_side")
+        if merged.get("commission_per_side") is None:
+            merged["commission_per_side"] = 0.0
+    if status == "unconfigured" or any(merged.get(k) is None for k in required):
         if allow_unconfigured:
             return CostModel(status="zero_for_testing", profile=profile,
                              multiplier=float(1.0 if multiplier is None else multiplier))
@@ -177,7 +204,8 @@ def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None =
     if multiplier is None:
         multiplier = cfg.get("backtest", {}).get("cost_multiplier", 1.0)
     merged["multiplier"] = float(multiplier)
-    str_fields = {"slippage_unit", "spread_source", "financing_mode", "rollover_time", "rollover_timezone"}
+    str_fields = {"slippage_unit", "spread_source", "financing_mode", "rollover_time", "rollover_timezone",
+                  "commission_mode"}
     kw = {}
     for k, v in merged.items():
         if k in str_fields:

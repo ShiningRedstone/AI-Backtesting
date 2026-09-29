@@ -3,6 +3,27 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Dukascopy-style cost plumbing (after Phase 9)
+
+| Item | Status |
+|---|---|
+| `commission_mode: notional` + `commission_per_million` (USD per USD 1M traded notional per side, from theoretical fill prices); default `per_unit` unchanged | IMPLEMENTED, TESTED |
+| `financing_mode: not_modeled` (charges nothing, disclosed as not modelled; distinct from `none`) | IMPLEMENTED, TESTED |
+| Dukascopy profile reshaped to notional commission / dataset spread / financing not modelled, every number empty, still `unconfigured` | CONFIGURED (still refuses) |
+| Per-bar spread from bid/ask closes (existing importer + engine) | UNCHANGED; needs a historical ASK series (the imported datasets are BID-only) |
+| Time-varying financing rates, tiered commission by cumulative volume | NOT IMPLEMENTED |
+| `scripts/dukascopy_bid_ask_check.py`: read-only BID/ASK alignment + spread report through the production parser; combined file only on exact alignment, never overwriting; no import | IMPLEMENTED, TESTED (synthetic) |
+| Notional commission relies on `NQ_DUKASCOPY`'s provisional research-unit `point_value` (not a broker-verified contract mapping) | DOCUMENTED CAVEAT |
+
+## Dukascopy research eligibility: partial calendar verification (after Phase 9)
+
+| Item | Status |
+|---|---|
+| New `calendar_status: regular_hours_verified` (needs `calendar_evidence` + `calendar_unverified_scope`): allows research; the unverified scope is surfaced as a dataset limitation (`calendar_caveat`); `provisional_unverified` still refuses, `verified` still needs evidence | IMPLEMENTED, TESTED |
+| `NQ_DUKASCOPY` set to `regular_hours_verified`: evidence = official Dukascopy USATECH.IDX/USD hours + real-file validation (0 outside-session, 0 grid failures, Sun 18:00 / Fri 16:14) + post-import audit; unverified scope = holidays / early closes (14 whole missing days, early-close-shaped gaps) | CONFIGURED |
+| No holidays / early closes added; validation thresholds and data-quality warnings unchanged | UNCHANGED |
+| Dukascopy cost profile | UNCHANGED: `unconfigured` (no Dukascopy cost figures in the project records; the only remaining research refusal) |
+
 ## Dukascopy gap attribution (after Phase 9)
 
 | Item | Status |

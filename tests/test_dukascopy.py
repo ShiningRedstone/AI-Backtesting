@@ -82,8 +82,10 @@ class TestImportAndProvenance(DukascopyBase):
         self.assertEqual(idn["economics"], "research_units")
         self.assertIn("OFFER_SIDE_BID", idn["identity_evidence"])
         self.assertEqual(idn["missing_metadata"], [])
-        self.assertEqual(idn["calendar_status"], "provisional_unverified")
-        self.assertIn("has not been verified", idn["problem"])
+        self.assertEqual(idn["calendar_status"], "regular_hours_verified")
+        self.assertIsNone(idn["problem"])
+        self.assertIn("holidays and early closes", idn["calendar_unverified_scope"])
+        self.assertTrue(any("regular session hours verified; NOT verified: holidays" in x for x in det["limitations"]))
 
     def test_validation_report_covers_the_required_checks(self):
         rep = self.svc.store.get_report(self.m1)
@@ -198,12 +200,29 @@ class TestObservedDukascopyCalendar(unittest.TestCase):
         self.assertEqual(rep.get("missing_trading_days").count, 1)
         self.assertEqual(rep.get("missing_trading_days").status, "WARN")          # visible, not a holiday entry
 
-    def test_calendar_stays_provisional(self):
+    def test_only_regular_hours_are_verified(self):
         idn = identity_info(self.inst)
-        self.assertEqual(idn["calendar_status"], "provisional_unverified")
-        self.assertIn("holidays unresolved", self.inst.extra["calendar_observations"])
-        self.assertIn("has not been verified", identity_problem(self.inst))
+        self.assertEqual(idn["calendar_status"], "regular_hours_verified")
+        self.assertIn("22:00-20:15 GMT", self.inst.extra["calendar_evidence"])            # official hours
+        self.assertIn("0 outside-session bars", self.inst.extra["calendar_evidence"])     # real-file evidence
+        self.assertIn("holidays and early closes", idn["calendar_unverified_scope"])
+        self.assertIsNone(identity_problem(self.inst))
         self.assertEqual(self.cal.holidays, frozenset())                         # no holiday dates invented
+        self.assertEqual(dict(self.cal.early_closes), {})                        # no early closes invented
+
+    def test_calendar_status_rules(self):
+        from edgelab.instruments import calendar_caveat
+        base = dict(self.cfg["instruments"]["NQ_DUKASCOPY"])
+        chk = lambda **kw: identity_problem(load_instruments({"instruments": {"NQ_DUKASCOPY": {**base, **kw}}})["NQ_DUKASCOPY"])
+        self.assertIn("has not been verified", chk(calendar_status="provisional_unverified"))
+        self.assertIn("needs calendar_evidence", chk(calendar_evidence=None))
+        self.assertIn("needs calendar_unverified_scope", chk(calendar_unverified_scope=None))
+        self.assertIn("unknown calendar_status", chk(calendar_status="mostly_verified"))
+        self.assertIn("needs calendar_evidence", chk(calendar_status="verified", calendar_evidence=None))
+        self.assertIsNone(chk(calendar_status="verified", calendar_unverified_scope=None))     # full verification
+        full = load_instruments({"instruments": {"NQ_DUKASCOPY": {**base, "calendar_status": "verified"}}})["NQ_DUKASCOPY"]
+        self.assertIsNone(calendar_caveat(full))                                  # caveat only for the partial status
+        self.assertIn("unannounced early close", calendar_caveat(self.inst))
 
 
 class TestGapRunsSplitAtTradingDates(unittest.TestCase):
@@ -254,14 +273,26 @@ class TestGapRunsSplitAtTradingDates(unittest.TestCase):
 
 
 class TestResearchRefusals(DukascopyBase):
-    def test_backtest_refused_while_calendar_is_unverified(self):
-        with self.assertRaises(InstrumentIdentityError) as cm:
+    def test_backtest_refused_only_by_unconfigured_costs(self):
+        with self.assertRaises(CostConfigError) as cm:
             self.svc.backtest_strategy(EMA.read_text(), self.m5)
-        self.assertIn("has not been verified", str(cm.exception))
+        self.assertIn("NQ_DUKASCOPY@DUKASCOPY", str(cm.exception))
         row = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
         self.assertFalse(row["runnable"])
-        self.assertTrue(any("calendar not yet verified" in r for r in row["reasons"]))
-        self.assertTrue(any("cost profile is unconfigured" in r for r in row["reasons"]))
+        self.assertEqual(row["reasons"], ["broker/provider cost profile is unconfigured - configure verified costs first"])
+        self.assertTrue(any("NOT verified: holidays" in x for x in row["limitations"]))       # caveat stays visible
+
+    def test_calendar_back_to_provisional_is_refused_again(self):
+        cfg = copy.deepcopy(self.svc.cfg)
+        cfg["instruments"]["NQ_DUKASCOPY"]["calendar_status"] = "provisional_unverified"
+        svc = Services(cfg=cfg, root=self.root)
+        try:
+            with self.assertRaises(InstrumentIdentityError):
+                svc.backtest_strategy(EMA.read_text(), self.m5)
+            row = next(d for d in svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
+            self.assertTrue(any("calendar not yet verified" in r for r in row["reasons"]))
+        finally:
+            svc.store.close()
 
     def test_provisional_identity_is_still_refused(self):
         cfg = copy.deepcopy(self.svc.cfg)
@@ -271,7 +302,7 @@ class TestResearchRefusals(DukascopyBase):
 
     def test_calendar_verified_then_cost_refusal_names_the_dukascopy_profile(self):
         cfg = copy.deepcopy(self.svc.cfg)
-        cfg["instruments"]["NQ_DUKASCOPY"]["calendar_status"] = "verified"
+        cfg["instruments"]["NQ_DUKASCOPY"].update(calendar_status="verified", calendar_evidence=None)
         self.assertIn("calendar_evidence", identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
         cfg["instruments"]["NQ_DUKASCOPY"]["calendar_evidence"] = "test: inspection report"
         self.assertIsNone(identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
@@ -458,12 +489,12 @@ class TestPreferredDataset(unittest.TestCase):
         rows = c.get("/api/datasets").get_json()
         self.assertTrue(next(d for d in rows if d["dataset_id"] == self.duka5)["preferred"])
         self.assertEqual(next(d for d in rows if d["dataset_id"] == self.duka5)["identity"]["calendar_status"],
-                         "provisional_unverified")
+                         "regular_hours_verified")
         q = c.get(f"/api/datasets/{self.duka5}/quality")
         self.assertEqual(q.status_code, 200)
         self.assertIn("largest_gaps", q.get_json())
         bt = c.post("/api/backtests", json={"strategy": self.made["strategy_id"], "dataset_id": self.duka5})
-        self.assertEqual((bt.status_code, bt.get_json()["error"]["kind"]), (409, "instrument_identity"))
+        self.assertEqual((bt.status_code, bt.get_json()["error"]["kind"]), (409, "cost_unconfigured"))
         self.assertEqual(c.post("/api/preferences/research-dataset", json={"dataset_id": "../x"}).status_code, 400)
         r = c.post("/api/preferences/research-dataset", json={"dataset_id": None})
         self.assertEqual(r.get_json()["state"], "unset")

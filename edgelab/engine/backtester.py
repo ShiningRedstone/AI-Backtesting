@@ -204,7 +204,8 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
                 raise BacktestError(f"dataset spread missing at bar {e.bar} or {k_exit}; "
                                     "cannot charge spread for this trade")
             spread_used = float(sp)
-        base = costs.round_trip_base(e.order_type, exit_type, n_c, inst, spread_points=spread_used)
+        base = costs.round_trip_base(e.order_type, exit_type, n_c, inst, spread_points=spread_used,
+                                     entry_price=e.price, exit_price=x["exit_price_theo"])
         financing = costs.financing_usd(d, e.price, n_c, inst, int(ts_ns[e.bar]),
                                         int(ts_ns[k_exit] + tf_ns))
         base_total = (base["commission_usd"] + base["fees_usd"] + base["slippage_usd"]

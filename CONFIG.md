@@ -54,13 +54,14 @@ All money values are per contract (futures) or per unit (CFDs) per side.
 | Key | Meaning |
 |---|---|
 | `status` | `assumed` (your placeholder) / `broker_verified` / `unconfigured` (refuses to build a model) |
-| `commission_per_side` | broker commission $ |
+| `commission_per_side` | broker commission $ per unit per side (`commission_mode: per_unit`, the default) |
+| `commission_mode` | `per_unit` or `notional`; `notional` charges `commission_per_million` USD per USD 1,000,000 traded notional per side (notional = theoretical fill price × point value × size), e.g. Dukascopy's volume-based CFD commission |
 | `fees_per_side` | exchange + clearing + NFA $ |
 | `slippage_unit` | `ticks` (default) or `points` (CFD feeds often have 0.01 ticks) |
 | `slippage_ticks_market` / `_stop` / `_limit` | adverse slippage per fill, in `slippage_unit` |
 | `spread_source` | `fixed` (use `spread_points`) or `dataset` (per-bar `spread` column) |
 | `spread_points` | full spread in points; charged once per round trip |
-| `financing_mode` | `none` or `annual_rate` (overnight holding cost) |
+| `financing_mode` | `none` (there is no holding cost), `annual_rate` (one constant annual rate), or `not_modeled` (holding costs exist but are NOT charged; recorded as such on every run) |
 | `financing_long_rate` / `financing_short_rate` | annual rate; + = cost, - = credit |
 | `financing_day_count` | 360 or 365 |
 | `rollover_time` / `rollover_timezone` | when a held position is charged (default 17:00 America/New_York) |
