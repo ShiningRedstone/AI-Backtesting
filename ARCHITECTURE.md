@@ -534,6 +534,54 @@ scripts/benchmark_search.py  synthetic throughput benchmark (sequential vs worke
 - **Verified:** a 1m week across US DST written with alternating `Z` / `-05:00` / `-04:00` stamps
   imports to exactly the original UTC nanoseconds; the prior importer tests pass unchanged.
 
+### ADR-43 HistData NSXUSD research proxy: own instrument and measured-schedule calendars (config only)
+- **Problem:** HistData NSXUSD M1 prices sit on a 0.001 grid (NAS100_CFD uses 0.01, which drives
+  rounding, limit penetration and tick slippage); its session schedule is neither CME nor FX hours;
+  HistData documents fixed EST without DST, but FOMC 14:00 ET releases land at 14:00 in the file in
+  summer 2019-2024 (New York wall-clock behaviour).
+- **Chosen:** config additions only. Instrument `NAS100_HISTDATA` (tick 0.001, CFD unit convention,
+  `research_proxy: true`; not a tradable contract); cost profile `NAS100_HISTDATA` ships
+  `unconfigured`, so the engine refuses to run it until real costs are entered. Calendars
+  `HISTDATA_NSX_R1` (2017-2018, Sun 18:00 - Fri 17:00) and `HISTDATA_NSX_R2` (2019+, Sun 18:00 -
+  Fri 16:15) in `America/New_York`, the empirical reading; the documentation conflict is recorded
+  in DATA_IMPORT.md, not resolved. No holidays listed (not established). NAS100_CFD, existing
+  calendars, importer, validation and thresholds are unchanged; the config hash changes.
+- **Not solved (deliberately):** the source adds 17:00-17:59 NY bars on runs of days around US DST
+  transitions. They stay `bars_outside_session` FAILs. The architecture cannot represent disjoint
+  source-quality exclusions: `restrict_to_period` is one contiguous window on an already-frozen
+  dataset, and the raw FAIL stops `validate_and_freeze` before any derivation exists. Admitting
+  these years needs a new, explicit, audited import-time exclusion (not implemented).
+
+### ADR-44 Audited source-quality exclusion windows at import (Phase 2 importer extended)
+- **Problem:** HistData NSXUSD 2019 delivers 1,197 extra bars at 17:00-17:59 New York on Sun-Thu
+  evenings of 2019-03-10..03-28 and 2019-10-27..10-31 (the weeks when US and EU DST differ). They
+  fail `bars_outside_session` (0.351% > 0.1%), so the year cannot be imported (ADR-43).
+- **Options:** (a) raise the threshold or add an "ignore outside session" switch (weakens the
+  DST/timezone-error detector for every dataset); (b) a calendar that opens at 17:00 on those dates
+  (the model has no per-date opens, and it would declare the anomaly a session); (c) drop the bars
+  in a pre-processed copy (invisible to lineage); (d) explicit, named exclusion windows applied at
+  import and recorded in the manifest.
+- **Chosen:** (d). `edgelab/data/exclusions.py`; sets live in `configs/data.yaml` under
+  `source_exclusions.<NAME>` (so they are in the config hash) and an import opts in with
+  `ImportOptions.source_exclusions` / `--source-exclusions NAME`. Windows are half-open
+  `[start, end)` bar-open instants written as quoted strings with an explicit UTC offset, each with a
+  reason. Refused, with nothing stored: unknown set; missing/extra keys; empty reason; naive,
+  unquoted or unparseable timestamps; start >= end; overlapping windows (never merged; touching
+  half-open windows are allowed); a window that matches no bar; a window containing ANY bar the
+  import calendar puts inside a session. So it can only remove bars `bars_outside_session` already
+  flags, where someone wrote down why. The exclusion runs after normalization and before
+  `validate_and_freeze`, which validates the retained bars with unchanged thresholds.
+- **Provenance:** `manifest.source_detail.source_exclusions` = set name, set hash, description,
+  calendar, rows before / excluded / after, each window (as written, in UTC, reason, rows removed)
+  and the SHA-256 of the removed rows; `manifest.derivation` names the set and counts; the source
+  file hash is unchanged and the source file is never written. Derived timeframes carry the same
+  record. Removing rows changes the content hash, hence the dataset id, so results on an excluded
+  dataset cannot share an id with the unmodified source. `restrict_to_period` children keep the
+  parent id (`restricted_from`) but do not copy the record.
+- **Shipped set:** `HISTDATA_NSXUSD_2019` only: 20 one-hour windows (17:00-18:00 EDT) located by the
+  local outside-session trace. No other year has a set: each needs its own trace. 2018's 131 sparse
+  outside-session bars stay a WARN and are not excluded.
+
 ## Known limitations (Phase 1)
 
 - Bar-level simulation: holding time and excursions are bar-resolution; partial fills and

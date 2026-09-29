@@ -32,3 +32,13 @@ instruments:
   NQ_CFD:     {exchange: OTC, asset_class: cfd, tick_size: 0.01, tick_value: 0.01, point_value: 1,
                min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: CME_EQUITY,
                description: "CFD referencing Nasdaq-100 futures (broker-specific; verify)"}
+  # ---- HistData research proxy (not a tradable contract) --------------------------------
+  # HistData NSXUSD M1 (BID prices, no volume). Raw prices sit on a 0.001 grid, so it cannot
+  # share NAS100_CFD's 0.01 tick. tick_value/point_value follow the CFD unit convention above
+  # (1 unit = 1 currency unit per index point); they are NOT broker figures. Costs ship
+  # unconfigured (configs/costs.yaml). Default calendar = regime R2; import 2017-2018 files
+  # with --calendar HISTDATA_NSX_R1. Evidence and open questions: DATA_IMPORT.md "HistData NSXUSD".
+  NAS100_HISTDATA: {exchange: OTC, asset_class: cfd, tick_size: 0.001, tick_value: 0.001, point_value: 1,
+                    min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: HISTDATA_NSX_R2,
+                    research_proxy: true, price_source: "HistData NSXUSD M1, BID",
+                    description: "HistData NSXUSD Nasdaq-100 quote - research proxy, not a live tradable contract"}

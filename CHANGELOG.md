@@ -11,6 +11,20 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | **Phase 2 importer change:** timestamps that all carry an explicit offset (`Z`, `+/-HH:MM`) are converted to UTC exactly even when offsets differ; naive stamps still require `source_timezone`; explicit + naive mixes and malformed stamps are refused (ADR-42) | IMPLEMENTED, TESTED |
 | Whether the file's stamps mark bar open or close, its price basis, volume meaning and broker costs | REQUIRES REAL DATA (user must state them; not inferred) |
 
+## HistData NSXUSD research-proxy configuration (after Phase 4, before Phase 5)
+
+| Item | Status |
+|---|---|
+| Instrument `NAS100_HISTDATA` (tick 0.001, research proxy, no broker figures) + `unconfigured` cost profile; `NAS100_CFD` unchanged (ADR-43) | IMPLEMENTED, TESTED |
+| Calendars `HISTDATA_NSX_R1` (Sun 18:00 - Fri 17:00 NY) and `HISTDATA_NSX_R2` (Sun 18:00 - Fri 16:15 NY); existing calendars unchanged | IMPLEMENTED, TESTED (semantics on synthetic timestamps) |
+| Timestamps read as `America/New_York`: supported by FOMC events, contradicts HistData's fixed-EST documentation | EVIDENCE (local real-data diagnostics), unresolved conflict recorded |
+| Exclusion of the 17:00-17:59 NY DST-transition source anomaly | superseded by ADR-44 below |
+| 2017 and 2023 as full-year datasets | REJECTED (missing bars > 5% under their own-schedule calendars) |
+| Any HistData year passing validation with the new calendars | REQUIRES REAL DATA (not run in this environment) |
+| 2018 real file (local run): `HISTDATA_NSX_R1`, 348,607 rows, 2.873% missing, 131 outside-session bars (WARN), gate accepts with WARN, no exclusions | MEASURED LOCALLY (in memory, not stored) |
+| **Phase 2 importer change:** audited source-quality exclusion windows (`source_exclusions.<NAME>` in `configs/data.yaml`, `--source-exclusions`); refuses malformed/overlapping/empty windows and any window touching an in-session bar; full record in the manifest; thresholds and calendars unchanged (ADR-44) | IMPLEMENTED, TESTED (synthetic) |
+| Set `HISTDATA_NSXUSD_2019` (20 windows, 17:00-18:00 EDT) | CONFIGURED; REQUIRES REAL DATA (local run must confirm every window matches bars and the gate accepts) |
+
 ## Phase 4: Batch Research & Search
 
 | Item | Status |

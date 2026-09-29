@@ -32,6 +32,7 @@ import pandas as pd
 
 from edgelab.core.logging import get_logger
 from edgelab.data.calendar import load_calendars
+from edgelab.data.exclusions import ExclusionError, apply_exclusions, exclusion_set_from_config
 from edgelab.data.resample import resample_bars
 from edgelab.data.schema import (ASSET_TYPES, PRICE_BASES, VOLUME_TYPES, BarArrays,
                                  DataRequiredError, timeframe_minutes)
@@ -81,6 +82,7 @@ class ImportOptions:
     derive_timeframes: list = field(default_factory=list)
     build_features: bool = True
     profile: str | None = None
+    source_exclusions: str | None = None  # name of an audited set in configs/data.yaml (ADR-44); opt-in
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -331,6 +333,15 @@ def import_dataset(o: ImportOptions, cfg: Mapping, store: ResultStore, cache=Non
     src_hash = stage("hash_source", lambda: file_sha256(o.file))
     raw = stage("read", lambda: read_raw(o))
     df, facts = stage("normalize", lambda: normalize(raw, o))
+    exclusion = None
+    if o.source_exclusions:
+        def _exclude():
+            try:
+                return apply_exclusions(df, cal, o.source_exclusions,
+                                        exclusion_set_from_config(cfg, o.source_exclusions))
+            except ExclusionError as exc:
+                raise ImportFailed("exclude", f"{exc} - nothing was stored") from exc
+        df, exclusion = stage("exclude", _exclude)
     cleaned, _ = clean_bars(df)
     content_hash = BarArrays.from_frame(cleaned, tf).content_hash()
     dataset_id = _dataset_id(name, tf_label, content_hash)
@@ -340,13 +351,17 @@ def import_dataset(o: ImportOptions, cfg: Mapping, store: ResultStore, cache=Non
         source_file_sha256=src_hash, volume_type=facts["volume_type"], price_basis=o.price_basis,
         has_bid_ask=facts["has_bid_ask"], spread_source=facts["spread_source"],
         provider_notes=o.notes, import_version=IMPORT_VERSION)
+    if exclusion:
+        provenance["derivation"] = (f"source exclusions {exclusion['set']} ({exclusion['rows_excluded']} of "
+                                    f"{exclusion['rows_before']} source rows removed; set {exclusion['set_hash'][:12]})")
     thresholds = cfg.get("validation")
 
     def _validate():
         try:
             return validate_and_freeze(df, inst, cal, o.timeframe, tf, o.provider, dataset_id, thresholds,
                                        source_detail={"file": str(o.file), "options": o.to_dict(),
-                                                      "raw_rows": facts["raw_rows"]},
+                                                      "raw_rows": facts["raw_rows"],
+                                                      **({"source_exclusions": exclusion} if exclusion else {})},
                                        contract=o.contract, adjustment=o.adjustment, **provenance)
         except DataIntegrityError as exc:
             _write_report(reports_dir, f"FAILED_{dataset_id}", exc.report)
@@ -375,7 +390,9 @@ def import_dataset(o: ImportOptions, cfg: Mapping, store: ResultStore, cache=Non
             h = BarArrays.from_frame(rdf, dm).content_hash()
             did = _dataset_id(name, f"{dm}m", h)
             dds = validate_and_freeze(rdf, inst, cal, f"{dm}m", dm, o.provider, did, thresholds,
-                                      source_detail={"derived_from": dataset_id}, contract=o.contract,
+                                      source_detail={"derived_from": dataset_id,
+                                                     **({"source_exclusions": exclusion} if exclusion else {})},
+                                      contract=o.contract,
                                       adjustment=o.adjustment,
                                       **{**provenance, "parent_dataset_id": dataset_id,
                                          "derivation": f"session-anchored resample {o.timeframe}->{dm}m"})

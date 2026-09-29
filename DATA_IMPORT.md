@@ -139,3 +139,52 @@ ds = svc.load_dataset(res["dataset_id"])       # a ValidatedDataset, re-validate
 - Local times inside a DST gap or a repeated hour are refused, not guessed.
 - Changing a calendar after import makes `load_validated` refuse until you re-import (or pass
   `allow_calendar_change=True` deliberately).
+
+## HistData NSXUSD (research proxy; evidence and open questions)
+
+Files: `YYYYMMDD HHMMSS;open;high;low;close;volume`, no header (import a copy with the header
+`ts;open;high;low;close;volume` prepended; never edit the raw file), bar OPEN, BID prices, volume 0
+(`--volume-type none`). Instrument `NAS100_HISTDATA` (tick 0.001: raw prices are on a 0.001 grid);
+it is a research proxy, not a tradable contract, and its costs ship unconfigured.
+
+- **Timezone, evidence vs documentation:** HistData documents fixed EST without DST
+  (`Etc/GMT+5`). Measured: summer FOMC 14:00 ET releases (2019-07-31, 2020-07-29, 2021-06-16,
+  2022-07-27, 2024-07-31) land at 14:00 in the file, i.e. New York wall-clock time. The calendars
+  therefore use `America/New_York` and imports should state `--source-timezone America/New_York`.
+  The conflict is unresolved; this is an empirical reading, not a vendor statement.
+- **Schedules:** R1 2017-2018 (`--calendar HISTDATA_NSX_R1`; a 16:16-16:29 pause is not modelled);
+  R2 2019-2024 (`HISTDATA_NSX_R2`, default).
+- **Known source anomaly:** on Sun-Thu evenings of the weeks when US and EU DST differ (2019:
+  03-10..03-28 and 10-27..10-31) the file carries extra 17:00-17:59 NY bars. They fail
+  `bars_outside_session` (about 600-1,200 bars a year), so 2019-2024 are refused unless an audited
+  exclusion set is named. Only 2019 has a set (`HISTDATA_NSXUSD_2019`); other years need their own
+  trace first. Thresholds are not relaxed.
+- **Coverage:** 2017 (7.6% missing under R1) and 2023 (13.6% under R2) are rejected as full-year
+  datasets. 2018 is expected to import with WARNs (2.9% missing, measured locally with an
+  equivalent in-memory calendar). No holidays are listed; they count as missing days.
+
+## Audited source-quality exclusions (opt-in)
+
+For a known, documented source defect that lies entirely outside the session (not a way to make
+a failing file pass). Define a named set in `configs/data.yaml` and name it on import:
+
+```yaml
+source_exclusions:
+  MY_SET:
+    description: "what the anomaly is and how it was located"
+    windows:     # half-open [start, end) bar-open times; quoted; explicit UTC offset; a reason each
+      - {start: "2019-03-10T17:00:00-04:00", end: "2019-03-10T18:00:00-04:00", reason: "..."}
+```
+
+```bash
+python -m edgelab.cli import FILE ... --calendar HISTDATA_NSX_R2 --source-exclusions HISTDATA_NSXUSD_2019
+```
+
+- Refused (nothing stored): unknown set, naive or unquoted timestamps, start >= end, overlapping
+  windows (not merged), empty reasons, a window matching no bar, and any window containing a bar
+  that the import calendar puts inside a session.
+- Not excluded: anything not inside a listed window. The retained bars go through the normal gate
+  with the normal thresholds, so other outside-session bars, gaps and duplicates are still reported.
+- Recorded: `manifest.source_detail.source_exclusions` (set, set hash, rows before/excluded/after,
+  each window with its reason and row count, SHA-256 of the removed rows) and `manifest.derivation`.
+  The source file and its hash are unchanged; the dataset id differs from an unexcluded import.

@@ -68,7 +68,7 @@ def _options(a, for_import: bool) -> dict:
         d.update(symbol=a.symbol or "", dataset_name=a.dataset_name, calendar=a.calendar,
                  price_basis=a.price_basis, notes=a.notes or "",
                  derive_timeframes=[x for x in (a.derive or "").split(",") if x],
-                 build_features=not a.no_features)
+                 build_features=not a.no_features, source_exclusions=a.source_exclusions)
     return d
 
 
@@ -112,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--notes")
     p.add_argument("--derive", help="comma-separated higher timeframes to derive, e.g. 5m,15m,60m")
     p.add_argument("--no-features", action="store_true")
+    p.add_argument("--source-exclusions", help="audited exclusion set from configs/data.yaml "
+                                                "(source_exclusions.<NAME>); opt-in, see DATA_IMPORT.md")
 
     sub.add_parser("datasets", help="list stored datasets")
     p = sub.add_parser("dataset", help="manifest + validation report of one dataset")

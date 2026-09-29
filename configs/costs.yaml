@@ -46,3 +46,4 @@ costs:
       providers: {}
     US100_CFD: *cfd_unconfigured
     NQ_CFD: *cfd_unconfigured
+    NAS100_HISTDATA: *cfd_unconfigured   # research proxy: no broker costs exist for it

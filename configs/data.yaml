@@ -29,6 +29,25 @@ calendars:
     trading_weekdays: [mon, tue, wed, thu, fri]
     holidays: []
     early_closes: {}
+  # ---- HistData NSXUSD M1 source schedules (measured from the files, NOT exchange hours) ----
+  # Timezone America/New_York is the EMPIRICAL reading (FOMC 14:00 ET releases land at 14:00 in
+  # summer 2019-2024); HistData documents fixed EST without DST. See DATA_IMPORT.md "HistData NSXUSD".
+  # No holidays listed: the source's holiday schedule has not been established (unlisted
+  # holidays surface as missing days). Single-session model: intra-session pauses not represented.
+  HISTDATA_NSX_R1:       # 2017-2018: Sun 18:00 - Fri 17:00; the 16:16-16:29 pause is NOT modelled
+    timezone: America/New_York
+    session_open: "18:00"
+    session_close: "17:00"
+    trading_weekdays: [mon, tue, wed, thu, fri]
+    holidays: []
+    early_closes: {}
+  HISTDATA_NSX_R2:       # 2019-2022, 2024 (2023 R2-like, coverage-rejected): Sun 18:00 - Fri 16:15
+    timezone: America/New_York
+    session_open: "18:00"
+    session_close: "16:15"
+    trading_weekdays: [mon, tue, wed, thu, fri]
+    holidays: []
+    early_closes: {}
   FX_24_5:
     timezone: America/New_York
     session_open: "17:00"
@@ -39,3 +58,35 @@ calendars:
     session_open: "00:00"
     session_close: "24:00"
     trading_weekdays: [mon, tue, wed, thu, fri, sat, sun]
+
+# ---- Audited source-quality exclusions (ADR-44). Opt-in per import: --source-exclusions NAME. ----
+# Windows are half-open [start, end) bar-open times, quoted, with an explicit UTC offset. A set is
+# refused if a window matches no bar or contains ANY bar inside the import calendar's session.
+source_exclusions:
+  HISTDATA_NSXUSD_2019:
+    description: >-
+      HistData NSXUSD M1 2019 (read as America/New_York, calendar HISTDATA_NSX_R2): extra
+      17:00-17:59 NY bars on Sun-Thu evenings of the weeks when US DST is in effect and EU DST is
+      not (2019-03-10..03-28 and 2019-10-27..10-31). Located by the local outside-session trace
+      (1,197 bars outside R2 and CME_EQUITY); one window per affected evening. Not a vendor statement.
+    windows:
+      - {start: "2019-03-10T17:00:00-04:00", end: "2019-03-10T18:00:00-04:00", reason: &us-eu-dst-gap-spring "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); coincides with the US/EU DST mismatch weeks (spring 2019)"}
+      - {start: "2019-03-11T17:00:00-04:00", end: "2019-03-11T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-12T17:00:00-04:00", end: "2019-03-12T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-13T17:00:00-04:00", end: "2019-03-13T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-14T17:00:00-04:00", end: "2019-03-14T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-17T17:00:00-04:00", end: "2019-03-17T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-18T17:00:00-04:00", end: "2019-03-18T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-19T17:00:00-04:00", end: "2019-03-19T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-20T17:00:00-04:00", end: "2019-03-20T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-21T17:00:00-04:00", end: "2019-03-21T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-24T17:00:00-04:00", end: "2019-03-24T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-25T17:00:00-04:00", end: "2019-03-25T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-26T17:00:00-04:00", end: "2019-03-26T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-27T17:00:00-04:00", end: "2019-03-27T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-03-28T17:00:00-04:00", end: "2019-03-28T18:00:00-04:00", reason: *us-eu-dst-gap-spring}
+      - {start: "2019-10-27T17:00:00-04:00", end: "2019-10-27T18:00:00-04:00", reason: &us-eu-dst-gap-autumn "HistData NSXUSD source anomaly: extra 17:00-17:59 NY bars (early reopen); coincides with the US/EU DST mismatch weeks (autumn 2019)"}
+      - {start: "2019-10-28T17:00:00-04:00", end: "2019-10-28T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
+      - {start: "2019-10-29T17:00:00-04:00", end: "2019-10-29T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
+      - {start: "2019-10-30T17:00:00-04:00", end: "2019-10-30T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
+      - {start: "2019-10-31T17:00:00-04:00", end: "2019-10-31T18:00:00-04:00", reason: *us-eu-dst-gap-autumn}
