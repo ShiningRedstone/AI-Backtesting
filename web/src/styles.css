@@ -304,3 +304,13 @@ table.steps td { padding: 6px 8px; border-bottom: 1px solid var(--border); verti
 table.steps td:first-child { width: 2em; text-align: center; }
 .equity { margin: 0; }
 .equity svg { display: block; max-width: 100%; height: auto; background: var(--surface); }
+/* Phase 9: research dataset identity strip + AI Discovery */
+.ds-strip { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin: 8px 0; }
+.ds-strip > div { display: flex; flex-direction: column; gap: 2px; min-width: 120px; }
+.gate-stages { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.proposal-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 10px 0; }
+.proposal-card.rejected { opacity: .85; }
+.proposal-card h3 { margin: 0 0 6px; font-size: 15px; }
+.ds-strip > div { min-width: 0; overflow-wrap: anywhere; }
+.ds-strip code { word-break: break-all; }
+.wrap-any { overflow-wrap: anywhere; }

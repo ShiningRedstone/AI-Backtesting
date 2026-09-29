@@ -123,6 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("datasets", help="list stored datasets")
     p = sub.add_parser("dataset", help="manifest + validation report of one dataset")
     p.add_argument("dataset_id")
+    p.add_argument("--quality", action="store_true", help="gap classification + coverage (read-only)")
+    p = sub.add_parser("prefer-dataset", help="show / set / clear the workspace's Preferred Research Dataset "
+                                              "(a default for NEW research; stored runs never change)")
+    p.add_argument("dataset_id", nargs="?")
+    p.add_argument("--clear", action="store_true")
 
     p = sub.add_parser("features", help="feature catalog / docs / build / cache status")
     p.add_argument("action", choices=("list", "docs", "build", "cache"))
@@ -199,7 +204,14 @@ def main(argv: list[str] | None = None) -> int:
         elif a.cmd == "datasets":
             _print(svc.list_datasets(), a.json)
         elif a.cmd == "dataset":
-            _print(svc.dataset_detail(a.dataset_id), a.json)
+            _print(svc.dataset_quality(a.dataset_id) if a.quality else svc.dataset_detail(a.dataset_id), a.json)
+        elif a.cmd == "prefer-dataset":
+            if a.clear:
+                _print(svc.clear_preferred_dataset(), a.json)
+            elif a.dataset_id:
+                _print(svc.set_preferred_dataset(a.dataset_id), a.json)
+            else:
+                _print(svc.preferred_dataset(), a.json)
         elif a.cmd == "features":
             if a.action == "list":
                 rows = [{"id": d["id"], "v": d["version"], "category": d["category"],

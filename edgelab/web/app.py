@@ -33,6 +33,8 @@ SEARCH_ID = re.compile(r"^SRCH_[0-9A-F]{12}$")
 JOB_ID = re.compile(r"^JOB_[0-9A-F]{12}$")
 PROP_SIM_ID = re.compile(r"^PROP_[0-9A-F]{16}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
+AI_GEN_ID = re.compile(r"^AIG_[0-9A-F]{12}$")
+AI_PROP_ID = re.compile(r"^AIP_[0-9A-F]{12}$")
 
 
 class ApiError(Exception):
@@ -97,6 +99,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         from edgelab.data.store import SearchStorageUnsupported
         from edgelab.engine.backtester import BacktestError
         from edgelab.engine.costs import CostConfigError
+        from edgelab.ai.context import DiscoveryScopeError
+        from edgelab.ai.providers import ProviderError
+        from edgelab.ai.schema import DiscoveryRequestError
+        from edgelab.instruments import InstrumentIdentityError
         from edgelab.prop.rules import PropConfigError
         from edgelab.prop.simulator import PropDataError
         from edgelab.research.jobs import JobConflict
@@ -118,11 +124,20 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                                       "reason": "; ".join(e.errors),
                                       "issues": [{"severity": "error", "message": m} for m in e.errors],
                                       "details": details}}), 422
+        if isinstance(e, DiscoveryRequestError):
+            return jsonify({"error": {"kind": "ai_request", "message": "The discovery request was refused.",
+                                      "reason": "; ".join(e.errors),
+                                      "issues": [{"severity": "error", "message": m} for m in e.errors]}}), 422
         if isinstance(e, StrategyValidationError):
             return jsonify({"error": {"kind": "validation", "message": "The strategy is not valid.",
                                       "issues": [i.to_dict() for i in e.result.issues],
                                       "details": str(e)}}), 422
-        table = [(VariationError, 422, "variation", "Variation generation was refused."),
+        table = [(InstrumentIdentityError, 409, "instrument_identity",
+                  "Research unavailable: this instrument's source identity is provisional. State its "
+                  "symbol, asset class and contract economics first."),
+                 (DiscoveryScopeError, 422, "ai_scope", "The discovery scope was refused."),
+                 (ProviderError, 503, "ai_provider", "The AI provider is unavailable."),
+                 (VariationError, 422, "variation", "Variation generation was refused."),
                  (StrategyCompileError, 422, "compile", "The strategy cannot run on this dataset."),
                  (CostConfigError, 409, "cost_unconfigured",
                   "Backtest unavailable: the broker/provider cost profile is unconfigured. "
@@ -332,9 +347,24 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def datasets():
         return jsonify(call(svc.backtest_readiness)["datasets"])
 
+    @app.get("/api/preferences/research-dataset")
+    def preferred_dataset():
+        return jsonify(call(svc.preferred_dataset))
+
+    @app.post("/api/preferences/research-dataset")
+    def set_preferred_dataset():
+        did = body().get("dataset_id")
+        if did is None:
+            return jsonify(call(svc.clear_preferred_dataset))
+        return jsonify(call(svc.set_preferred_dataset, _id(did, SAFE_ID, "dataset id")))
+
     @app.get("/api/datasets/<did>")
     def dataset(did):
         return jsonify(call(svc.dataset_detail, _id(did, SAFE_ID, "dataset id")))
+
+    @app.get("/api/datasets/<did>/quality")
+    def dataset_quality(did):
+        return jsonify(call(svc.dataset_quality, _id(did, SAFE_ID, "dataset id")))
 
     def _import_options(b: dict) -> dict:
         from edgelab.data.importer import ImportOptions
@@ -460,6 +490,40 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if b.get("split_at"):
             return jsonify(call(svc.oos_random_control, strategy, did, _date(b, "split_at"), n, seed))
         return jsonify(call(svc.random_entry_control, strategy, did, n, seed))
+
+    # ------------------------------------------------------------------ AI Discovery (Phase 9)
+    @app.get("/api/ai/status")
+    def ai_status():
+        return jsonify(call(svc.ai_status))
+
+    @app.post("/api/ai/context")
+    def ai_context():
+        return jsonify(call(svc.ai_context, body().get("request")))
+
+    @app.post("/api/ai/generate")
+    def ai_generate():
+        return jsonify(call(svc.ai_generate, body().get("request")))
+
+    @app.get("/api/ai/generations")
+    def ai_generations():
+        return jsonify(call(svc.ai_generations))
+
+    @app.get("/api/ai/generations/<gid>")
+    def ai_generation(gid):
+        return jsonify(call(svc.ai_generation, _id(gid, AI_GEN_ID, "generation id")))
+
+    @app.post("/api/ai/proposals/<pid>/decision")
+    def ai_decide(pid):
+        b = body()
+        return jsonify(call(svc.ai_decide, _id(pid, AI_PROP_ID, "proposal id"), b.get("decision"), b.get("note") or ""))
+
+    @app.post("/api/ai/proposals/<pid>/save")
+    def ai_save(pid):
+        return jsonify(call(svc.ai_save, _id(pid, AI_PROP_ID, "proposal id")))
+
+    @app.get("/api/ai/proposals/<pid>/lineage")
+    def ai_lineage(pid):
+        return jsonify(call(svc.ai_lineage, _id(pid, AI_PROP_ID, "proposal id")))
 
     @app.get("/api/proposals/menu")
     def proposals_menu():

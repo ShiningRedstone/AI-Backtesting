@@ -361,6 +361,56 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.assertTrue(vals == sorted(vals) or not vals)
 
+    def test_9z_preferred_dataset_ai_discovery_to_backtest(self):
+        """Phase 9: set the Preferred Research Dataset -> AI Discovery preselects it -> mock proposals through the
+        gate -> accept + save -> open in the Strategy Lab (preferred dataset preselected) -> backtest."""
+        rows = _get(self.base + "/api/datasets")
+        did = next(d["dataset_id"] for d in rows if d["runnable"] and d["provider"] != "SYNTHETIC_CFD")
+        pg = self.page()
+        try:
+            pg.goto(f"{self.base}/#/datasets")
+            self.tid(pg, f"prefer-{did}").click()
+            self.tid(pg, "preferred-strip").wait_for()
+            self.assertIn(did, self.tid(pg, "preferred-strip").inner_text())
+            self.assertEqual(_get(self.base + "/api/preferences/research-dataset")["preferred"]["dataset_id"], did)
+            pg.goto(f"{self.base}/#/discovery")
+            self.tid(pg, "ai-offline").wait_for()                              # no external AI in tests: says so
+            pg.wait_for_function(f"() => document.querySelector(\"[data-testid='ai-dataset']\")?.value === '{did}'")
+            self.assertIn(did, self.tid(pg, "research-dataset-strip").inner_text())
+            self.tid(pg, "ai-mode-template").click()
+            self.tid(pg, "ai-template").select_option("rsi_reversion")
+            self.tid(pg, "ai-n").fill("2")
+            self.tid(pg, "ai-generate").click()
+            card = self.tid(pg, "proposal-0")
+            card.wait_for(timeout=30000)
+            self.assertIn("passed the gate", card.inner_text().lower())
+            self.assertIn("rejected by the gate", self.tid(pg, "proposal-1").inner_text().lower())
+            self.assertIn("contains code", self.tid(pg, "reasons-1").inner_text())
+            self.tid(pg, "inspect-0").click()
+            self.tid(pg, "inspect-body-0").wait_for()
+            self.tid(pg, "accept-0").click()
+            self.tid(pg, "save-0").click()
+            self.tid(pg, "backtest-0").click()
+            self.tid(pg, "dataset-select").wait_for()
+            radio = pg.locator(f"tr[data-testid='ds-{did}'] input[type=radio]")
+            pg.wait_for_function(f"() => document.querySelector(\"tr[data-testid='ds-{did}'] input[type=radio]\")?.checked === true")
+            self.assertTrue(radio.is_checked())                                  # preferred dataset preselected
+            self.tid(pg, "run-backtest").click()
+            res = self.tid(pg, "backtest-result")
+            res.wait_for(timeout=60000)
+            run_id = res.locator("a[href^='#/results/']").inner_text()
+            rec = _get(f"{self.base}/api/results/{run_id}")["record"]
+            gens = _get(self.base + "/api/ai/generations")
+            gen = _get(f"{self.base}/api/ai/generations/{gens[0]['generation_id']}")
+            saved = gen["proposals"][0]["decision"]["saved_strategy_id"]
+            self.assertEqual(rec["strategy"]["strategy_id"], saved)
+            self.assertEqual(rec["dataset"]["dataset_id"], did)
+            lin = _get(f"{self.base}/api/ai/proposals/{gen['proposals'][0]['proposal_id']}/lineage")
+            self.assertIn(run_id, [r["run_id"] for r in lin["runs"]])
+            self.assertEqual(self.errors, [])
+        finally:
+            _post(self.base + "/api/preferences/research-dataset", {"dataset_id": None})
+
     def test_5_mobile_navigation(self):
         pg = self.page(390, 844)
         pg.goto(self.base + "/#/")

@@ -794,6 +794,62 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-54 Dukascopy source identity, preferred research dataset, AI discovery over the Mode B gate (Phase 9)
+- **Problem:**
+  - The user's primary data is a Dukascopy Nasdaq-100 1m CSV. Its symbol, asset class, price side,
+    volume meaning and contract economics are not stated by the file.
+  - Research needs one place to say "use this dataset for new work".
+  - AI-assisted discovery must not become a way around the gate, a results feedback loop, or a
+    source of claims.
+- **Chosen (data):**
+  - **Import:** the SAME import pipeline, with a new layout profile `dukascopy_utc_csv` (explicit
+    offsets → exact UTC; `volume_type: unknown`; `symbol: UNSTATED`).
+  - **Identity:** a new instrument `NQ_DUKASCOPY` with `identity_status: provisional` (plus
+    `required_metadata`, empty `source_symbol` / `identity_evidence`). `instruments.identity_problem` /
+    `check_identity` refuse, in `Services._run_cell` (the ONE run path), anything that interprets
+    point value / sizing / costs until the user states the identity (`user_specified`) or verifies
+    it (`source_verified` + evidence).
+  - **Costs:** its own cost profile (`NQ_DUKASCOPY`, `providers.DUKASCOPY`), unconfigured. HistData's
+    assumed profile is untouched and never applies.
+  - **Calendar:** a provisional calendar, `DUKASCOPY_NQ_PROVISIONAL`, which the validation gate
+    checks rather than trusts.
+  - **Gaps:** a read-only gap classification (`data/quality.py`).
+  - **Preferred dataset:** stored in `data/workspace_preferences.json`, outside runs, datasets and the
+    config hash. Setting it re-validates the dataset.
+- **Chosen (AI):** the `edgelab/ai/` package.
+  - **Request:** a versioned request schema (claims, code and unknown keys refused).
+  - **Context:** a versioned **blind context** built only from dataset identities, instrument
+    metadata, the DSL menu and cost status; it never reads the run registry. A forbidden-key guard
+    and a hash-stability test enforce this.
+  - **Providers:** `AIProvider.generate_proposals(request, context)` with a deterministic
+    `MockProvider`, and an optional stdlib-HTTPS Anthropic provider configured only by environment
+    variables (no default model; the key is never persisted).
+  - **Envelope:** EdgeLab assigns `request_id` / `generation_id` / `proposal_id` from content hashes.
+  - **Gate:** schema → DSL validation → supported features → causality → parameter domain → request
+    constraints → canonical compile → identity. The DSL validator's own issues are routed to stages,
+    and nothing is repaired.
+  - **Review:** human accept/reject. Saving creates an ordinary library strategy with the generation
+    method `mode_b_proposal`, or `mode_b_modification` with its parent.
+  - **Records:** file-based and immutable, under `data/ai_discovery/`.
+- **Rejected:**
+  - a second importer;
+  - assuming CME NQ economics or reusing HistData costs;
+  - auto-setting the preferred dataset on import;
+  - storing the preference in the config (it would change the config hash) or in run records;
+  - letting providers assign ids or pass partially valid output after a "fix";
+  - any ranking or "best" label;
+  - feeding results to the provider;
+  - an automated generate→test→regenerate loop.
+- **Unchanged:** the backtester, fill/cost methodology, random-entry control, prop simulation,
+  validation gate thresholds, HistData datasets/configs and every stored run.
+- **Additive changes to earlier modules:**
+  - `Services._dataset_eligibility` rows gain `identity` and `preferred`, and a provisional
+    identity is an ineligibility reason;
+  - `backtest_readiness` returns `preferred_dataset_id`;
+  - `GENERATION_METHODS` gains `mode_b_modification`;
+  - `_limitations` names unknown volume semantics.
+  - The research config hash changes because configs gained entries; stored runs keep theirs.
+
 ### ADR-53 Research workspace selection is a pointer, resolved in one place (desktop change)
 - **Problem:** a packaged launch without `--data-root` silently used `%LOCALAPPDATA%\EdgeLab`
   (`runtime.user_data_root()`), and `init_workspace` created a fresh, empty workspace there. So the
@@ -1062,3 +1118,44 @@ packaging/workspace_snapshot.py    read-only before/after check of a workspace (
 - The Browse button needs the native window; in `--ui browser` mode, type the path.
 - The per-launch first-run instance holds no lock until a workspace is chosen, so two first-run windows
   can coexist until one selects a workspace.
+
+## Module map (Phase 9: Dukascopy source + AI discovery)
+
+```
+configs/import_profiles.yaml   + dukascopy_utc_csv (timestamp,open,high,low,close,volume; explicit UTC offsets)
+configs/instruments.yaml       + NQ_DUKASCOPY (identity_status: provisional; research units; not CME NQ)
+configs/data.yaml              + DUKASCOPY_NQ_PROVISIONAL calendar (unmeasured; gate-checked)
+configs/costs.yaml             + NQ_DUKASCOPY / providers.DUKASCOPY (unconfigured)
+edgelab/instruments.py         + identity_info / identity_problem / check_identity, InstrumentIdentityError
+edgelab/data/quality.py        gap_analysis: gap runs by length/position/weekday, coverage by year (read-only)
+edgelab/data/preferences.py    workspace_preferences.json (Preferred Research Dataset), atomic writes
+edgelab/ai/schema.py           request + proposal content schemas, claim/code detection
+edgelab/ai/context.py          resolve_scope, build_context (blind; context_hash; forbidden-key guard)
+edgelab/ai/providers.py        AIProvider protocol, MockProvider, AnthropicProvider (env-configured), provider_status
+edgelab/ai/gate.py             gate_proposal: 8 stages with exact reasons; features_used, n_conditions, change diff
+edgelab/ai/discovery.py        DiscoveryStore (generations/decisions), generate, decide, save, lineage
+edgelab/services.py            + preferred_dataset*, dataset_quality, ai_status/context/generate/generations/
+                               generation/decide/save/lineage; identity gate in _run_cell
+edgelab/web/app.py             + /api/preferences/research-dataset, /api/datasets/<id>/quality, /api/ai/*
+edgelab/cli.py                 + prefer-dataset, dataset --quality
+web/src/pages/Discovery.tsx    AI Discovery page (request, blind-context preview, proposal review, history, batch import)
+web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred columns, Preferred card, gap report
+```
+
+## Known limitations (Phase 9)
+
+- **Real data:** the real Dukascopy CSV is not in this repository. The pipeline was exercised only on
+  a SYNTHETIC Dukascopy-shaped fixture. Its calendar is provisional until `inspect` evidence from the
+  real file confirms or replaces it, and its holidays are not listed.
+- **Identity metadata:** kept in `configs/instruments.yaml` (edited by hand); there is no GUI editor.
+  Stating it changes the research config hash, as any config change does.
+- **Preferred dataset:** one per workspace, not per strategy or per page.
+- **AI requests:** synchronous and under the service lock. One external provider kind is
+  implemented, and its output is parsed as a JSON array; anything else becomes one rejected
+  "unparsed_output" proposal.
+- **Mock provider:** keyword routing over three templates; it exists to exercise the pipeline, not
+  to discover.
+- **Date scope:** recorded with the request and checked against the dataset range. It does not
+  restrict the handoff backtest, which runs the whole dataset as before.
+- **Lineage:** random-entry control realizations are not stored, so they do not appear in AI
+  lineage.

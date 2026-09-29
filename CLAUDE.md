@@ -21,6 +21,11 @@ ADR-49), and desktop packaging hardening ("Phase 7": `edgelab/runtime.py`, `edge
 Strategy Lab ("Phase 8": `research/lab.py`, Research/Validate tabs, Compare page, AI Proposals gate page; ADR-51).
 Desktop: native window (ADR-52) and research-workspace selection (`runtime.resolve_workspace`, `workspace_host.py`,
 Settings → Research Workspace; ADR-53).
+"Phase 9" (as requested): Dukascopy primary source (profile `dukascopy_utc_csv`, provisional instrument `NQ_DUKASCOPY`
+refused for research until its identity is stated, own unconfigured costs, provisional calendar, gap classification
+`data/quality.py`), workspace Preferred Research Dataset (`data/preferences.py`), and AI Discovery (`edgelab/ai/`: blind
+context, providers incl. deterministic mock, strict 8-stage gate, human review, lineage; ADR-54). The real Dukascopy CSV
+has NOT been imported in this repository.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

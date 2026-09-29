@@ -49,11 +49,11 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | Strategy Builder | Visual editor for the DSL: General · Market & Sessions · Parameters · Entry · Exit · Sizing · Review, with live backend validation and DSL preview | `render_strategy`, validator, compiler |
 | Families | Hypotheses and their instances, as a lineage tree and table | `family_detail` |
 | Variations | Mode A batches with reproducibility metadata | batch records |
-| Datasets | Library with provider/instrument/timeframe, validation status, cost status and an **Eligible** column (with the reasons a dataset cannot run); metadata, validation report and caveats; import over the existing pipeline | Phase 2 importer, `backtest_readiness` |
+| Datasets | Library with provider, instrument + **source identity** (configured / provisional, research proxy), timeframe, range, validation, source content hash, price/volume semantics, cost status, caveats and an **Eligible** column (with the reasons a dataset cannot run); **Preferred Research Dataset** card and "Set preferred"; metadata, validation report, identity and **gap classification & coverage**; import over the existing pipeline (incl. dataset name, symbol, calendar, derived timeframes) | Phase 2 importer, `backtest_readiness`, `dataset_quality`, `/api/preferences/research-dataset` |
 | Results | Recorded runs (any status); a run page shows its scope, headline metrics, equity and drawdown curve, session / entry-hour / cost-sensitivity breakdowns and breakeven cost multiple, and links to Lab, Compare, Validate and Prop | run registry, `run_curve`, `research_report` |
 | Research | Phase 4 batch search: spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
 | Prop Simulation | Choose a stored run and one or more accounts (each with a rule set from `configs/prop/` or custom YAML, optional start), run, then view the source strategy result and the prop-account results side by side but separately: outcome, breaches, violations with detection mode, day table and per-trade progression. Recorded simulations are listed. See PROP_SIMULATION.md | `/api/prop/*` |
-| AI Proposals | Mode B gate in the GUI: paste a machine-readable proposal batch, check it (nothing saved), then save the accepted proposals as ordinary library strategies (lineage `mode_b_proposal`). No model is connected or called | `ingest_proposals`, `proposal_menu` |
+| AI Discovery | Hypothesis-, template- or modification-based proposals from an AI provider (or the deterministic mock), each through the strict gate, then human review: Inspect, Accept, Reject, Save to library, Send to Backtest; history of requests; the old proposal-batch import as a tab (see "AI Discovery (Phase 9)") | `/api/ai/*`, `ingest_proposals` |
 | Settings | **Research Workspace** (desktop app: current folder with validity, SQLite, read/write, dataset/run/strategy/prop counts; check a folder read-only, use it, create a new one, open the default; development server: shows its fixed `--root`); read-only configuration: cost profile status, engine config, sessions, instruments | `/api/workspace*`, config |
 | Welcome (desktop, first run) | Shown instead of the pages while no research workspace is selected: open an existing workspace or create a new one | `/api/workspace*` |
 
@@ -86,6 +86,96 @@ promoted or called a winner.
 
 Synchronous calls: backtests and validations run in the request (the page shows a busy state); only batch
 searches are background jobs.
+
+## Preferred Research Dataset (Phase 9)
+
+A workspace-level default for NEW research, set on the Datasets page ("Set preferred") and stored in
+`data/workspace_preferences.json`. Only a stored dataset that passed validation can be chosen.
+
+- The Strategy Lab backtest, batch-research and validation pickers, and AI Discovery, preselect it
+  when it is eligible for the strategy. When it is not eligible, a banner gives the reasons and
+  nothing is preselected.
+- A research-dataset strip shows the data identity: **Research Dataset / Provider / Instrument /
+  Timeframe**, with the cost status and a "provisional identity" badge where that applies.
+- Changing or clearing it never modifies stored runs, strategies or datasets, and it is never
+  changed automatically (for example, importing a new dataset does not change it).
+
+## AI Discovery (Phase 9)
+
+The flow is: request, then the blind context, then the provider, then the strict gate, then your
+review, then the library. After that come the existing Backtest / Variations / Compare / OOS /
+Walk-forward / Control / Prop tools.
+
+**The request**
+
+- **Mode A:** a plain-language hypothesis plus constraints.
+- **Mode B:** a family template (`ema_trend`, `rsi_reversion`, `range_breakout`) plus constraints.
+- **Modify:** an existing library strategy becomes a NEW version with its parent recorded; the
+  original is never changed.
+- **Scope:** the research dataset (default: the preferred one), which fixes the instrument and
+  timeframe; a session; a direction; an optional date scope, recorded with the request.
+- **Constraints:** allowed features, entry orders, stops, targets, exits, sizing, maximum
+  conditions/cooldown/parameters, and parameter limits. Only DSL-supported constructs can be
+  chosen.
+- **Size:** 1-10 proposals per request.
+- **Refusals:** the request is refused (not repaired) for performance-claim language, code, or
+  unknown keys.
+
+**The blind context** ("Show what the AI sees") is versioned and hashed. It holds:
+
+- dataset identities and coverage, and the preferred dataset;
+- instrument identity metadata and cost-status caveats;
+- the DSL menu: features, constructs, sessions, parameter domains;
+- and, when modifying, the base definition.
+
+It contains **no** results: no runs, metrics, OOS, walk-forward, control or prop output. It is built
+without reading the run registry, so its hash does not change when runs are recorded. Nothing feeds
+results back into generation, and there is no automated loop.
+
+**Providers**
+
+- `mock`: always available, deterministic, not an AI. It returns one valid, one malformed (code plus
+  a performance field), one causality-invalid (reads the next bar) and one parameter-invalid
+  (value outside its domain) proposal.
+- An external provider is optional and configured only by environment variables:
+  `EDGELAB_AI_PROVIDER=anthropic`, `EDGELAB_AI_MODEL=<model name>` and `ANTHROPIC_API_KEY`. No
+  model is assumed. The key is never stored in a workspace, strategy, run or request record, and
+  the API reports only whether it is present.
+- With no external provider, the page shows an offline notice.
+
+**The gate** runs these stages, each reporting exact reasons, and never repairs anything:
+
+schema → dsl_validation → supported_features → causality → parameter_domain → request_constraints →
+compile → identity.
+
+- Content must agree with its own definition (name, family, timeframe, session, parameter values).
+- Compile and identity run only when all earlier stages pass.
+- Identical logic already in the library gives a warning (saving adds a lineage record, not a new
+  strategy). Identical logic within one generation is rejected.
+
+**Review**
+
+- Proposals appear in provider order; there is no ranking, score or "best".
+- Each shows its hypothesis, entry, exit, stop, target, timeframe, session, parameters, complexity,
+  per-stage gate status, strategy id / definition hash and rejection reasons.
+- **Accept** is available only on gate-valid proposals. **Save** stores an accepted proposal as an
+  ordinary library strategy:
+  - `generation_method` is `mode_b_proposal`, or `mode_b_modification` with `parent_strategy_id`,
+    AI-stated changes and EdgeLab-computed changes;
+  - `generation_parameters` hold the proposal id, request id, generation id, provider, context
+    hash, hypothesis and scope.
+- **Send to Backtest** opens the Strategy Lab backtest with the preferred dataset preselected.
+
+**Records**
+
+- `data/ai_discovery/generations/AIG_*.json` holds the request, context hash, provider, raw-output
+  hash and every proposal with its gate report. Records are immutable.
+- `data/ai_discovery/decisions/AIP_*.json` holds your decisions, which are append-only.
+- `/api/ai/proposals/{id}/lineage` shows AI request → proposal → strategy version → runs, with each
+  run's dataset, provider, instrument, timeframe, cost status, hashes and status, plus its prop
+  simulations. Random-entry controls are returned, not stored, so they do not appear there.
+- The previous proposal-batch import (Phase 3 Mode B gate) remains as the "Import proposal batch"
+  tab.
 
 ## Research (Phase 4)
 
@@ -187,10 +277,14 @@ Every route is a thin call into `edgelab.services`.
 | GET | `/api/results/{run_id}/curve` | `run_curve` |
 | POST | `/api/validation/oos` `{strategy, dataset_id, split_at, record?}` · `/api/validation/walkforward` `{strategy, dataset_id, train_months, test_months, anchored?, record?}` · `/api/validation/control` `{strategy, dataset_id, n_controls, seed, split_at?}` | `evaluate_oos`, `walk_forward`, `random_entry_control` / `oos_random_control` (synchronous) |
 | GET/POST | `/api/proposals/menu`, `/api/proposals/ingest` `{batch, save}` | `proposal_menu`, `ingest_proposals` |
+| GET/POST | `/api/preferences/research-dataset` (POST `{dataset_id}`; `null` clears) | `preferred_dataset`, `set_preferred_dataset`, `clear_preferred_dataset` |
+| GET | `/api/datasets/{id}/quality` | `dataset_quality` (gap classification + coverage; read-only) |
+| GET | `/api/ai/status`, `/api/ai/generations`, `/api/ai/generations/{AIG_id}`, `/api/ai/proposals/{AIP_id}/lineage` | `ai_status`, `ai_generations`, `ai_generation`, `ai_lineage` |
+| POST | `/api/ai/context` `{request}` · `/api/ai/generate` `{request}` · `/api/ai/proposals/{AIP_id}/decision` `{decision, note?}` · `/api/ai/proposals/{AIP_id}/save` | `ai_context`, `ai_generate`, `ai_decide`, `ai_save` |
 | GET | `/api/prop/configs`, `/api/prop/simulations`, `/api/prop/simulations/{PROP_id}` | `prop_configs`, `list_prop_simulations`, `get_prop_simulation` |
 | POST | `/api/prop/validate` `{config}` · `/api/prop/simulate` `{run_id, accounts: [{account_id?, config, start?}], record?}` | `validate_prop_config`, `prop_simulate` (reads the run; never writes it) |
 
-Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "details"?}}`. The kinds are `validation`, `compile`, `variation`, `cost_unconfigured`, `backtest`, `prop_config`, `prop_data`, `import_failed`, `not_found`, `bad_request`, `forbidden`, `parse`, `invalid_request` and `internal`. The UI shows `message`, `reason` and `issues`; stack traces appear only under **Technical details**.
+Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "details"?}}`. The kinds are `validation`, `compile`, `variation`, `cost_unconfigured`, `instrument_identity`, `ai_request`, `ai_scope`, `ai_provider`, `backtest`, `prop_config`, `prop_data`, `import_failed`, `not_found`, `bad_request`, `forbidden`, `parse`, `invalid_request` and `internal`. The UI shows `message`, `reason` and `issues`; stack traces appear only under **Technical details**.
 
 ## Security
 
@@ -221,6 +315,7 @@ python scripts/run_tests.py               # full suite; records reports/last_tes
 python -m unittest tests.test_web_api     # API contracts (Flask test client)
 python -m unittest tests.test_web_e2e     # real server + headless Chromium (skips without Playwright)
 python -m unittest tests.test_research_api  # Phase 4 research routes (jobs held mid-cell by a gate)
+python -m unittest tests.test_dukascopy tests.test_ai_discovery   # Phase 9: Dukascopy source, preferred dataset, AI discovery
 ```
 
 The browser tests need `pip install playwright` and a Chromium build (`playwright install chromium`, or set `PLAYWRIGHT_BROWSERS_PATH`).
@@ -234,3 +329,5 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
 - Typing uses a local React shim instead of `@types/react` (offline build).
 - The DSL supports one trading window per strategy; several windows need a local session or session-feature conditions.
 - The builder offers the timeframes in `configs/web.yaml` plus those of imported datasets; the backend accepts any `Nm`/`Nh`.
+- AI Discovery requests are synchronous and run under the service lock: an external provider call (up to 120 s)
+  delays other requests until it returns. Only one external provider kind (Anthropic Messages API) is implemented.

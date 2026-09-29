@@ -113,7 +113,11 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [runErr, setRunErr] = useState<ApiError | null>(null);
   useEffect(() => {
-    api.post<Readiness>("/api/backtests/readiness", { strategy }).then((r) => { setReady(r); setErr(null); }).catch(setErr);
+    api.post<Readiness>("/api/backtests/readiness", { strategy }).then((r) => {
+      setReady(r); setErr(null);
+      const pref = r.datasets.find((d) => d.dataset_id === r.preferred_dataset_id);
+      if (pref?.runnable) setPick((cur) => cur || pref.dataset_id);        // new research starts on the preferred dataset
+    }).catch(setErr);
   }, [typeof strategy === "string" ? strategy : JSON.stringify(strategy)]); // eslint-disable-line react-hooks/exhaustive-deps
   if (err) return <ErrorPanel error={err} />;
   if (!ready) return <Loading label="Checking datasets…" />;
@@ -143,7 +147,8 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
               <tr key={d.dataset_id} className={d.runnable ? "" : "disabled-row"} data-testid={`ds-${d.dataset_id}`}>
                 <td><input type="radio" name="bt-dataset" aria-label={`select ${d.dataset_id}`} disabled={!d.runnable}
                   checked={pick === d.dataset_id} onChange={() => setPick(d.dataset_id)} /></td>
-                <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}</td>
+                <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}
+                  {d.preferred && <> <Badge tone="info">preferred</Badge></>}</td>
                 <td>{d.instrument}</td><td>{d.asset_type}</td><td>{d.provider}</td><td>{d.timeframe}</td>
                 <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td><td>{fmt(d.n_bars)}</td>
                 <td>{d.price_basis}</td><td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>

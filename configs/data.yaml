@@ -48,6 +48,20 @@ calendars:
     trading_weekdays: [mon, tue, wed, thu, fri]
     holidays: []
     early_closes: {}
+  # ---- Dukascopy Nasdaq-100 1m source (Phase 9): PROVISIONAL, not yet measured -------------
+  # The source is UTC (explicit offsets); the SESSION calendar is a separate choice. Until the
+  # user's file has been inspected (`edgelab.cli inspect ... --profile dukascopy_utc_csv` prints
+  # a session_profile), this assumes the CME equity-index Globex window (Sun 18:00 - Fri 17:00
+  # New York, daily pause 17:00-18:00). Wrong hours are NOT hidden: bars outside it fail
+  # `bars_outside_session` and missing hours raise the missing-bar ratio. No holidays listed
+  # (they surface as missing days). See DATA_IMPORT.md "Dukascopy Nasdaq-100 (primary source)".
+  DUKASCOPY_NQ_PROVISIONAL:
+    timezone: America/New_York
+    session_open: "18:00"
+    session_close: "17:00"
+    trading_weekdays: [mon, tue, wed, thu, fri]
+    holidays: []
+    early_closes: {}
   FX_24_5:
     timezone: America/New_York
     session_open: "17:00"

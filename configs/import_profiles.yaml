@@ -21,3 +21,9 @@ import_profiles:
     datetime_format: "%d.%m.%Y %H:%M:%S.%f"
     source_timezone: UTC
     volume_type: tick             # verify: provider-defined volume measure, not exchange volume
+  dukascopy_utc_csv:         # "timestamp,open,high,low,close,volume", ISO-8601 with an explicit UTC offset per row
+    delimiter: ","
+    columns: {ts: timestamp, open: open, high: high, low: low, close: close, volume: volume}
+    source_timezone: UTC          # the offsets in the file are authoritative (converted exactly; no +Nh allowed)
+    volume_type: unknown          # decimal provider-defined measure; NOT exchange-traded volume
+    symbol: UNSTATED              # the file carries no symbol; pass --symbol only if you know the source symbol

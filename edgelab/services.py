@@ -100,6 +100,8 @@ class Services:
         return _jsonable({"manifest": m.to_dict(), "manifest_hash": m.manifest_hash(),
                           "validation_report": self.store.get_report(dataset_id),
                           "derived_datasets": children,
+                          "identity": self._instrument_identity(m.instrument),
+                          "preferred": self.preferred_dataset_id() == dataset_id,
                           "limitations": self._limitations(m)})
 
     @staticmethod
@@ -109,6 +111,8 @@ class Services:
             out.append("no volume: VWAP / relative-volume features unavailable")
         if m.volume_type == "tick":
             out.append("tick volume (activity proxy), not exchange-traded volume")
+        if m.volume_type == "unknown":
+            out.append("volume semantics unknown (provider-defined measure) - not exchange-traded volume")
         if not m.has_spread and m.asset_type == "CFD":
             out.append("no spread data: CFD costs must use a configured fixed spread")
         if m.price_basis == "unknown":
@@ -116,6 +120,76 @@ class Services:
         if m.asset_type == "SYNTHETIC" or m.provider.lower().startswith("synthetic"):
             out.append("SYNTHETIC data: engine testing only, no market conclusions")
         return out
+
+    def dataset_quality(self, dataset_id: str) -> dict:
+        """Descriptive gap classification + coverage of a stored dataset (read-only; nothing excluded)."""
+        from edgelab.data.quality import gap_analysis
+        return _jsonable({"dataset_id": dataset_id, **gap_analysis(self.load_dataset(dataset_id))})
+
+    # ------------------------------------------------------------ preferred research dataset
+    def preferred_dataset_id(self) -> str | None:
+        """The workspace's Preferred Research Dataset, or None (unset, or no longer stored)."""
+        from edgelab.data.preferences import load_prefs
+        cur = (load_prefs(self.data_root).get("preferred_research_dataset") or {}).get("dataset_id")
+        if cur and any(d["dataset_id"] == cur for d in self.store.list_datasets()):
+            return cur
+        return None
+
+    def preferred_dataset(self) -> dict:
+        """The preference with its current dataset row (eligibility, identity, cost status)."""
+        from edgelab.data.preferences import load_prefs, prefs_path
+        prefs = load_prefs(self.data_root)
+        rec = prefs.get("preferred_research_dataset")
+        row = None
+        state = "unset"
+        if rec:
+            rows = [d for d in self.list_datasets() if d["dataset_id"] == rec["dataset_id"]]
+            state = "set" if rows else "missing"
+            if rows:
+                row = self._dataset_eligibility(rows[0])
+        return _jsonable({"preferred": rec, "state": state, "dataset": row, "stored_at": str(prefs_path(self.data_root)),
+                          "history": prefs.get("preferred_history", []),
+                          "note": "default for NEW research only; existing runs are never changed"})
+
+    def set_preferred_dataset(self, dataset_id: str) -> dict:
+        """Set the workspace default. Only a stored dataset that passes validation (PASS/WARN) and
+        re-validates on load (content hash re-checked) is eligible. Changes no stored research."""
+        from datetime import datetime, timezone
+        from edgelab.data.preferences import HISTORY_LIMIT, load_prefs, save_prefs
+        if not isinstance(dataset_id, str) or not dataset_id:
+            raise ValueError("dataset_id is required")
+        rows = [d for d in self.list_datasets() if d["dataset_id"] == dataset_id]
+        if not rows:
+            raise KeyError(f"dataset {dataset_id} is not stored in this workspace")
+        if rows[0].get("quality_status") == "FAIL":
+            raise ValueError(f"dataset {dataset_id} failed validation and cannot be the preferred research dataset")
+        ds = self.load_dataset(dataset_id)                  # re-validates + re-checks the content hash
+        m = ds.manifest
+        rec = {"dataset_id": dataset_id, "set_at": datetime.now(timezone.utc).isoformat(),
+               "content_hash": m.content_hash, "manifest_hash": m.manifest_hash(), "provider": m.provider,
+               "instrument": m.instrument, "timeframe": m.timeframe, "quality_status": m.quality_status,
+               "synthetic": self._is_synthetic(m)}
+        prefs = load_prefs(self.data_root)
+        prev = prefs.get("preferred_research_dataset")
+        hist = list(prefs.get("preferred_history", []))
+        hist.append({"dataset_id": dataset_id, "set_at": rec["set_at"],
+                     "previous": prev.get("dataset_id") if prev else None})
+        prefs.update(preferred_research_dataset=rec, preferred_history=hist[-HISTORY_LIMIT:])
+        save_prefs(self.data_root, prefs)
+        return self.preferred_dataset()
+
+    def clear_preferred_dataset(self) -> dict:
+        from datetime import datetime, timezone
+        from edgelab.data.preferences import HISTORY_LIMIT, load_prefs, save_prefs
+        prefs = load_prefs(self.data_root)
+        prev = prefs.pop("preferred_research_dataset", None)
+        if prev:
+            hist = list(prefs.get("preferred_history", []))
+            hist.append({"dataset_id": None, "set_at": datetime.now(timezone.utc).isoformat(),
+                         "previous": prev.get("dataset_id")})
+            prefs["preferred_history"] = hist[-HISTORY_LIMIT:]
+            save_prefs(self.data_root, prefs)
+        return self.preferred_dataset()
 
     def inspect_file(self, options: Mapping) -> dict:
         return _jsonable(inspect_file(ImportOptions(**options), self.cfg))
@@ -308,6 +382,67 @@ class Services:
         from edgelab.strategy.proposals import ProposalRequest
         return _jsonable(ProposalRequest(n_families, instructions).capability_menu(self.sessions))
 
+    # ------------------------------------------------------------ AI Discovery (Phase 9)
+    def _user_settings(self) -> dict:
+        from edgelab import runtime
+        try:
+            return runtime.load_settings()
+        except Exception:                                    # noqa: BLE001 - settings are optional here
+            return {}
+
+    def ai_status(self) -> dict:
+        from edgelab.ai.providers import provider_status
+        from edgelab.ai.schema import MAX_PROPOSALS, MODES, PROPOSAL_SCHEMA_VERSION, REQUEST_VERSION, TEMPLATES
+        from edgelab.features.spec import all_defs
+        from edgelab.strategy import dsl
+        return _jsonable({**provider_status(user_settings=self._user_settings()),
+                          "request_version": REQUEST_VERSION, "proposal_schema_version": PROPOSAL_SCHEMA_VERSION,
+                          "modes": list(MODES), "templates": TEMPLATES, "max_proposals": MAX_PROPOSALS,
+                          "features": [d.feature_id for d in all_defs() if not d.feature_id.startswith("_")],
+                          "sessions": sorted(self.sessions), "directions": list(dsl.DIRECTIONS),
+                          "entry_orders": list(dsl.ENTRY_ORDER_TYPES), "stop_types": list(dsl.STOP_TYPES),
+                          "target_types": list(dsl.TARGET_TYPES), "sizing_modes": list(dsl.SIZING_MODES),
+                          "exit_kinds": ["stop", "target", "time_stop_bars", "max_hold_bars", "signal"],
+                          "preferred_dataset_id": self.preferred_dataset_id()})
+
+    def ai_context(self, request: Any) -> dict:
+        """The exact (blind) context a provider would receive for this request."""
+        from edgelab.ai.context import build_context, resolve_scope
+        from edgelab.ai.schema import normalize_request
+        from edgelab.features.spec import all_defs
+        req = normalize_request(request, [d.feature_id for d in all_defs() if not d.feature_id.startswith("_")],
+                                sorted(self.sessions))
+        base = self.library.load(req["base_strategy_id"])["definition"] if req["mode"] == "modify" else None
+        return _jsonable(build_context(self, req, resolve_scope(self, req["scope"]), base))
+
+    def ai_generate(self, request: Any) -> dict:
+        from edgelab.ai import discovery
+        from edgelab.ai.providers import get_provider
+        prov = get_provider((request or {}).get("provider") if isinstance(request, Mapping) else None,
+                            user_settings=self._user_settings())
+        return _jsonable(discovery.generate(self, request, prov))
+
+    def ai_generations(self) -> list[dict]:
+        from edgelab.ai.discovery import DiscoveryStore
+        return _jsonable(DiscoveryStore(self.data_root / "ai_discovery").generations())
+
+    def ai_generation(self, generation_id: str) -> dict:
+        from edgelab.ai.discovery import DiscoveryStore, with_decisions
+        st = DiscoveryStore(self.data_root / "ai_discovery")
+        return _jsonable(with_decisions(st, st.generation(generation_id)))
+
+    def ai_decide(self, proposal_id: str, decision: str, note: str = "") -> dict:
+        from edgelab.ai import discovery
+        return _jsonable(discovery.decide(self, proposal_id, decision, note))
+
+    def ai_save(self, proposal_id: str) -> dict:
+        from edgelab.ai import discovery
+        return _jsonable(discovery.save(self, proposal_id))
+
+    def ai_lineage(self, proposal_id: str) -> dict:
+        from edgelab.ai import discovery
+        return _jsonable(discovery.lineage(self, proposal_id))
+
     def ingest_proposals(self, batch: Any, save: bool = True) -> dict:
         from edgelab.strategy.proposals import ingest_proposals
         rep = ingest_proposals(self._definition(batch) if not isinstance(batch, Mapping) else batch,
@@ -333,6 +468,7 @@ class Services:
         from edgelab.engine.backtester import run_backtest
         from edgelab.engine.costs import cost_model_from_config
         from edgelab.features.strategy_api import FeatureContext
+        from edgelab.instruments import check_identity
         from edgelab.strategy.compiler import compile_strategy
         guard = lock if lock is not None else nullcontext()
         with guard:
@@ -341,6 +477,7 @@ class Services:
             from edgelab.research.compare import restrict_to_period
             ds = restrict_to_period(ds, period[0], period[1], self.cfg.get("validation"))
         strat = compile_strategy(self._definition(src), self.sessions, self._config_hash())
+        check_identity(ds.instrument)           # provisional source identity: economics not interpretable
         costs = cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
         res = run_backtest(ds, bound, costs, self.cfg["backtest"], sizing=strat.sizing)
@@ -596,7 +733,8 @@ class Services:
             except ValueError:
                 tf = None
         out = [self._dataset_eligibility(d, tf) for d in self.list_datasets()]
-        return _jsonable({"strategy_timeframe": None if tf is None else f"{tf}m", "datasets": out})
+        return _jsonable({"strategy_timeframe": None if tf is None else f"{tf}m", "datasets": out,
+                          "preferred_dataset_id": self.preferred_dataset_id()})
 
     def _dataset_eligibility(self, d: Mapping, tf_minutes: int | None = None) -> dict:
         """Whether one dataset (a `list_datasets` row) can run a strategy on `tf_minutes` bars
@@ -615,12 +753,26 @@ class Services:
         except KeyError as exc:
             cost = {"status": "unconfigured", "reason": f"no cost profile for {exc}"}
             reasons.append("no cost profile for this instrument")
+        identity = self._instrument_identity(m.instrument)
+        if identity.get("problem"):
+            reasons.append("instrument source identity is provisional - state the source symbol, asset class "
+                           "and contract economics first (DATA_IMPORT.md)")
         if d.get("quality_status") == "FAIL":
             reasons.append("dataset failed validation")
         if tf_minutes is not None and timeframe_minutes(d["timeframe"]) != tf_minutes:
             reasons.append(f"timeframe {d['timeframe']} does not match the strategy timeframe {tf_minutes}m")
-        return {**d, "cost": cost, "synthetic": self._is_synthetic(m),
+        from edgelab.data.preferences import load_prefs
+        pref = (load_prefs(self.data_root).get("preferred_research_dataset") or {}).get("dataset_id")
+        return {**d, "cost": cost, "synthetic": self._is_synthetic(m), "identity": identity,
+                "preferred": d["dataset_id"] == pref,
                 "limitations": self._limitations(m), "runnable": not reasons, "reasons": reasons}
+
+    def _instrument_identity(self, symbol: str) -> dict:
+        from edgelab.instruments import identity_info, identity_problem, load_instruments
+        inst = load_instruments(self.cfg).get(symbol)
+        if inst is None:
+            return {"identity_status": "unknown", "problem": f"instrument {symbol} is not in configs/instruments.yaml"}
+        return {**identity_info(inst), "problem": identity_problem(inst)}
 
     def list_runs(self) -> list[dict]:
         rows = []

@@ -8,7 +8,8 @@ import { Badge, Mono } from "../components/ui";
 import { BuilderPage } from "../pages/Builder";
 import { DashboardPage, LibraryPage, StrategyPage } from "../pages/Strategies";
 import { FamiliesPage, ResultsPage, VariationsPage } from "../pages/Research";
-import { DatasetsPage, DiscoveryPage, SettingsPage } from "../pages/Data";
+import { DatasetsPage, SettingsPage } from "../pages/Data";
+import { DiscoveryPage } from "../pages/Discovery";
 import { ResearchPage } from "../pages/ResearchEngine";
 import { PropPage } from "../pages/Prop";
 import { ComparePage } from "../pages/Compare";
@@ -27,7 +28,7 @@ const NAV: { path: string; label: string; match: string; planned?: boolean }[] =
   { path: "/results", label: "Results", match: "results" },
   { path: "/compare", label: "Compare", match: "compare" },
   { path: "/prop", label: "Prop Simulation", match: "prop" },
-  { path: "/discovery", label: "AI Proposals", match: "discovery" },
+  { path: "/discovery", label: "AI Discovery", match: "discovery" },
   { path: "/settings", label: "Settings", match: "settings" },
 ];
 

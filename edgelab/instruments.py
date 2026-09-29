@@ -90,3 +90,59 @@ def instrument_from_config(symbol: str, meta: Mapping[str, Any]) -> Instrument:
 
 def load_instruments(cfg: Mapping[str, Any]) -> dict[str, Instrument]:
     return {sym: instrument_from_config(sym, meta) for sym, meta in cfg["instruments"].items()}
+
+
+# ---- source identity (Phase 9) -------------------------------------------------------------
+# An instrument entry may describe a price SOURCE whose identity is not yet established
+# (``identity_status: provisional``). Such an instrument can be imported, validated and inspected,
+# but nothing that interprets point value, tick value, sizing or costs may run on it until the
+# user states the missing metadata (``user_specified``) or verifies it (``source_verified``).
+# Entries without ``identity_status`` are ordinary configured instruments (unchanged behaviour).
+IDENTITY_STATUSES = ("provisional", "user_specified", "source_verified")
+
+
+class InstrumentIdentityError(InstrumentError):
+    pass
+
+
+def identity_info(inst: Instrument) -> dict:
+    """The identity fields the UI shows for an instrument (nothing invented: absent = None)."""
+    ex = dict(inst.extra or {})
+    status = ex.get("identity_status")
+    required = list(ex.get("required_metadata") or [])
+    missing = []                          # fields still visibly unset (numbers are research units until confirmed)
+    for k in required:
+        if k == "asset_class":
+            if inst.asset_class in ("", "unverified", "unknown"):
+                missing.append(k)
+        elif k in ("source_symbol", "identity_evidence", "price_basis") and not ex.get(k):
+            missing.append(k)
+    return {"identity_status": status or "configured", "research_proxy": bool(ex.get("research_proxy")),
+            "source_provider": ex.get("source_provider"), "source_symbol": ex.get("source_symbol"),
+            "asset_class": inst.asset_class, "exchange": inst.exchange, "price_source": ex.get("price_source"),
+            "identity_evidence": ex.get("identity_evidence"), "required_metadata": required,
+            "missing_metadata": missing if status == "provisional" else [],
+            "point_value": inst.point_value, "tick_size": inst.tick_size, "description": inst.description}
+
+
+def identity_problem(inst: Instrument) -> str | None:
+    """None when research may interpret this instrument's economics, else the exact reason."""
+    status = (inst.extra or {}).get("identity_status")
+    if status is None or status in ("user_specified", "source_verified"):
+        if status == "source_verified" and not (inst.extra or {}).get("identity_evidence"):
+            return (f"instrument {inst.symbol}: identity_status source_verified needs identity_evidence "
+                    "(where it was verified) in configs/instruments.yaml")
+        return None
+    if status not in IDENTITY_STATUSES:
+        return f"instrument {inst.symbol}: unknown identity_status {status!r} (one of {IDENTITY_STATUSES})"
+    need = identity_info(inst)["required_metadata"]
+    return (f"instrument {inst.symbol} has a PROVISIONAL source identity: its symbol, asset class and "
+            f"contract economics are not established, so point value / tick value / sizing / costs "
+            f"cannot be interpreted. State {need} in configs/instruments.yaml and set identity_status "
+            "to user_specified (or source_verified with identity_evidence). See DATA_IMPORT.md.")
+
+
+def check_identity(inst: Instrument) -> None:
+    p = identity_problem(inst)
+    if p:
+        raise InstrumentIdentityError(p)

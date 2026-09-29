@@ -76,9 +76,74 @@ export interface DatasetRow {
   timeframe: string; start: string; end: string; n_bars: number; quality_status: string; content_hash: string;
   volume_type: string; has_spread: boolean; price_basis: string; parent_dataset_id: string | null; missing_bars: number;
   cost: { status: string; profile?: string | null; reason?: string }; synthetic: boolean; limitations: string[];
-  runnable: boolean; reasons: string[];
+  runnable: boolean; reasons: string[]; preferred?: boolean; identity?: InstrumentIdentity;
 }
-export interface Readiness { strategy_timeframe: string | null; datasets: DatasetRow[] }
+export interface Readiness { strategy_timeframe: string | null; datasets: DatasetRow[]; preferred_dataset_id?: string | null }
+export interface InstrumentIdentity {
+  identity_status: string; research_proxy?: boolean; source_provider?: string | null; source_symbol?: string | null;
+  asset_class?: string; exchange?: string; price_source?: string | null; identity_evidence?: string | null;
+  required_metadata?: string[]; missing_metadata?: string[]; point_value?: number; tick_size?: number;
+  description?: string; problem?: string | null;
+}
+export interface PreferredDataset {
+  preferred: { dataset_id: string; set_at: string; content_hash: string; manifest_hash: string; provider: string;
+    instrument: string; timeframe: string; quality_status: string; synthetic: boolean } | null;
+  state: "unset" | "set" | "missing"; dataset: DatasetRow | null; stored_at: string;
+  history: { dataset_id: string | null; set_at: string; previous: string | null }[]; note: string;
+}
+export interface GapReport {
+  dataset_id: string; calendar: string; timeframe_minutes: number;
+  summary: { expected_bars: number; present_in_session: number; missing_bars: number; missing_ratio: number; n_gaps: number;
+    by_length: Record<string, number>; by_position: Record<string, number>; by_weekday: Record<string, number> };
+  coverage: { first_bar: string; last_bar: string; expected_trading_days: number; trading_days_with_bars: number;
+    missing_trading_days: string[]; by_year: Record<string, { expected: number; present: number; coverage: number | null }> };
+  largest_gaps: { start: string; end: string; missing_bars: number; trading_date: string; weekday: string;
+    length_class: string; position: string; likely: string }[];
+  gaps_listed: number; note: string;
+}
+
+// ------------------------------------------------------------------ AI Discovery (Phase 9)
+export interface AiStatus {
+  configured_provider: string; model: string | null; external_configured: boolean; api_key_present: boolean;
+  problem: string | null; available: string[]; offline_notice: string | null; request_version: number;
+  proposal_schema_version: number; modes: string[]; templates: Record<string, string>; max_proposals: number;
+  features: string[]; sessions: string[]; directions: string[]; entry_orders: string[]; stop_types: string[];
+  target_types: string[]; sizing_modes: string[]; exit_kinds: string[]; preferred_dataset_id: string | null;
+}
+export interface GateStage { stage: string; status: "passed" | "failed" | "not_run"; reasons: string[] }
+export interface GateReport {
+  status: "valid" | "rejected"; stages: GateStage[]; rejection_reasons: string[]; warnings: string[];
+  identity: { strategy_id: string; logic_hash: string; definition_hash: string } | null;
+  summary: {
+    name: string; family_id: string; timeframe: string; session: string | null; direction: string; entry_order: string;
+    entry: Record<string, unknown>; exit: Record<string, unknown>; stop: Record<string, unknown> | null;
+    target: Record<string, unknown> | null; sizing: Record<string, unknown>; parameters: Record<string, unknown>;
+    features: string[]; complexity: { conditions: number; parameters: number; features: number };
+    canonical_definition: Record<string, unknown>; computed_changes?: string[];
+  } | null;
+}
+export interface AiDecision {
+  proposal_id: string; decision?: "accepted" | "rejected"; note?: string; decided_at?: string;
+  saved_strategy_id?: string; saved_at?: string; history: Record<string, unknown>[];
+}
+export interface AiProposal {
+  proposal_id: string; schema_version: number; request_id: string; generation_id: string; index: number;
+  provider: { kind: string; name: string; model: string | null; provider_version: string; external: boolean };
+  generation: { created_at: string; raw_output_sha256: string; context_hash: string; context_version: number; config_hash: string };
+  parent: { strategy_id: string; logic_hash: string; definition_hash: string } | null;
+  content: Record<string, any>; gate: GateReport; decision: AiDecision | null;
+}
+export interface AiGeneration {
+  generation_id: string; request_id: string; created_at: string; request: Record<string, any>;
+  scope: { dataset_id: string; instrument: string; timeframe: string; session: string | null; direction: string | null;
+    date_scope: { start: string | null; end: string | null } | null; dataset_is_preferred: boolean };
+  context_hash: string; context_version: number; provider: AiProposal["provider"]; raw_output_sha256: string;
+  provider_notes: string[]; dropped_beyond_bound: number; proposals: AiProposal[]; note: string;
+}
+export interface AiGenerationRow {
+  generation_id: string; request_id: string; created_at: string; mode: string; provider: AiProposal["provider"];
+  scope: AiGeneration["scope"]; n_proposals: number; n_valid: number;
+}
 export interface BacktestResult {
   strategy_id: string; dataset_id: string; run_id: string | null; synthetic: boolean; exit_reasons: Record<string, number>;
   n_signals: number; trades_hash: string; dataset: Record<string, unknown>; cost_status: string;

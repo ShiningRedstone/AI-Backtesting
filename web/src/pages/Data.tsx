@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { DatasetRow, ProposalReport, WorkspaceState } from "../api/types";
+import type { DatasetRow, GapReport, InstrumentIdentity, PreferredDataset, WorkspaceState } from "../api/types";
 import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
@@ -17,45 +17,114 @@ interface ConfigView {
 }
 
 // =========================================================================== datasets
+const qTone = (q: string) => (q === "FAIL" ? "error" : q === "WARN" ? "warn" : "ok");
+
+/** "Research Dataset / Provider / Instrument / Timeframe" — the data identity new research will use. */
+export function ResearchDatasetStrip({ row, testId = "research-dataset-strip" }: { row: DatasetRow | null | undefined; testId?: string }) {
+  if (!row) return <Banner tone="warn" testId={testId}>No research dataset selected. Set a Preferred Research Dataset on the
+    {" "}<a href={href("/datasets")}>Datasets</a> page.</Banner>;
+  const id = row.identity;
+  return (
+    <div className="ds-strip" data-testid={testId}>
+      <div><span className="muted small">Research Dataset</span><Mono>{row.dataset_id}</Mono>{row.preferred && <> <Badge tone="info">preferred</Badge></>}</div>
+      <div><span className="muted small">Provider</span>{row.provider}</div>
+      <div><span className="muted small">Instrument</span>{row.instrument}
+        {id?.identity_status === "provisional" && <> <Badge tone="warn" title={id.problem ?? ""}>provisional identity</Badge></>}
+        {id?.research_proxy && <> <Badge tone="neutral">research proxy</Badge></>}</div>
+      <div><span className="muted small">Timeframe</span>{row.timeframe}</div>
+      <div><span className="muted small">Costs</span><Badge tone={row.cost.status === "unconfigured" ? "error" : "neutral"}>{row.cost.status}</Badge></div>
+    </div>
+  );
+}
+
+function PreferredCard({ rows, onChange }: { rows: DatasetRow[]; onChange: () => void }) {
+  const { data, error, reload } = useApi<PreferredDataset>("/api/preferences/research-dataset");
+  const [err, setErr] = useState<ApiError | null>(null);
+  const clear = async () => {
+    try { await api.post("/api/preferences/research-dataset", { dataset_id: null }); reload(); onChange(); }
+    catch (e) { setErr(e as ApiError); }
+  };
+  if (error) return <ErrorPanel error={error} />;
+  const row = rows.find((d) => d.dataset_id === data?.preferred?.dataset_id);
+  return (
+    <Card title="Preferred Research Dataset" testId="preferred-card"
+      actions={data?.preferred ? <Button small onClick={clear} testId="preferred-clear">Clear</Button> : undefined}>
+      {data?.state === "missing" && <Banner tone="warn">The preferred dataset {data.preferred?.dataset_id} is no longer stored.</Banner>}
+      {row ? <ResearchDatasetStrip row={{ ...row, preferred: true }} testId="preferred-strip" />
+        : <p className="muted small" data-testid="preferred-none">None set. Choose one below ("Set preferred"): only datasets that passed validation are eligible.</p>}
+      {row && !row.runnable && <Banner tone="warn" testId="preferred-not-runnable">Research on this dataset is refused until: {row.reasons.join("; ")}.</Banner>}
+      <p className="muted small wrap-any">The Strategy Lab and AI Discovery preselect it for NEW research. Changing it never alters stored runs, strategies or
+        datasets. Stored in this workspace ({data?.stored_at ?? "workspace_preferences.json"}).</p>
+      <ErrorPanel error={err} />
+    </Card>
+  );
+}
+
 export function DatasetsPage() {
   const route = useRoute();
+  const { toast } = useApp();
   const { data, error, loading, reload } = useApi<DatasetRow[]>("/api/datasets");
   const [open, setOpen] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(route.query.get("import") === "1");
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [tick, setTick] = useState(0);
   if (error) return <ErrorPanel error={error} />;
+  const prefer = async (id: string) => {
+    setErr(null);
+    try { await api.post("/api/preferences/research-dataset", { dataset_id: id }); toast("ok", `Preferred research dataset: ${id}`); reload(); setTick((t) => t + 1); }
+    catch (e) { setErr(e as ApiError); }
+  };
   return (
     <div className="page">
       <header className="page-head"><h1>Datasets</h1>
         <div className="actions"><Button kind="primary" onClick={() => setShowImport(!showImport)} testId="toggle-import">
           {showImport ? "Close import" : "Import Dataset"}</Button></div></header>
       {showImport && <ImportPanel onDone={() => { reload(); }} />}
+      {data && data.length > 0 && <PreferredCard key={tick} rows={data} onChange={() => { reload(); }} />}
+      <ErrorPanel error={err} title="Not set as preferred" testId="preferred-error" />
       {loading && !data ? <Loading label="Loading datasets…" /> : !data?.length ? (
         <Empty><span data-testid="datasets-empty">No datasets in this workspace.</span> Open the research workspace that holds your datasets
           (<ChooseWorkspaceLink />), or import one into this workspace (existing Phase 2 pipeline). EdgeLab never fabricates market data.</Empty>
       ) : (
         <TableWrap testId="datasets-table"><table>
-          <thead><tr><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Start</th><th>End</th><th>Bars</th>
-            <th>Validation</th><th>Price basis</th><th>Spread</th><th>Costs</th><th>Eligible</th><th /></tr></thead>
+          <thead><tr><th>Dataset</th><th>Provider</th><th>Instrument</th><th>Identity</th><th>TF</th><th>Range</th><th>Bars</th>
+            <th>Validation</th><th>Source hash</th><th>Price / volume</th><th>Costs</th><th>Eligible</th><th /></tr></thead>
           <tbody>{data.map((d) => (
-            <tr key={d.dataset_id}>
-              <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}</td>
-              <td>{d.instrument}</td><td>{d.asset_type}</td><td>{d.provider}</td><td>{d.timeframe}</td>
-              <td className="small">{d.start?.slice(0, 16)}</td><td className="small">{d.end?.slice(0, 16)}</td><td>{fmt(d.n_bars)}</td>
-              <td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>
-              <td>{d.price_basis}</td><td>{d.has_spread ? "per bar" : "none"}</td>
+            <tr key={d.dataset_id} data-testid={`dsrow-${d.dataset_id}`}>
+              <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}
+                {d.preferred && <> <Badge tone="info">preferred</Badge></>}
+                {d.parent_dataset_id && <div className="small muted">derived from <Mono>{d.parent_dataset_id}</Mono></div>}</td>
+              <td>{d.provider}</td><td>{d.instrument}<div className="small muted">{d.asset_type}</div></td>
+              <td data-testid={`identity-${d.dataset_id}`}>
+                {d.identity?.identity_status === "provisional" ? <Badge tone="warn" title={d.identity.problem ?? ""}>provisional</Badge>
+                  : <Badge tone="neutral">{d.identity?.identity_status ?? "?"}</Badge>}
+                {d.identity?.research_proxy && <div className="small muted">research proxy</div>}</td>
+              <td>{d.timeframe}</td>
+              <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td><td>{fmt(d.n_bars)}</td>
+              <td><Badge tone={qTone(d.quality_status)}>{d.quality_status}</Badge>
+                {d.missing_bars ? <div className="small muted">{fmt(d.missing_bars)} missing</div> : null}</td>
+              <td className="small"><Mono>{d.content_hash?.slice(0, 12)}</Mono></td>
+              <td className="small">{d.price_basis} · vol {d.volume_type}{d.has_spread ? " · spread" : ""}</td>
               <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"} title={d.cost.reason}>{d.cost.status}</Badge></td>
               <td data-testid={`eligible-${d.dataset_id}`}>{d.runnable ? <Badge tone="ok">eligible</Badge>
                 : <Badge tone="error" title={d.reasons.join("; ")}>not eligible</Badge>}
-                {!d.runnable && <div className="small muted">{d.reasons.join("; ")}</div>}</td>
-              <td className="row-actions"><button className="linklike" onClick={() => setOpen(open === d.dataset_id ? null : d.dataset_id)}
-                data-testid={`inspect-${d.dataset_id}`}>{open === d.dataset_id ? "Close" : "Inspect"}</button></td>
+                {!d.runnable && <div className="small muted">{d.reasons.join("; ")}</div>}
+                {d.limitations?.length ? <details><summary className="small">caveats ({d.limitations.length})</summary>
+                  {d.limitations.map((l) => <div key={l} className="small">{l}</div>)}</details> : null}</td>
+              <td className="row-actions">
+                <button className="linklike" onClick={() => setOpen(open === d.dataset_id ? null : d.dataset_id)}
+                  data-testid={`inspect-${d.dataset_id}`}>{open === d.dataset_id ? "Close" : "Inspect"}</button>
+                {!d.preferred && <button className="linklike" disabled={d.quality_status === "FAIL"} onClick={() => prefer(d.dataset_id)}
+                  data-testid={`prefer-${d.dataset_id}`} title="Default for new research in the Strategy Lab and AI Discovery">Set preferred</button>}
+              </td>
             </tr>))}
           </tbody>
         </table></TableWrap>)}
       {open && <DatasetDetail id={open} />}
-      <p className="muted small">Eligible = the stored dataset passed validation and has a configured cost profile (the strategy
-        timeframe is checked when a backtest or search is set up). Source files refused at import (e.g. failed coverage) never
-        become stored datasets; their reasons are in the import report. Inspect a dataset for its caveats.</p>
+      <p className="muted small">Eligible = the stored dataset passed validation, its instrument identity is established and it has a configured
+        cost profile (the strategy timeframe is checked when a backtest or search is set up). A PROVISIONAL instrument identity (e.g. the Dukascopy
+        source until you state its symbol and economics) imports and validates, but research on it is refused. Source files refused at import never
+        become stored datasets; their reasons are in the import report.</p>
       <p className="muted small">Delete/archive: not supported — stored datasets are immutable and content-addressed; research runs reference them.</p>
     </div>
   );
@@ -63,21 +132,50 @@ export function DatasetsPage() {
 
 function DatasetDetail({ id }: { id: string }) {
   const { data, error } = useApi<{ manifest: Record<string, unknown>; manifest_hash: string; validation_report: Record<string, any> | null;
-    derived_datasets: string[]; limitations: string[] }>(`/api/datasets/${id}`, [id]);
+    derived_datasets: string[]; limitations: string[]; identity: InstrumentIdentity; preferred: boolean }>(`/api/datasets/${id}`, [id]);
+  const [gaps, setGaps] = useState<GapReport | null>(null);
+  const [gErr, setGErr] = useState<ApiError | null>(null);
+  const [busy, setBusy] = useState(false);
   if (error) return <ErrorPanel error={error} />;
   if (!data) return <Loading label="Loading metadata…" />;
-  const checks = (data.validation_report?.checks ?? []) as { name: string; status: string; count?: number; detail?: string }[];
+  const checks = (data.validation_report?.checks ?? []) as { name: string; status: string; count?: number; message?: string; detail?: string }[];
+  const idn = data.identity;
+  const loadGaps = async () => {
+    setBusy(true); setGErr(null);
+    try { setGaps(await api.get<GapReport>(`/api/datasets/${id}/quality`)); } catch (e) { setGErr(e as ApiError); } finally { setBusy(false); }
+  };
   return (
     <Card title={<>Metadata — <Mono>{id}</Mono></>} testId="dataset-detail">
       {data.limitations.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{l}</Banner>)}
+      {idn?.identity_status === "provisional" && <Banner tone="warn" testId="identity-provisional"><b>Provisional source identity.</b> {idn.problem}
+        {idn.missing_metadata?.length ? <> Missing: {idn.missing_metadata.join(", ")}.</> : null}</Banner>}
+      <KeyValues rows={[["Instrument identity", <>{idn?.identity_status}{idn?.research_proxy ? " · research proxy" : ""}</>],
+        ["Source provider / symbol", `${idn?.source_provider ?? "—"} / ${idn?.source_symbol ?? "not stated"}`],
+        ["Asset class", idn?.asset_class ?? "—"], ["Price source", idn?.price_source ?? "—"],
+        ["Point value / tick", `${idn?.point_value ?? "?"} / ${idn?.tick_size ?? "?"} (research units unless verified)`]]} />
       <KeyValues rows={Object.entries(data.manifest).filter(([, v]) => typeof v !== "object" || v === null)
         .map(([k, v]) => [k, <span className="mono small">{fmt(v)}</span>])} />
       <KeyValues rows={[["Manifest hash", <Mono>{data.manifest_hash}</Mono>], ["Derived datasets", data.derived_datasets.join(", ") || "none"]]} />
       {checks.length > 0 && <TableWrap><table>
         <thead><tr><th>Validation check</th><th>Status</th><th>Count</th><th>Detail</th></tr></thead>
-        <tbody>{checks.map((c) => <tr key={c.name}><td>{c.name}</td><td><Badge tone={c.status === "FAIL" ? "error" : c.status === "WARN" ? "warn" : "ok"}>{c.status}</Badge></td>
-          <td>{fmt(c.count)}</td><td className="small">{c.detail}</td></tr>)}</tbody>
+        <tbody>{checks.map((c) => <tr key={c.name}><td>{c.name}</td><td><Badge tone={qTone(c.status)}>{c.status}</Badge></td>
+          <td>{fmt(c.count)}</td><td className="small">{c.detail ?? c.message}</td></tr>)}</tbody>
       </table></TableWrap>}
+      <div className="actions"><Button onClick={loadGaps} busy={busy} busyLabel="Classifying gaps…" testId="load-gaps">Gap classification &amp; coverage</Button></div>
+      <ErrorPanel error={gErr} />
+      {gaps && <div data-testid="gap-report">
+        <KeyValues rows={[["Calendar", gaps.calendar], ["Expected / present bars", `${fmt(gaps.summary.expected_bars)} / ${fmt(gaps.summary.present_in_session)}`],
+          ["Missing", `${fmt(gaps.summary.missing_bars)} (${(gaps.summary.missing_ratio * 100).toFixed(3)}%) in ${gaps.summary.n_gaps} gaps`],
+          ["By length", JSON.stringify(gaps.summary.by_length)], ["By position", JSON.stringify(gaps.summary.by_position)],
+          ["Trading days", `${gaps.coverage.trading_days_with_bars} of ${gaps.coverage.expected_trading_days} have bars`],
+          ["Missing trading days", gaps.coverage.missing_trading_days.slice(0, 20).join(", ") || "none"]]} />
+        {gaps.largest_gaps.length > 0 && <TableWrap><table>
+          <thead><tr><th>Start (UTC)</th><th>Bars</th><th>Trading date</th><th>Class</th><th>Position</th><th>Likely</th></tr></thead>
+          <tbody>{gaps.largest_gaps.slice(0, 25).map((g) => <tr key={g.start}><td className="small">{g.start}</td><td>{g.missing_bars}</td>
+            <td>{g.trading_date} {g.weekday}</td><td>{g.length_class}</td><td>{g.position}</td><td className="small">{g.likely}</td></tr>)}</tbody>
+        </table></TableWrap>}
+        <p className="muted small">{gaps.note}</p>
+      </div>}
     </Card>
   );
 }
@@ -97,7 +195,9 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
   const run = async (what: "inspect" | "import") => {
     setBusy(what); setErr(null);
     try {
-      const options = Object.fromEntries(Object.entries(o).filter(([, v]) => v !== ""));
+      const { derive, ...rest } = o;
+      const options: Record<string, unknown> = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== ""));
+      if (derive?.trim()) options.derive_timeframes = derive.split(",").map((x) => x.trim()).filter(Boolean);
       const r = await api.post<Record<string, unknown>>(what === "inspect" ? "/api/import/inspect" : "/api/import", { path, options });
       if (what === "inspect") setInspect(r); else { setRes(r); toast("ok", `Imported ${String(r.dataset_id)}`); onDone(); }
     } catch (e) { setErr(e as ApiError); } finally { setBusy(""); }
@@ -115,11 +215,16 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
         <Field label="Instrument"><Select value={o.instrument} onChange={set("instrument")} placeholder="choose…"
           options={Object.keys(cfg?.instruments ?? {})} testId="import-instrument" /></Field>
         <Field label="Provider"><TextInput value={o.provider} onChange={set("provider")} placeholder="e.g. DUKASCOPY" testId="import-provider" /></Field>
-        <Field label="Asset type"><Select value={o.asset_type} onChange={set("asset_type")} options={["FUTURE", "CFD", "INDEX", "SYNTHETIC"]} /></Field>
+        <Field label="Asset type" hint="unspecified when the source does not state it"><Select value={o.asset_type} onChange={set("asset_type")}
+          options={["FUTURE", "CFD", "INDEX", "unspecified", "SYNTHETIC"]} /></Field>
         <Field label="Timeframe of the file"><TextInput value={o.timeframe} onChange={set("timeframe")} /></Field>
         <Field label="Source timezone" hint="IANA zone, or IANA+Nh for broker server time"><TextInput value={o.source_timezone} onChange={set("source_timezone")} /></Field>
         <Field label="Layout profile"><Select value={o.profile} onChange={set("profile")} options={cfg?.import_profiles ?? ["generic_csv"]} /></Field>
         <Field label="Price basis"><Select value={o.price_basis} onChange={set("price_basis")} options={["unknown", "bid", "ask", "mid", "last"]} /></Field>
+        <Field label="Dataset name" hint="optional, e.g. NQ_DUKASCOPY_2021_2026"><TextInput value={o.dataset_name ?? ""} onChange={set("dataset_name")} testId="import-name" /></Field>
+        <Field label="Source symbol" hint="only if you know it; never guessed"><TextInput value={o.symbol ?? ""} onChange={set("symbol")} /></Field>
+        <Field label="Calendar" hint="default: the instrument's calendar"><TextInput value={o.calendar ?? ""} onChange={set("calendar")} /></Field>
+        <Field label="Derive timeframes" hint="comma-separated, e.g. 5m"><TextInput value={o.derive ?? ""} onChange={set("derive")} testId="import-derive" /></Field>
       </div>
       <div className="inline">
         <Button onClick={() => run("inspect")} busy={busy === "inspect"} busyLabel="Inspecting…" disabled={!path}>Inspect file</Button>
@@ -130,58 +235,6 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
       {inspect && <details open><summary>Inspection (nothing stored)</summary><pre className="code">{JSON.stringify(inspect, null, 2)}</pre></details>}
       {res && <Banner tone="ok"><b>Imported</b> <Mono>{String(res.dataset_id)}</Mono> — validation {String(res.quality_status ?? "")}</Banner>}
     </Card>
-  );
-}
-
-// =========================================================================== placeholders
-export function DiscoveryPage() {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState<"" | "check" | "save">("");
-  const [err, setErr] = useState<ApiError | null>(null);
-  const [rep, setRep] = useState<ProposalReport | null>(null);
-  const [menu, setMenu] = useState<unknown>(null);
-  const ingest = async (save: boolean) => {
-    setBusy(save ? "save" : "check"); setErr(null);
-    try { setRep(await api.post<ProposalReport>("/api/proposals/ingest", { batch: text, save })); }
-    catch (e) { setErr(e as ApiError); setRep(null); } finally { setBusy(""); }
-  };
-  return (
-    <div className="page" data-testid="discovery-page">
-      <header className="page-head"><h1>AI Strategy Proposals</h1><Badge tone="info">gate ready · no model connected</Badge></header>
-      <Banner tone="info">No AI model is connected, and none is called anywhere in EdgeLab. This page is the entry gate a future
-        proposer will use: a proposal is <b>data</b> (a machine-readable batch), never code, and it cannot run backtests, touch datasets or
-        claim performance.</Banner>
-      <Card title="How a proposal becomes research">
-        <div className="flow">
-          <div className="flow-step">Proposal batch<span>data only</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step done">Gate<span>strict schema, claim language refused</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step done">DSL validation + compiler<span>same as the builder</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step done">Strategy ID / hash<span>library + lineage (mode_b_proposal)</span></div><div className="flow-arrow">→</div>
-          <div className="flow-step done">Backtest · validation<span>you start them in the Strategy Lab</span></div>
-        </div>
-      </Card>
-      <Card title="Import a proposal batch (YAML or JSON)">
-        <textarea className="input mono" rows={14} value={text} data-testid="proposal-text" placeholder="proposal_batch_version: 1&#10;proposals: …"
-          onChange={(e: { target: HTMLTextAreaElement }) => setText(e.target.value)} />
-        <div className="actions">
-          <Button onClick={() => ingest(false)} busy={busy === "check"} busyLabel="Checking…" disabled={!text.trim()} testId="proposal-check">Check (nothing saved)</Button>
-          <Button kind="primary" onClick={() => ingest(true)} busy={busy === "save"} busyLabel="Saving…" disabled={!rep || rep.saved || !rep.n_accepted}
-            testId="proposal-save">Save accepted proposals as strategies</Button>
-          <Button onClick={() => api.get("/api/proposals/menu?n=20").then(setMenu).catch(setErr)}>Show capability menu</Button>
-        </div>
-        <ErrorPanel error={err} title="The batch was refused" testId="proposal-error" />
-        {rep && <div data-testid="proposal-report">
-          <KeyValues rows={[["Batch", <Mono>{rep.batch_id}</Mono>], ["Accepted", String(rep.n_accepted)], ["Rejected", String(rep.n_rejected)],
-            ["Saved", rep.saved ? "yes — accepted proposals are now library strategies" : "no (check only)"]]} />
-          {rep.accepted.length > 0 && <TableWrap><table><thead><tr><th>Accepted</th><th>Strategy ID</th><th /></tr></thead>
-            <tbody>{rep.accepted.map((a) => <tr key={a.strategy_id}><td>{String(a.name ?? a.family_id ?? "")}</td><td><Mono>{a.strategy_id}</Mono></td>
-              <td>{rep.saved && <a href={href(`/strategies/${a.strategy_id}?tab=research`)}>Open in Strategy Lab</a>}</td></tr>)}</tbody></table></TableWrap>}
-          {rep.rejected.length > 0 && <details open><summary>{rep.rejected.length} rejected (with reasons)</summary>
-            <pre className="code">{JSON.stringify(rep.rejected, null, 2)}</pre></details>}
-        </div>}
-        {menu !== null && <details open><summary>Capability menu (what a proposer may use)</summary><pre className="code">{JSON.stringify(menu, null, 2)}</pre></details>}
-      </Card>
-    </div>
   );
 }
 

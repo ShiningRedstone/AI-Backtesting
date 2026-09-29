@@ -42,3 +42,22 @@ instruments:
                     min_size: 0.01, size_step: 0.01, underlying: NDX, calendar: HISTDATA_NSX_R2,
                     research_proxy: true, price_source: "HistData NSXUSD M1, BID",
                     description: "HistData NSXUSD Nasdaq-100 quote - research proxy, not a live tradable contract"}
+  # ---- Dukascopy Nasdaq-100 source (Phase 9): PROVISIONAL identity --------------------------
+  # A price SOURCE, not a contract. Nothing about it is assumed to be CME NQ: the file name is not
+  # evidence. Unknown until you state it (DATA_IMPORT.md, "source identity metadata step"):
+  # the Dukascopy symbol, asset class (CFD / index quote / futures-derived), price side, and any
+  # contract economics. tick/point values below are RESEARCH UNITS (1 unit = 1 per index point,
+  # prices on a 0.001 grid), not broker or exchange figures. While identity_status is
+  # `provisional`, EVERY backtest / search / validation / control on this instrument is refused
+  # (and its cost profile ships unconfigured as well). To enable research, fill the fields in
+  # required_metadata and set identity_status to `user_specified` (you state it) or
+  # `source_verified` (with identity_evidence: where you verified it).
+  NQ_DUKASCOPY: {exchange: unverified, asset_class: unverified, tick_size: 0.001, tick_value: 0.001,
+                 point_value: 1, min_size: 0.01, size_step: 0.01, underlying: NDX,
+                 calendar: DUKASCOPY_NQ_PROVISIONAL, research_proxy: true,
+                 identity_status: provisional, source_provider: DUKASCOPY, source_symbol: null,
+                 identity_evidence: null,
+                 required_metadata: [source_symbol, asset_class, price_basis, tick_size, point_value,
+                                     min_size, size_step],
+                 price_source: "Dukascopy 1m CSV (UTC offsets); price side not stated",
+                 description: "Dukascopy Nasdaq-100 source - PROVISIONAL identity; not CME NQ; research units only"}

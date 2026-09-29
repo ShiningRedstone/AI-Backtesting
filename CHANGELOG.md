@@ -3,6 +3,23 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 9 (as requested): Dukascopy primary research source + AI-assisted strategy discovery
+
+| Item | Status |
+|---|---|
+| Dukascopy 1m CSV through the existing pipeline: profile `dukascopy_utc_csv` (explicit UTC offsets converted exactly; mixed/naive and `+Nh` refused), source SHA-256, provider, filename, convention, volume `unknown` (not exchange volume), symbol `UNSTATED` (not invented), 1m → 5m derivation with lineage | IMPLEMENTED, TESTED (synthetic Dukascopy-shaped fixture) |
+| Provisional source identity `NQ_DUKASCOPY` (not CME NQ; research units); every backtest/search/validation/control refused until identity is stated (`user_specified`) or verified (`source_verified` + evidence); visible in Datasets, pickers and API (`409 instrument_identity`) | IMPLEMENTED, TESTED |
+| Separate cost profile `NQ_DUKASCOPY` / `providers.DUKASCOPY` (unconfigured → import allowed, research refused); HistData costs unchanged and never applied | IMPLEMENTED, TESTED |
+| Provisional calendar `DUKASCOPY_NQ_PROVISIONAL` (UTC source vs New York session); wrong hours surface as `bars_outside_session` / missing bars (refused, never relaxed) | IMPLEMENTED, TESTED; calendar REQUIRES REAL DATA (inspect evidence) |
+| Gap classification + coverage (read-only; nothing excluded) — API, CLI `dataset ID --quality`, Datasets page | IMPLEMENTED, TESTED |
+| Preferred Research Dataset (workspace-level, persisted, validated datasets only; Strategy Lab + AI Discovery preselect it for new research; stored runs unchanged) — API, CLI `prefer-dataset`, Datasets page | IMPLEMENTED, TESTED (API + browser) |
+| Datasets page: provider, instrument identity/proxy, TF, range, validation, source hash, price/volume semantics, cost status, caveats, preferred flag; import panel gains dataset name, symbol, calendar, derived timeframes | IMPLEMENTED, TESTED |
+| AI Discovery: versioned request/proposal schemas; `AIProvider` abstraction; deterministic mock (valid / malformed / causality-invalid / parameter-invalid); optional env-configured external provider (no default model; key never stored) | IMPLEMENTED, TESTED (no network) |
+| Strict gate: schema → DSL → features → causality → parameter domain → request constraints → compile → identity, exact reasons, no repair; blind versioned context (no results; hash stable across runs) | IMPLEMENTED, TESTED |
+| Human review (inspect / accept / reject / save / send to backtest), no ranking; saved proposals are library strategies with provenance; modifications are new versions with parent + stated and computed changes; lineage request → proposal → strategy → runs | IMPLEMENTED, TESTED (API + browser) |
+| Import of the user's real Dukascopy CSV | NOT RUN HERE — the file is not in the repository; commands in DATA_IMPORT.md; REQUIRES REAL DATA |
+| Automated AI optimization loops, live trading, broker integration | NOT IMPLEMENTED (by design) |
+
 ## Research workspace selection (desktop)
 
 | Item | Status |

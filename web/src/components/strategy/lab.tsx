@@ -64,6 +64,10 @@ export function DatasetPicker({ strategy, multi, value, onChange, testId = "lab-
   const [err, setErr] = useState<ApiError | null>(null);
   const [f, setF] = useState({ provider: "", instrument: "", timeframe: "", eligibleOnly: false });
   useEffect(() => { api.post<Readiness>("/api/backtests/readiness", { strategy }).then(setReady).catch(setErr); }, [strategy]);
+  const pref = ready?.datasets.find((d) => d.dataset_id === ready.preferred_dataset_id);
+  useEffect(() => {                  // NEW research starts on the workspace's Preferred Research Dataset (when eligible)
+    if (pref?.runnable && !value.length) onChange([pref.dataset_id]);
+  }, [pref?.dataset_id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (err) return <ErrorPanel error={err} />;
   if (!ready) return <Loading label="Checking datasets…" />;
   const uniq = (k: keyof DatasetRow) => [...new Set(ready.datasets.map((d) => String(d[k])))].sort();
@@ -84,6 +88,7 @@ export function DatasetPicker({ strategy, multi, value, onChange, testId = "lab-
       </div>
       <p className="muted small">Strategy timeframe <b>{ready.strategy_timeframe ?? "?"}</b>. A dataset is eligible when it passed validation, matches the
         timeframe and has a configured cost profile. Ineligible datasets cannot be selected.</p>
+      <PreferredNotice ready={ready} testId={`${testId}-preferred`} />
       {!rows.length ? <Empty>No datasets match. Import one on the <a href={href("/datasets")}>Datasets</a> page.</Empty> : (
         <TableWrap><table>
           <thead><tr><th /><th>Dataset</th><th>Provider</th><th>Instrument</th><th>TF</th><th>Range</th><th>Validation</th><th>Costs</th><th>Eligibility</th></tr></thead>
@@ -91,7 +96,8 @@ export function DatasetPicker({ strategy, multi, value, onChange, testId = "lab-
             <tr key={d.dataset_id} className={d.runnable ? "" : "disabled-row"} data-testid={`${testId}-${d.dataset_id}`}>
               <td><input type={multi ? "checkbox" : "radio"} name={testId} disabled={!d.runnable} aria-label={`select ${d.dataset_name ?? d.dataset_id}`}
                 checked={value.includes(d.dataset_id)} onChange={(e: { target: HTMLInputElement }) => pick(d, e.target.checked)} /></td>
-              <td>{d.dataset_name}<div className="small"><Mono>{d.dataset_id}</Mono></div>{d.synthetic && <Badge tone="demo">synthetic</Badge>}</td>
+              <td>{d.dataset_name}<div className="small"><Mono>{d.dataset_id}</Mono></div>{d.synthetic && <Badge tone="demo">synthetic</Badge>}
+                {d.preferred && <> <Badge tone="info">preferred</Badge></>}{d.identity?.identity_status === "provisional" && <> <Badge tone="warn">provisional identity</Badge></>}</td>
               <td>{d.provider}</td><td>{d.instrument}</td><td>{d.timeframe}</td>
               <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td>
               <td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>
@@ -103,6 +109,18 @@ export function DatasetPicker({ strategy, multi, value, onChange, testId = "lab-
           </tbody></table></TableWrap>)}
     </div>
   );
+}
+
+/** Where the preselection comes from, and why it did not happen when the preferred dataset is not eligible. */
+export function PreferredNotice({ ready, testId }: { ready: Readiness; testId?: string }) {
+  const pref = ready.datasets.find((d) => d.dataset_id === ready.preferred_dataset_id);
+  if (!ready.preferred_dataset_id) return <p className="muted small" data-testid={testId}>No Preferred Research Dataset is set (Datasets page).</p>;
+  if (!pref) return null;
+  return pref.runnable
+    ? <p className="muted small" data-testid={testId}>Preselected: the workspace's Preferred Research Dataset <Mono>{pref.dataset_id}</Mono>
+        ({pref.provider} · {pref.instrument} · {pref.timeframe}). A default for new research only; stored runs are unchanged.</p>
+    : <Banner tone="warn" testId={testId}>The Preferred Research Dataset <Mono>{pref.dataset_id}</Mono> is not eligible here and was not
+        preselected: {pref.reasons.join("; ")}.</Banner>;
 }
 
 // =========================================================================== provenance + runs

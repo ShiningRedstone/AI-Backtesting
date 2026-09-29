@@ -166,6 +166,139 @@ MNQ-equivalent research values (`CONFIG.md`), not broker-verified.
   datasets. 2018 is expected to import with WARNs (2.9% missing, measured locally with an
   equivalent in-memory calendar). No holidays are listed; they count as missing days.
 
+## Dukascopy Nasdaq-100 (primary research source; Phase 9)
+
+The Dukascopy file goes through the SAME pipeline as every other source (inspect, normalize,
+validate, manifest and hashes, immutable store, derived timeframes). There is no separate importer.
+It is stored as its own source identity and is never merged with or compared into HistData.
+
+**File layout** (profile `dukascopy_utc_csv`): `timestamp,open,high,low,close,volume`, 1m bars, an
+explicit UTC offset on every row (for example `2021-09-28T00:00:00+00:00`). Rows are read as absolute
+instants and converted exactly to UTC. A file that mixes rows with and without offsets is refused.
+So is any `+Nh` shift. Volume is a decimal, provider-defined measure: it is recorded as
+`volume_type: unknown`, never as exchange-traded volume.
+
+**Source identity**: instrument `NQ_DUKASCOPY` in `configs/instruments.yaml`.
+
+- It is **PROVISIONAL**. The file name is not evidence that this is CME NQ, and nothing about it is
+  assumed.
+- `source_symbol`, `asset_class` and `identity_evidence` are empty. Price basis is `unknown` unless
+  you state it.
+- The tick and point values are **research units** (1 per index point, 0.001 grid). They are not
+  broker or exchange figures.
+- The manifest symbol is `UNSTATED`, because the file carries no symbol.
+
+While the identity is provisional, the dataset imports, validates and can be inspected. However,
+**every** backtest, search, validation, control and prop simulation built on a run is refused, with
+the reason shown (HTTP `409 instrument_identity`).
+
+**Source identity metadata step** (you state it; EdgeLab never fills it in). Edit
+`configs/instruments.yaml` → `NQ_DUKASCOPY`:
+
+1. Set `source_symbol` to the Dukascopy instrument you downloaded (for example the name shown in
+   Dukascopy's download tool), and `asset_class` (for example `cfd`).
+2. Confirm or correct `tick_size`, `tick_value`, `point_value`, `min_size` and `size_step`. Keep
+   `point_value` as research units unless you have the real contract economics.
+3. Set `identity_status: user_specified`. Or set `source_verified`, and add `identity_evidence:
+   "<where you verified it>"`. `source_verified` without evidence is refused.
+4. State the price side when you import (`--price-basis bid|ask|mid`) if you know it.
+
+**Costs**: the source has its own profile `costs.symbols.NQ_DUKASCOPY` (and `providers.DUKASCOPY`).
+
+- Both ship `status: unconfigured`, so the import works but research is refused until you enter
+  numbers.
+- The numbers to enter: `commission_per_side`, `fees_per_side`, `spread_points` (or `spread_source`),
+  `slippage_ticks_market` / `slippage_ticks_stop` in points, `financing_mode`, plus a rationale in
+  `notes`.
+- Set `status: assumed` (a research assumption) or `broker_verified`.
+- HistData's assumed costs are never reused: `NAS100_HISTDATA@HISTDATA` applies only to the HISTDATA
+  feed.
+
+**Calendar**: the source timestamps are UTC, and the session calendar is a separate choice.
+
+- `DUKASCOPY_NQ_PROVISIONAL` assumes the CME equity-index Globex window: Sun 18:00 to Fri 17:00 New
+  York, with a daily 17:00-18:00 pause and no holidays listed. This is **not yet measured on the real
+  file**.
+- Before importing, run `inspect` and read the "bars per local hour" table.
+- If the file has bars in hours this calendar calls closed, the import is refused
+  (`bars_outside_session`). If it lacks hours the calendar expects, the missing-bar ratio rises;
+  above 5% the import is refused.
+- In either case, add a calendar to `configs/data.yaml` that matches the measured schedule and pass
+  `--calendar`. Never relax the thresholds to make a file pass.
+- The entry session (for example `NY_RTH`) and flattening are part of each strategy, not of the
+  dataset.
+- Holidays count as missing trading days until they are listed.
+- The daily break is modelled only as the single 17:00-18:00 pause.
+
+**Gap classification** (`dataset ID --quality`, or Datasets → Inspect → "Gap classification &
+coverage") is descriptive only.
+
+- It groups the missing in-session bars into gaps, then classifies each by length (single bar,
+  short up to 15 min, medium up to 2 h, long, whole day) and by position (session open, session
+  close, intra-session, whole trading day).
+- It also gives coverage per year and a list of missing trading days.
+- Nothing is filled or excluded. An exclusion still needs an audited `source_exclusions` set (below).
+
+### Import your file (local; the real CSV is not in this repository)
+
+Windows PowerShell, in your research workspace (the repository checkout
+`C:\Users\Ethan\Documents\AI-Backtesting` is also the workspace). Replace the source path with the
+location of your CSV:
+
+```powershell
+cd C:\Users\Ethan\Documents\AI-Backtesting
+git pull                                            # brings the Dukascopy profile, instrument, calendar, costs
+New-Item -ItemType Directory -Force data\import | Out-Null
+Copy-Item "<path to your Dukascopy CSV>" data\import\nq_dukascopy_2021_2026_1m.csv   # a copy; the original is never edited
+
+# 1. dry run: how the file is read + bars per local hour (stores nothing)
+python -m edgelab.cli --root . inspect data\import\nq_dukascopy_2021_2026_1m.csv --profile dukascopy_utc_csv --timeframe 1m
+
+# 2. import the immutable 1m dataset and derive its 5m child (lineage recorded)
+python -m edgelab.cli --root . import data\import\nq_dukascopy_2021_2026_1m.csv --profile dukascopy_utc_csv `
+  --timeframe 1m --instrument NQ_DUKASCOPY --provider DUKASCOPY --asset-type unspecified `
+  --dataset-name NQ_DUKASCOPY_2021_2026 --derive 5m
+#    add --price-basis bid|ask|mid and --symbol <Dukascopy symbol> only if you know them
+#    add --calendar <NAME> if step 1 showed a different schedule (see "Calendar" above)
+
+# 3. review: ids, validation, identity, gaps
+python -m edgelab.cli --root . datasets
+python -m edgelab.cli --root . dataset NQ_DUKASCOPY_2021_2026_5M_<hash> --quality
+
+# 4. make the 5m dataset the workspace's Preferred Research Dataset (a default for NEW research)
+python -m edgelab.cli --root . prefer-dataset NQ_DUKASCOPY_2021_2026_5M_<hash>
+```
+
+The same import in the GUI:
+
+1. Copy the CSV into the workspace's `data\import` folder.
+2. Go to Datasets → Import Dataset and choose the file.
+3. Fill in the fields:
+   - Instrument `NQ_DUKASCOPY`
+   - Provider `DUKASCOPY`
+   - Asset type `unspecified`
+   - Timeframe `1m`
+   - Source timezone `UTC`
+   - Layout profile `dukascopy_utc_csv`
+   - Price basis `unknown` (unless known)
+   - Dataset name `NQ_DUKASCOPY_2021_2026`
+   - Derive timeframes `5m`
+4. Click Inspect file, then Import.
+5. On the 5m row, click "Set preferred".
+
+Research on it stays refused until the identity step and the cost step above are done. Both are
+shown on the dataset row.
+
+**Preferred Research Dataset**: a workspace setting stored in `data/workspace_preferences.json`. It
+is not part of any run, strategy, dataset or the research config hash.
+
+- Only a stored dataset that passed validation (PASS/WARN/INFO) is eligible, and it is re-validated
+  (content hash re-checked) when set.
+- The Strategy Lab (backtest, batch research, validation) and AI Discovery preselect it for new
+  research when it is eligible for that strategy.
+- Changing it never alters stored runs, and it is not set automatically.
+- CLI: `prefer-dataset [ID] [--clear]`. API: `GET/POST /api/preferences/research-dataset`.
+
 ## Audited source-quality exclusions (opt-in)
 
 For a known, documented source defect that lies entirely outside the session (not a way to make

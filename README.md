@@ -21,7 +21,7 @@ result under stated assumptions*, not a forecast.
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
 | 7 Prop simulator | evaluation, funded, payout, multi-account | **prop-account simulation layer done** (requested as "Phase 6"): versioned rule sets, evaluation rules, multi-account, lineage, web page (PROP_SIMULATION.md); funded/payout phases not built |
 | 8 Reports | HTML dashboard, PDF | planned |
-| 9–11 | paper trading, notifications, human discretion, isolated live adapter (default off) | planned |
+| 9–11 | paper trading, notifications, human discretion, isolated live adapter (default off) | planned (the separately requested "Phase 9" built the Dukascopy research source + AI discovery instead; paper trading not started) |
 
 ## Quickstart
 
@@ -268,4 +268,14 @@ Open EdgeLab (the desktop app or `python -m edgelab.web`), then go to **Strategy
 - **Validate** a selection (OOS, walk-forward, random-entry control);
 - run a **Prop Simulation** on the stored run.
 
-**AI Proposals** is the Mode B gate for machine-readable proposal batches; no model is connected. See WEB_UI.md.
+**AI Discovery** turns a hypothesis (or a template, or an existing strategy to modify) into proposals from an AI provider or the
+deterministic mock. Each proposal passes the strict gate and your review before it becomes a library strategy. The AI never sees results,
+and nothing is ranked. See WEB_UI.md.
+
+## Dukascopy data and the Preferred Research Dataset (Phase 9)
+
+The Dukascopy Nasdaq-100 1m CSV is the intended primary research source. It imports through the normal pipeline as `NQ_DUKASCOPY`,
+with a **provisional** source identity (not CME NQ) and its own **unconfigured** cost profile. Research on it is refused until you
+state the identity and enter costs. Mark the validated 5m child as the workspace's **Preferred Research Dataset**; new research then
+starts on it. Exact commands and GUI steps are in DATA_IMPORT.md ("Dukascopy Nasdaq-100"). The real file is not in this repository,
+and nothing here was computed from it.
