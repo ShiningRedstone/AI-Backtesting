@@ -5,7 +5,40 @@ import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
+import type { ProtocolRecordRow } from "../api/types";
+import { UI_VERSION, UpdatePanel, useVersion } from "../components/updates";
+import { SystemPanel } from "./Strategies";
+
+// =========================================================================== about
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function AboutCard() {
+  const { data: v } = useVersion();
+  const { data: s, error } = useApi<Record<string, any>>("/api/status");
+  const ws = useApi<WorkspaceState>("/api/workspace");
+  const protos = useApi<ProtocolRecordRow[]>("/api/protocols");
+  const { data: build } = useApi<{ built_at: string; react: string; app_version?: string }>("/build-info.json");
+  const active = (protos.data ?? []).filter((p) => p.status === "ACTIVE");
+  return (
+    <Card title="About EdgeLab" testId="about">
+      <KeyValues rows={[
+        ["EdgeLab version", <><b data-testid="about-version">{v?.version ?? "…"}</b>{v && v.version !== UI_VERSION &&
+          <Badge tone="error">UI bundle is {UI_VERSION}: rebuild the frontend</Badge>}</>],
+        ["Build", v ? (v.packaged ? <>packaged · build <Mono>{v.build_id}</Mono></> : "development (running from source)") : "…"],
+        ["Build date", v?.built_at ? shortTime(v.built_at) : build?.built_at ? `UI ${shortTime(build.built_at)}` : "—"],
+        ["Commit", <Mono>{(v?.git_commit ?? s?.code_version?.git_commit ?? "—").slice(0, 12)}{s?.code_version?.dirty ? " (modified)" : ""}</Mono>],
+        ["Architecture", <span className="small">Python engine + Flask API (loopback only) · React UI{v?.packaged ? " · PyInstaller folder app with native WebView2 window" : ""}</span>],
+        ["Workspace", ws.data?.current ? <Mono>{ws.data.current.path}</Mono> : <Badge tone="warn">none selected</Badge>],
+        ["Data root", s ? <Mono>{String(s.root)}</Mono> : error ? <span className="warn">{error.message}</span> : "…"],
+        ["Backend", s ? <Badge tone="ok">{String(s.backend)}</Badge> : error ? <Badge tone="error">unavailable</Badge> : "…"],
+        ["Database", s ? `${s.store_backend} · ${s.runs} runs · ${s.datasets} datasets` : "—"],
+        ["Research protocol", active.length ? active.map((p) => <span key={p.protocol_id}><Mono>{p.protocol_id}</Mono> <Badge tone="ok">ACTIVE</Badge> v{p.protocol_version}</span>)
+          : <span className="muted">no ACTIVE protocol</span>],
+        ["Settings file", ws.data?.settings_path ? <Mono>{ws.data.settings_path}</Mono> : "—"]]} />
+    </Card>
+  );
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 interface ConfigView {
   demo: boolean; root: string; config_hash: string; backtest: Record<string, unknown>;
@@ -249,13 +282,18 @@ export function SettingsPage() {
   const ws = useApi<WorkspaceState>("/api/workspace");
   const wsCard = <Card title="Research Workspace" testId="settings-workspace">
     {ws.error ? <ErrorPanel error={ws.error} /> : ws.data ? <WorkspacePanel state={ws.data} /> : <Loading label="Loading workspace…" />}</Card>;
-  if (error?.kind === "no_workspace") return <div className="page"><header className="page-head"><h1>Settings</h1></header>{wsCard}</div>;
-  if (error) return <div className="page"><header className="page-head"><h1>Settings</h1></header>{wsCard}<ErrorPanel error={error} /></div>;
+  const about = <AboutCard />;
+  if (error?.kind === "no_workspace") return <div className="page"><header className="page-head"><h1>Settings</h1></header>{about}<UpdatePanel />{wsCard}</div>;
+  if (error) return <div className="page"><header className="page-head"><h1>Settings</h1></header>{about}<UpdatePanel />{wsCard}<ErrorPanel error={error} /></div>;
   if (!c) return <Loading label="Loading configuration…" />;
   return (
     <div className="page">
-      <header className="page-head"><h1>Settings</h1></header>
+      <header className="page-head"><div><div className="eyebrow">System</div><h1>Settings</h1>
+        <div className="subtitle small">About this build, application updates, the research workspace and the (read-only) configuration.</div></div></header>
+      <div className="grid-cards">{about}<UpdatePanel /></div>
       {wsCard}
+      <h3>System status</h3>
+      <SystemPanel />
       <Banner tone="info">Read-only view. Configuration lives in <code>configs/*.yaml</code> (see CONFIG.md); edit the files and restart.
         {" "}{c.credentials}.</Banner>
       <div className="grid-cards">

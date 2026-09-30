@@ -5,8 +5,9 @@ import type { BatchRow, DatasetRow, JobStatus, LibraryRow, Ranking, RankingMetri
   SearchDetail, SearchPlan, SearchSpec, SearchValidation } from "../api/types";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
-import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, IssueList, KeyValues, Loading, Mono,
+import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, IssueList, KeyValues, Kpi, Loading, Mono,
   NumberInput, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
+import type { ProtocolStatus } from "../api/types";
 
 // Phase 4 research: plan and run strategy x dataset searches over the /api/research service contracts.
 // Every number shown here is an IN-SAMPLE measurement under stated assumptions; nothing is validated.
@@ -32,9 +33,12 @@ function ResearchHome() {
   const list = useApi<SearchBatch[]>(research.searchesUrl);
   return (
     <div className="page" data-testid="research-page">
-      <header className="page-head"><h1>Research</h1><Badge tone="info">Phase 4 · batch search</Badge></header>
+      <header className="page-head"><div><div className="eyebrow">Research</div><h1>Experiments</h1>
+        <div className="subtitle small">Batch searches: strategy × dataset cells, honest trial counts, in-sample ranking and shortlist tags.</div></div>
+        <Badge tone="info">batch search</Badge></header>
       <Banner tone="info" testId="research-in-sample">Searches run stored strategies on datasets (one strategy on one dataset per
-        cell; datasets are never merged). Results are <b>{IN_SAMPLE}</b>. Out-of-sample and walk-forward checks arrive in Phase 6.</Banner>
+        cell; datasets are never merged). Results are <b>{IN_SAMPLE}</b>. The top of a ranking is not a valid strategy: out-of-sample,
+        controls and the protocol holdout come after a shortlist.</Banner>
       <SearchSetup />
       {jobId && <JobPanel key={jobId} jobId={jobId} onFinished={list.reload} />}
       <Card title="Searches" actions={<Button small onClick={list.reload}>Refresh</Button>}>
@@ -223,12 +227,13 @@ function SearchList({ rows }: { rows: SearchBatch[] }) {
   return (
     <TableWrap testId="rs-searches"><table>
       <thead><tr><th>Search</th><th>Status</th><th>Created</th><th>Planned</th><th>Eligible</th><th>Evaluated</th>
-        <th>Failed</th><th>Cancelled</th><th>Trials</th><th>Shortlist</th></tr></thead>
+        <th>Failed</th><th>Cancelled</th><th>Trials</th><th>Shortlist</th><th>Protocol</th></tr></thead>
       <tbody>{[...rows].reverse().map((r) => (
         <tr key={r.search_id}><td><a href={href(`/research/${r.search_id}`)}><Mono>{r.search_id}</Mono></a></td>
           <td><StatusBadge s={r.status} /></td><td className="small">{shortTime(r.created_at)}</td><td>{r.n_planned}</td>
           <td>{r.n_eligible}</td><td>{r.n_evaluated}</td><td>{r.n_failed}</td><td>{r.n_cancelled}</td><td>{r.n_trials}</td>
-          <td>{r.shortlist?.strategy_ids.length ?? 0}</td></tr>))}
+          <td>{r.shortlist?.strategy_ids.length ?? 0}</td>
+          <td className="small">{r.protocol_id ? <Mono>{r.protocol_id}</Mono> : <span className="muted">none</span>}</td></tr>))}
       </tbody>
     </table></TableWrap>
   );
@@ -248,6 +253,9 @@ function SearchPage({ id }: { id: string }) {
         <div className="actions"><a href={href(`/compare?source=search&id=${d.search_id}`)} data-testid="rs-compare">Compare runs</a>
           {" · "}<a href={href("/research")}>All searches</a></div></header>
       <Banner tone="info" testId="rs-search-in-sample"><b>{IN_SAMPLE}.</b> {d.note}</Banner>
+      {d.protocol_id ? <ProtocolBudget pid={d.protocol_id} search={d} />
+        : <Banner tone="warn">This search is not attributed to a research protocol (it ran without an ACTIVE protocol): its trials are counted
+          only per search.</Banner>}
       <Card title="Accounting">
         <KeyValues rows={[["Last invocation", `${d.n_planned} planned · ${d.n_eligible} eligible · ${d.n_ineligible} ineligible · `
           + `${d.n_evaluated} evaluated · ${d.n_skipped_resume} skipped (already completed) · ${d.n_failed} failed · ${d.n_cancelled} cancelled`],
@@ -266,6 +274,25 @@ function SearchPage({ id }: { id: string }) {
       <RankingCard search={d} />
       <ShortlistCard search={d} onSaved={detail.reload} />
     </div>
+  );
+}
+
+function ProtocolBudget({ pid, search }: { pid: string; search: SearchDetail }) {
+  const { data, error } = useApi<{ status: ProtocolStatus }>(`/api/protocols/${pid}`, [pid]);
+  if (error) return <ErrorPanel error={error} title={`Protocol ${pid}`} />;
+  if (!data) return <Loading label="Loading protocol budget…" />;
+  const t = data.status.trials, h = data.status.holdout;
+  return (
+    <Card title={<>Protocol <Mono>{pid}</Mono> <Badge tone={data.status.status === "ACTIVE" ? "ok" : "neutral"}>{data.status.status}</Badge></>} testId="rs-protocol">
+      <div className="kpis">
+        <Kpi label="This search: trials" value={String(search.cumulative.trials ?? search.n_trials)} sub={`${search.n_failed} failed cells`} />
+        <Kpi label="Program: unique trials" value={`${t.unique_numerical_trials} / ${t.budget}`} sub={`${t.remaining} remaining · ${t.duplicate_events} duplicate events`}
+          meter={t.unique_numerical_trials / Math.max(1, t.budget)} />
+        <Kpi label="Failed evaluations" value={String(t.failed_events)} sub="recorded, not counted" />
+        <Kpi label="Holdout looks" value={`${h.looks_used} / ${h.budget}`} sub="one per shortlisted candidate" meter={h.looks_used / Math.max(1, h.budget)} />
+      </div>
+      <p className="small muted">A shortlist is a tag carrying this protocol id; it is never acceptance. Holdout access is only through the backend gate.</p>
+    </Card>
   );
 }
 

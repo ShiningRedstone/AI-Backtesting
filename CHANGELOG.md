@@ -3,6 +3,29 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Research-terminal UI + Windows auto-updater, version 0.2.0 (ADR-58, ADR-59)
+
+| Item | Status |
+|---|---|
+| Dark navy/mint design system, grouped terminal navigation, SVG chart kit (CVD-validated palette), KPI tiles, scope/basis tags, drawer/modal/pager/sortable-resizable columns | IMPLEMENTED, TESTED (browser e2e) |
+| Home overview: system facts, ACTIVE protocol budgets, dataset identity (Dukascopy CFD, not CME NQ), execution sides + cost scenario, latest results, experiments, candidates, warnings | IMPLEMENTED, TESTED |
+| Research dashboard: breakdowns by market/TF/session/entry/stop/target/direction/family/source, distributions, calendar effects, cost share (scope- and basis-labelled) | IMPLEMENTED, TESTED |
+| Strategy explorer: server-side filter/sort/paging, URL-persistent filters, detail drawer (rules in plain English, performance, equity, trades, robustness, pipeline) | IMPLEMENTED, TESTED |
+| Run page: integrity/provenance section and full per-run analytics; Experiments protocol budget; Controls page (holdout controls with their stored exact MC p-value; ad-hoc controls descriptive); candidate pipeline; prop simulated paths and summary; Settings & About | IMPLEMENTED, TESTED |
+| Read-only read models + routes (`research/overview.py`); holdout-evaluation runs always labelled Holdout, never counted as OOS | IMPLEMENTED, TESTED |
+| One authoritative version (`edgelab.__version__` = 0.2.0) enforced across UI bundle, build manifest, exe metadata and release | IMPLEMENTED, TESTED |
+| Updater: GitHub Releases manifest, check / Later / persistent Skip / Update now, staged download, size + SHA-256 verification, safe extraction, helper-process swap with rollback, update log, offline-safe | IMPLEMENTED, TESTED (fixtures; Linux) |
+| `packaging/release.py` (artifact + manifest + checksums; never publishes) | IMPLEMENTED, TESTED |
+| Fix: launcher loopback calls bypass any `HTTP(S)_PROXY` (start-up failed behind an environment proxy) | IMPLEMENTED, TESTED |
+| Helper relaunches the unchanged previous version when the swap fails (e.g. a locked file on Windows) | IMPLEMENTED, TESTED (unit); packaged check Windows-only |
+| Fix: the helper waits for the relaunched version to REPORT READY (`EDGELAB_UPDATE_READY_FILE`, written after its /api/health answered) instead of "still alive after 8 s", so a start-up error dialog is no longer mistaken for success; not ready -> stopped, kept as `.failed-*`, previous restored and relaunched, `update_failed` | IMPLEMENTED, TESTED (unit; packaged Linux build) |
+| `packaging/windows_validation.py` (Windows validation orchestrator: real-data manifests, git-status preservation, statuses, verdict) | IMPLEMENTED, TESTED (Linux dry run) |
+| Validation fixes from the first Windows run: Ctrl+Break no longer broadcast to the console (own process group); `smoke_packaged.py` ends and reaps every process it starts (tree kill) even when it crashes; the validator records child failures/timeouts/exceptions, requires a unittest `OK` summary, and ignores build output inside a repository-rooted saved workspace while still protecting `data/`, `strategy_library/`, `configs/` | IMPLEMENTED, TESTED (Linux); Windows rerun pending |
+| `packaging/smoke_update.py` (packaged update E2E: check, prompt, verify, swap, relaunch, corrupted artifact, new build that cannot start, locked folder [Windows], offline) and scratch isolation of the packaged smoke and window tests | IMPLEMENTED, TESTED (Linux build) |
+| Packaged Windows build + update on Windows | NOT VERIFIED HERE (must be built and exercised on Windows) |
+| Publishing a GitHub Release | NOT DONE (maintainer action) |
+| Code signing, delta updates, installer | NOT IMPLEMENTED |
+
 ## Robust acceptance statistics, protocol version 2 (ADR-57)
 
 | Item | Status |

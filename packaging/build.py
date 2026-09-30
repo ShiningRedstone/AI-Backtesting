@@ -33,6 +33,22 @@ def step(msg: str) -> None:
     print(f"\n==> {msg}", flush=True)
 
 
+def version_resource(version: str, build_id: str) -> str:
+    """PyInstaller VSVersionInfo text: Windows file properties show the same version as the app."""
+    a, b, c = (int(x) for x in version.split("."))
+    fields = {"CompanyName": "EdgeLab", "FileDescription": "EdgeLab research application",
+              "FileVersion": version, "InternalName": "EdgeLab", "ProductName": "EdgeLab",
+              "ProductVersion": version, "Comments": f"build {build_id}"}
+    strings = ",\n            ".join(f"StringStruct('{k}', '{v}')" for k, v in fields.items())
+    return f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers=({a}, {b}, {c}, 0), prodvers=({a}, {b}, {c}, 0), mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[StringFileInfo([StringTable('040904B0', [
+            {strings}])]),
+        VarFileInfo([VarStruct('Translation', [1033, 1200])])])
+"""
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-frontend", action="store_true", help="use the committed bundle (must be up to date)")
@@ -60,6 +76,11 @@ def main(argv=None) -> int:
     if not (st.get("built") and st.get("up_to_date")):
         sys.exit(f"the frontend bundle is missing or stale: {st}")
 
+    import edgelab
+    if st.get("app_version") != edgelab.__version__:
+        sys.exit(f"the frontend bundle was built for version {st.get('app_version')}, the backend is "
+                 f"{edgelab.__version__}: rebuild the frontend")
+
     step("generating the build manifest")
     import PyInstaller
     from edgelab import runtime
@@ -73,8 +94,11 @@ def main(argv=None) -> int:
     mf.write_text(json.dumps(m, indent=1, sort_keys=True) + "\n")
     print(f"build id {m['build_id']}  source {m['source_sha256'][:16]}  commit {m['git_commit']}")
 
+    vf = out / "edgelab_version_info.txt"
+    vf.write_text(version_resource(edgelab.__version__, m["build_id"]), encoding="utf-8")
+
     step("running PyInstaller (folder mode)")
-    env = {**os.environ, "EDGELAB_BUILD_MANIFEST": str(mf)}
+    env = {**os.environ, "EDGELAB_BUILD_MANIFEST": str(mf), "EDGELAB_VERSION_FILE": str(vf)}
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                     "--distpath", str(REPO / "dist"), "--workpath", str(out / "pyinstaller"),
                     str(REPO / "packaging" / "edgelab.spec")], cwd=REPO, env=env, check=True)

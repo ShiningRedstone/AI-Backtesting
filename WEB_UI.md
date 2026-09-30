@@ -38,11 +38,61 @@ The built frontend is committed in `edgelab/web/static/`, so running the app nee
 
 Every screen shows *"Synthetic demonstration — not evidence of trading performance."* Demo runs live in the demo workspace's own store, so they can never mix with real research results. The Results page also separates synthetic runs from research runs in any workspace. The demo refuses to write into a directory that is not a demo workspace.
 
+## Design system (research terminal)
+
+One dark theme by design (`web/src/styles.css`): near-black canvas (`--bg`), deep-navy panels (`--surface*`),
+thin blue-grey borders, light text, **mint** (`--accent`) only for primary actions, positive values and the
+selected state, **cool blue** for secondary series, **orange/red** only for warnings, failures and negative
+values. Chart series use `--c1` (mint) · `--c2` (blue) · `--c3` (ochre), validated for colour-vision
+deficiency on the panel surface; negative values sit below the zero line (position first, colour second),
+and every chart shows values in text/tooltips so colour never carries meaning alone.
+
+Building blocks (`web/src/components/`):
+- `ui/`: buttons, inputs, badges, cards, `Kpi` tiles with meters, `Scope` tags, `Modal`, `Drawer`, `Pager`,
+  `SortTh` (server-side sort + resizable columns), number formatters (`r()` always prints the R unit and sign).
+- `charts.tsx`: SVG chart kit, no chart library: `LineChart` (crosshair tooltip, legend toggles, areas),
+  `BarChart` (grouped, signed), `HBars` (signed breakdown bars), `Histogram` (with candidate marker),
+  `MonthHeatmap`, `PathsChart` (Monte Carlo / prop paths). Responsive via `ResizeObserver`.
+- `research.tsx`: protocol budget panel, dataset identity (incl. "not CME NQ futures" for Dukascopy),
+  execution sides (long ASK→BID, short BID→ASK), pipeline strip, random-control presentation, rules in
+  plain English (unsupported semantics are named as not supported, never implied).
+- `analytics.tsx`: per-run panels (performance, equity/underwater/rolling expectancy, trade behaviour,
+  cost sensitivity, Monte Carlo) used by the strategy drawer and the run page.
+- `updates.tsx`: one shared update-status poller, the version chip, the update dialog and the Settings panel.
+
+**Labelling rule:** every number is tagged with its basis (*Net of costs* / *Gross*) and scope (*Discovery /
+in-sample*, *Out-of-sample*, *Walk-forward*, *Holdout*, *Simulated*, *Randomized control*, *Synthetic data*).
+A protocol holdout-evaluation run is stored with status `OUT_OF_SAMPLE` but is always shown as **Holdout** and
+never counted or aggregated as an ordinary OOS test. Win rate is shown but never used to rank.
+
+## Page map
+
+```
+Overview    Home (#/) · Research dashboard (#/dashboard)
+Strategies  Explorer (#/explorer, drawer ?open=STR_..) · Strategy library (#/strategies[/id]) · Builder · Families · Variations
+Research    Experiments (#/research[/SRCH_..]) · Results (#/results[/RUN_..]) · Compare · Controls (#/controls)
+            · Candidate pipeline (#/pipeline) · AI Discovery
+Simulation  Prop simulator (#/prop) · Paper trading (#/paper, planned: not implemented)
+System      Data (#/datasets) · Settings & about (#/settings)
+```
+
+Read models behind the new pages (all read-only, `research/overview.py`; they never evaluate, record a trial,
+touch a ledger or change a protocol): `/api/overview`, `/api/explorer/strategies` (server-side filter / sort /
+paging; `scope=in_sample|oos|walk_forward|any`), `/api/research/dashboard`, `/api/results/<run>/analytics`,
+`/api/strategies/<id>/pipeline`, `/api/pipeline`, `/api/protocols`, `/api/protocols/<id>` (there is deliberately
+**no** HTTP route that creates, edits or retires a protocol or resets a ledger). Updates: `/api/version`,
+`/api/update/{status,check,skip,unskip,later,preferences,download,apply}` (DESKTOP_PACKAGING.md "Updates").
+
 ## Pages
 
 | Page | What it does | Backend |
 |---|---|---|
-| Dashboard | Backend status, software/source version, frontend build, last recorded test run, counts, quick actions (each enabled only when its prerequisites exist) | `system_status` |
+| Home | System facts (strategies, runs by status, batches, AI generations, prop simulations, datasets, version/update), the ACTIVE protocol with trial and holdout-look budgets and the Bonferroni per-test α, research dataset identity and quality, execution & cost model, latest results (scope-tagged), recent experiments, candidates (shortlist tags, holdout ledger), warnings. Never labels anything profitable | `/api/overview` |
+| Research dashboard | Scope switch (IS / OOS / walk-forward / all), market/dataset/family filters, breakdowns by market, timeframe, session, entry, stop, target, direction, family, source (chart or table, resizable), distributions of expectancy, profit factor, drawdown, trade count, win rate, pooled weekday/month/year, cost share; synthetic and holdout runs excluded unless stated | `/api/research/dashboard` |
+| Explorer | Terminal filter bar (text, id, family, market, TF, session, entry, stop, target, direction, source, state, protocol, min trades, max trades/week), active-filter chips + reset, server-side sort/paging, resizable columns, row selection → Compare; right-side drawer: identity, rules in plain English, performance, equity, trade behaviour, robustness (OOS/WF runs, holdout evaluations with their control), pipeline. Filters persist in the URL | `/api/explorer/strategies`, `/api/results/<id>/analytics`, `/api/strategies/<id>/pipeline` |
+| Controls | What a random-entry control preserves/randomizes; formal controls from holdout evaluations with the exact Monte-Carlo p-value the protocol stored; running an ad-hoc control (a gated discovery evaluation) shown as the candidate on the control distribution with a descriptive percentile (no p-value outside a holdout evaluation) | `/api/pipeline`, `/api/validation/control` |
+| Candidate pipeline | Stage counts (hypothesis → … → human review) and every candidate beyond in-sample testing with its stage states and evidence, all derived by the backend | `/api/pipeline` |
+| Paper trading | States that the phase is not implemented | — |
 | Strategy Lab (library) | Library with filters: open, edit, duplicate, explain, variations, lineage, archive/restore (with confirmation) | `StrategyLibrary` |
 | Strategy page (Strategy Lab) | **Research** hub (version + provenance, workflow steps, stored runs with scope badges, run this version + a variation batch on datasets), Overview and backend `explain()`, Backtest, Generate Variations (exact combinations previewed), **Validate** (OOS split, walk-forward, random-entry control on the whole dataset or the OOS window), Lineage | Phase 3/4/5 services, `strategy_research`, validation services |
 | Compare | Stored runs of a lineage, a version, a variation batch or a search side by side: trades, gross/net/cost R, expectancy, profit factor, max drawdown, breakeven cost multiple, parameters, scope, cost status, prop count. Sort and filter (views, not rankings); selected run → validate or prop simulation | `compare_runs` |
@@ -50,11 +100,11 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | Families | Hypotheses and their instances, as a lineage tree and table | `family_detail` |
 | Variations | Mode A batches with reproducibility metadata | batch records |
 | Datasets | Library with provider, instrument + **source identity** (configured / provisional, research proxy), timeframe, range, validation, source content hash, price/volume semantics, cost status, caveats and an **Eligible** column (with the reasons a dataset cannot run); **Preferred Research Dataset** card and "Set preferred"; metadata, validation report, identity and **gap classification & coverage**; import over the existing pipeline (incl. dataset name, symbol, calendar, derived timeframes) | Phase 2 importer, `backtest_readiness`, `dataset_quality`, `/api/preferences/research-dataset` |
-| Results | Recorded runs (any status); a run page shows its scope, headline metrics, equity and drawdown curve, session / entry-hour / cost-sensitivity breakdowns and breakeven cost multiple, and links to Lab, Compare, Validate and Prop | run registry, `run_curve`, `research_report` |
-| Research | Phase 4 batch search: spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
-| Prop Simulation | Choose a stored run and one or more accounts (each with a rule set from `configs/prop/` or custom YAML, optional start), run, then view the source strategy result and the prop-account results side by side but separately: outcome, breaches, violations with detection mode, day table and per-trade progression. Recorded simulations are listed. See PROP_SIMULATION.md | `/api/prop/*` |
+| Results | Recorded runs (any status); a run page shows its scope (Holdout for a protocol holdout evaluation), KPIs, an **Integrity / provenance** section (strategy logic/definition hashes, dataset content hash, period, config hash, code version, trades hash, causality check, execution and cost scenario/basis), headline metrics, equity and drawdown curve, session / entry-hour / cost-sensitivity breakdowns, then year/weekday/month/hour/direction breakdowns, monthly heatmap, underwater and rolling expectancy, R and holding-time distributions, streaks, exits, trade frequency, quote sides, cost sensitivity and Monte Carlo resampling | run registry, `run_curve`, `research_report`, `/api/results/<id>/analytics` |
+| Experiments (`#/research`) | Phase 4 batch search (a search page also shows its protocol's program-wide trial and holdout-look budget): spec setup and check, plan preview, background job with progress and cancel, searches list, current and historical cells, in-sample ranking, shortlist (see below) | `/api/research/*` |
+| Prop Simulation | Choose a stored run and one or more accounts (each with a rule set from `configs/prop/` or custom YAML, optional start), run, then view the source strategy result and the prop-account results side by side but separately: outcome, breaches, violations with detection mode, day table and per-trade progression, plus a simulated-evaluation summary (survived, target reached, breaches, payout eligibility, days to target, outcome distribution) and per-account simulated balance paths against the drawdown floor and target, and drawdown trajectories — all labelled *Simulated*, never a prediction of real funding. Recorded simulations are listed. See PROP_SIMULATION.md | `/api/prop/*` |
 | AI Discovery | Hypothesis-, template- or modification-based proposals from an AI provider (or the deterministic mock), each through the strict gate, then human review: Inspect, Accept, Reject, Save to library, Send to Backtest; history of requests; the old proposal-batch import as a tab (see "AI Discovery (Phase 9)") | `/api/ai/*`, `ingest_proposals` |
-| Settings | **Research Workspace** (desktop app: current folder with validity, SQLite, read/write, dataset/run/strategy/prop counts; check a folder read-only, use it, create a new one, open the default; development server: shows its fixed `--root`); read-only configuration: cost profile status, engine config, sessions, instruments | `/api/workspace*`, config |
+| Settings & about | **About** (version of UI and backend, build mode, build date, commit, architecture, workspace, data root, backend, database, protocol, settings file), **Updates** (installed/latest version, last check and result, release source, install and staging folders, update log, start-up check preference, download / restart and update / skip), system status and quick actions, **Research Workspace** (desktop app: current folder with validity, SQLite, read/write, dataset/run/strategy/prop counts; check a folder read-only, use it, create a new one, open the default; development server: shows its fixed `--root`); read-only configuration: cost profile status, engine config, sessions, instruments | `/api/workspace*`, config |
 | Welcome (desktop, first run) | Shown instead of the pages while no research workspace is selected: open an existing workspace or create a new one | `/api/workspace*` |
 
 ## Strategy Lab workflow (Phase 8)

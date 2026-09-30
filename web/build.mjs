@@ -33,11 +33,23 @@ export function sourceHash() {
   return h.digest("hex");
 }
 
+// THE application version lives in edgelab/__init__.py; the UI is stamped with it and the build
+// fails if web/package.json disagrees (so a UI, backend and updater can never ship mismatched).
+export function appVersion() {
+  const src = fs.readFileSync(path.resolve(here, "../edgelab/__init__.py"), "utf8");
+  const m = src.match(/^__version__\s*=\s*"(\d+\.\d+\.\d+)"/m);
+  if (!m) throw new Error("edgelab/__init__.py has no MAJOR.MINOR.PATCH __version__");
+  const pkg = JSON.parse(fs.readFileSync(path.join(here, "package.json"), "utf8")).version;
+  if (pkg !== m[1]) throw new Error(`web/package.json version ${pkg} != edgelab.__version__ ${m[1]}; update both`);
+  return m[1];
+}
+const APP_VERSION = appVersion();
+
 const options = {
   entryPoints: [path.join(here, "src/main.tsx")],
   bundle: true, minify: true, sourcemap: false, format: "esm", target: ["es2020"],
   jsx: "automatic", outfile: path.join(out, "app.js"), nodePaths: searchPaths,
-  define: { "process.env.NODE_ENV": '"production"' }, logLevel: "info", legalComments: "none",
+  define: { "process.env.NODE_ENV": '"production"', __EDGELAB_VERSION__: JSON.stringify(APP_VERSION) }, logLevel: "info", legalComments: "none",
 };
 
 fs.mkdirSync(out, { recursive: true });
@@ -47,6 +59,7 @@ const finish = () => {
   const react = require(require.resolve("react/package.json", { paths: searchPaths })).version;
   fs.writeFileSync(path.join(out, "build-info.json"), JSON.stringify({
     source_sha256: sourceHash(), built_at: new Date().toISOString(), esbuild: esbuild.version, react,
+    app_version: APP_VERSION,
   }, null, 1) + "\n");
 };
 if (process.argv.includes("--watch")) {

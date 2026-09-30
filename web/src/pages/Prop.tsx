@@ -4,7 +4,8 @@ import type { PropAccountResult, PropConfigRow, PropSimRow, PropSimulation, RunR
 import { href, useRoute } from "../app/router";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { useApi, useApp } from "../app/context";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Kpi, Loading, Mono, Scope, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
+import { BarChart, LineChart } from "../components/charts";
 
 /** Phase 6: prop-account rules replayed over a STORED run's trades. The strategy result and the
  *  account result are shown separately; nothing here ranks, scores or promotes a strategy. */
@@ -124,8 +125,9 @@ function SavedSimulation({ id }: { id: string }) {
 function SimulationView({ sim }: { sim: PropSimulation }) {
   const L = sim.lineage as Record<string, any>, S = sim.strategy_result as Record<string, unknown>;
   return (
-    <div data-testid="prop-result">
+    <div data-testid="prop-result" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {sim.labels.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{l}</Banner>)}
+      <PropOverview sim={sim} />
       <Card title="Strategy result (source run, unchanged)" testId="prop-strategy-result">
         <KeyValues rows={[["Run", <a href={href(`/results/${L.source_run_id}`)}><Mono>{L.source_run_id}</Mono></a>], ["Run status", <Badge>{L.source_run_status}</Badge>],
           ["Trades", fmt(S.trade_count)], ["Net R", fmt(S.net_r)], ["Net USD", usd(S.net_usd)], ["Expectancy (R)", fmt(S.expectancy_r)],
@@ -161,6 +163,56 @@ function SimulationView({ sim }: { sim: PropSimulation }) {
   );
 }
 
+// ------------------------------------------------------------------ simulated paths + distributions (display only)
+function PropOverview({ sim }: { sim: PropSimulation }) {
+  const accs = sim.accounts.map((x) => x.summary);
+  const nA = accs.length || 1;
+  const statuses: Record<string, number> = {};
+  for (const a of accs) statuses[a.status] = (statuses[a.status] ?? 0) + 1;
+  const keys = Object.keys(statuses);
+  const days = accs.map((a) => a.time_to_target?.trading_days).filter((x): x is number => typeof x === "number");
+  return (
+    <Card title={<>Simulated evaluation summary <Scope kind="sim">Simulation</Scope></>} testId="prop-overview">
+      <Banner tone="warn">A replay of one stored backtest's trades through the stated rule set. A simulated pass is not a prediction of passing a real
+        evaluation or of being funded; real accounts face fills, rules and discretion this replay does not model.</Banner>
+      <div className="kpis" style={{ marginTop: 10 }}>
+        <Kpi label="Accounts simulated" value={String(accs.length)} />
+        <Kpi label="Survived (no breach)" value={`${accs.filter((a) => a.survived).length} / ${accs.length}`} meter={accs.filter((a) => a.survived).length / nA} />
+        <Kpi label="Profit target reached" value={`${accs.filter((a) => a.profit_target_reached).length} / ${accs.length}`}
+          meter={accs.filter((a) => a.profit_target_reached).length / nA} />
+        <Kpi label="Drawdown breaches" value={String(accs.filter((a) => a.drawdown_breach).length)} tone={accs.some((a) => a.drawdown_breach) ? "neg" : ""} />
+        <Kpi label="Daily-loss breaches" value={String(accs.filter((a) => a.daily_loss_breach).length)} tone={accs.some((a) => a.daily_loss_breach) ? "neg" : ""} />
+        <Kpi label="Payout eligible (per rules)" value={String(accs.filter((a) => a.payout_eligible).length)}
+          sub={accs.some((a) => a.payout_eligible == null) ? "not defined by some rule sets" : undefined} />
+        <Kpi label="Days to target (median)" value={days.length ? String(days.sort((x, y) => x - y)[Math.floor(days.length / 2)]) : "—"} sub="trading days" />
+      </div>
+      {accs.length > 1 && <div style={{ marginTop: 10 }}><h4>Outcome distribution</h4>
+        <BarChart categories={keys} unit="accounts" signed={false} series={[{ id: "n", label: "Accounts", values: keys.map((k) => statuses[k]), color: "var(--c2)" }]} /></div>}
+    </Card>
+  );
+}
+
+function AccountChart({ acc }: { acc: PropAccountResult }) {
+  const p = acc.progression as Record<string, number | string | null>[];
+  if (!p.length) return null;
+  const a = acc.summary;
+  const target = a.target_usd != null ? a.starting_balance + a.target_usd : null;
+  const x = p.map((row, i) => String(row.exit_ts ?? `#${i + 1}`));
+  return (
+    <div className="grid2" style={{ marginBottom: 10 }}>
+      <div><h4>Simulated balance path <Scope kind="sim" /></h4>
+        <LineChart x={x} unit="USD" height={200} series={[
+          { id: "bal", label: "Balance", values: p.map((r) => (typeof r.balance === "number" ? r.balance : null)) },
+          { id: "floor", label: "Drawdown floor", values: p.map((r) => (typeof r.drawdown_floor === "number" ? r.drawdown_floor : null)), color: "var(--c-neg)", dashed: true },
+          ...(target != null ? [{ id: "tgt", label: "Profit target", values: p.map(() => target), color: "var(--c3)", dashed: true }] : [])]} /></div>
+      <div><h4>Drawdown trajectory <Scope kind="sim" /></h4>
+        <LineChart x={x} unit="USD" height={200} series={[
+          { id: "dd", label: "Drawdown from peak", values: p.map((r) => (typeof r.drawdown === "number" ? -Math.abs(r.drawdown) : null)), area: true, color: "var(--c-neg)" },
+          { id: "head", label: "Drawdown headroom", values: p.map((r) => (typeof r.drawdown_headroom === "number" ? r.drawdown_headroom : null)), color: "var(--c2)" }]} /></div>
+    </div>
+  );
+}
+
 function AccountDetail({ acc }: { acc: PropAccountResult }) {
   const [open, setOpen] = useState(false);
   const a = acc.summary;
@@ -169,6 +221,7 @@ function AccountDetail({ acc }: { acc: PropAccountResult }) {
   return (
     <Card title={<>Account {a.account_id} · <Badge tone={tone(a.status)}>{a.status}</Badge></>}
       actions={<Button small onClick={() => setOpen(!open)} testId={`prop-detail-${a.account_id}`}>{open ? "Hide progression" : "Show progression"}</Button>}>
+      <AccountChart acc={acc} />
       {a.violations.length ? (
         <TableWrap testId={`prop-violations-${a.account_id}`}><table>
           <thead><tr><th>Rule</th><th>At</th><th>Trade</th><th>Detection</th><th>Detail</th></tr></thead>

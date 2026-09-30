@@ -64,7 +64,8 @@ class WorkspaceHost:
         path = environ.get("PATH_INFO", "")
         self._count(self.served, path)
         app = self.app
-        if app is None or path.startswith("/api/workspace") or path.startswith("/api/desktop/"):
+        if (app is None or path.startswith("/api/workspace") or path.startswith("/api/desktop/")
+                or path.startswith("/api/update/") or path == "/api/version"):   # updater: one per process
             return self.shell(environ, start_response)
         return app(environ, start_response)
 
@@ -151,6 +152,15 @@ class WorkspaceHost:
         @shell.errorhandler(ValueError)
         def _value_error(e: ValueError):
             return jsonify({"error": {"kind": "workspace", "message": str(e)}}), 422
+
+        def update_body() -> dict:
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                raise WorkspaceError(400, "request body must be a JSON object")
+            return data
+
+        from edgelab.updater.service import register_routes as register_update_routes
+        register_update_routes(shell, update_body, lambda msg: WorkspaceError(400, msg))
 
         @shell.get("/api/workspace")
         def ws_state():

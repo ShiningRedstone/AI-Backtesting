@@ -228,11 +228,146 @@ identical results:
 - the same source hash;
 - identical feature-cache keys (70 files).
 
+## Versioning (one authoritative version)
+
+`edgelab/__init__.py` holds **the** application version, `__version__ = "MAJOR.MINOR.PATCH"` (currently
+`0.2.0`). Everything else reads or checks it:
+
+| Consumer | How it gets the version | Mismatch |
+|---|---|---|
+| Python backend, `/api/version`, About screen | `edgelab.__version__` | — |
+| React UI | `web/build.mjs` injects it as `__EDGELAB_VERSION__` and writes `app_version` into `build-info.json` | the build **fails** if `web/package.json` differs; `bundle_status()` reports a stale bundle; About shows a red badge |
+| Build manifest (`edgelab_build.json`) | `generate_build_manifest()` records `app_version` | `packaging/build.py` refuses a bundle built for another version |
+| Windows file properties of `EdgeLab.exe` / `EdgeLabConsole.exe` | `packaging/build.py` generates a VSVersionInfo file for PyInstaller | — |
+| Release manifest + updater | `packaging/release.py` writes it; the updater compares it | `release.py` refuses when backend, build manifest and bundle disagree |
+
+**To change the version for a release:** edit `__version__` in `edgelab/__init__.py` **and** `"version"`
+in `web/package.json` + the two root entries of `web/package-lock.json`, rebuild the frontend
+(`node web/build.mjs`), commit, then build (below). `tests/test_updater.py` checks that the three agree
+and that the committed bundle carries the same version.
+
+## Releasing (developers only; nothing is published automatically)
+
+```powershell
+.\build_windows.ps1 -Smoke                                 # dist\EdgeLab\ (refuses mismatched versions)
+.\.venv-build\Scripts\python.exe packaging\release.py --notes RELEASE_NOTES.md
+```
+
+`packaging/release.py` packages `dist\EdgeLab` into the update artifact and prints (but never runs) the
+publish command. Output in `dist\release\`:
+
+| File | Content |
+|---|---|
+| `EdgeLab-<version>-windows-x64.zip` | the whole application folder under a top-level `EdgeLab/` (deterministic member order, no links) |
+| `edgelab-release.json` | the release manifest (schema `edgelab-release/1`): `version`, `tag` = `v<version>`, `platform`, `published_at`, `notes`, `artifact {name, size, sha256, app_dir}`, `build {build_id, git_commit, source_sha256, built_at}` |
+| `SHA256SUMS.txt` | the artifact checksum for humans |
+
+It refuses a build made from uncommitted tracked changes unless `--allow-dirty` is given.
+
+**GitHub Release requirements** (repository `ShiningRedstone/AI-Backtesting`):
+- a normal (not draft, not pre-release) release whose tag is exactly `v<version>`;
+- the assets `edgelab-release.json` and the zip named in it (asset size must equal the manifest's);
+- publish with the printed `gh release create v<version> ... --repo ShiningRedstone/AI-Backtesting` command.
+The updater reads `/releases/latest` only; it never follows a branch and never runs source code.
+
+## Updates
+
+### What the user sees
+
+1. EdgeLab starts normally. The packaged app checks `https://api.github.com/repos/ShiningRedstone/AI-Backtesting/releases/latest`
+   in the background (never delaying start-up; at most once per start; can be switched off in
+   **Settings → Updates**). Development runs never check automatically; **Check for updates** works everywhere.
+2. No newer release, offline, GitHub unavailable, rate-limited or malformed metadata: nothing is shown;
+   Settings → Updates states the result (`OFFLINE`, `RATE_LIMITED`, `MALFORMED_METADATA`, `NO_RELEASE`, ...).
+3. A newer release: the dialog **"A new EdgeLab version is available"** shows the current and new version,
+   release date, notes and download size, with **Update now**, **Skip this version**, **Later**.
+   - *Later* asks again at the next start. *Skip this version* is stored in `%APPDATA%\EdgeLab\update_state.json`
+     and not offered again (a newer version is); it can be undone in Settings.
+   - *Update now* downloads with progress, verifies, then offers **Restart and update**.
+4. Older or equal published versions are never offered (downgrades are refused), nor releases for another platform.
+
+### How an update is applied (EdgeLab.exe cannot replace itself while running)
+
+```
+EdgeLab.exe (running)                          staged, VERIFIED new build
+  download -> %LOCALAPPDATA%\EdgeLab-Updater\<version>\EdgeLab-<v>-windows-x64.zip.part
+  size + SHA-256 == manifest?  no -> delete, report CHECKSUM_MISMATCH / SIZE_MISMATCH, nothing installed
+  extract (no absolute paths, no "..", no links, size-bounded) -> ...\<version>\app\EdgeLab\
+  its edgelab_build.json app_version == release version?  -> READY.json
+  "Restart and update": start  ...\app\EdgeLab\EdgeLab.exe --apply-update --target <install> ...
+  then close the window and exit normally (store closed, lock released)
+                                               helper (edgelab/updater/apply.py):
+                                               1 wait for the old process to exit (timeout: change nothing)
+                                               2 refuse unless <install> is a packaged EdgeLab folder that
+                                                 holds no workspace and overlaps no protected folder
+                                               3 copy staged build -> <install>.new-<v>, verify its version
+                                               4 rename <install> -> <install>.old-<stamp>; .new -> <install>
+                                                 (second rename fails -> first undone)
+                                               5 start the new EdgeLab.exe and wait until IT reports ready
+                                                 (a ready file written only after its own /api/health
+                                                 answered; 180 s). Exited or not ready (e.g. stuck behind
+                                                 a start-up error dialog): stop it, keep it as
+                                                 <install>.failed-<stamp>, restore .old, start that instead
+                                               6 remove .old (leftovers are cleaned at the next start)
+```
+
+- The helper runs from the **staged, verified** build, so no installed file is in use while it works.
+- The current installation is never deleted before the replacement is in place and verified.
+- No administrator rights are needed when the app lives in a user folder.
+- **User data is never inside the install folder and never touched**: the updater refuses any folder that
+  contains `data\`, `strategy_library\`, an `edgelab.sqlite` store or an instance lock, and any folder overlapping the
+  default data root (`%LOCALAPPDATA%\EdgeLab`), the settings folder or the open workspace.
+- **Recommended install location:** `%LOCALAPPDATA%\Programs\EdgeLab\` (its own folder, next to but not inside
+  the default workspace `%LOCALAPPDATA%\EdgeLab`).
+- Every step is logged as JSON lines in `%APPDATA%\EdgeLab\logs\update.log`; Settings shows the last result.
+
+### Recovering from a failed update
+
+- A failed download/verification installs nothing; retry from Settings.
+- A failed swap restores the previous folder automatically (the log says `restored_previous: true`) and the
+  previous version is started again (`relaunched_previous: true`).
+- A new version that does not start (it exits, or never reports ready, e.g. behind an error dialog) is stopped,
+  kept aside as `<install>.failed-<timestamp>` for diagnosis, the previous version is restored and started, and
+  the log records `update_failed` (step `restart`); the update is never reported as installed.
+- If the helper itself was killed between the two renames (power loss), the previous version is in
+  `<install>.old-<timestamp>` beside the install folder: rename it back to `EdgeLab`. A `<install>.new-<v>`
+  folder can be deleted. Research workspaces are unaffected in every case.
+
+### Testing the updater without GitHub
+
+- Unit/integration tests: `python -m unittest tests.test_updater` (fixture sources and transports: newer /
+  same / older version, malformed metadata, offline, rate limit, interrupted and failed downloads, checksum
+  mismatch, Later / Skip / Update now, zip-slip, unsafe install folders, the helper swap + restart + rollback,
+  the release tool).
+- Packaged end-to-end (copies only; `dist\` is never modified):
+  `python packaging/smoke_update.py --dist dist/EdgeLab [--scratch DIR]` installs a scratch copy, releases scratch
+  "next patch" builds into local folders and, through the HTTP API: version report, manual check + prompt + Later,
+  download + SHA-256 + staging, restart and update (swap, relaunch, datasets/runs unchanged, log, no leftovers),
+  a corrupted artifact (refused, nothing changes), a **new build that cannot start** (its build manifest is
+  invalid; on Windows the windowed exe shows its modal error dialog: it is stopped, the previous version restored
+  and relaunched, `update_failed`, helper exited), a **locked installation** (Windows only: an open file blocks the
+  rename; the update is abandoned and the previous version relaunched) and an **offline start** (GitHub source with
+  the proxy pointed at a closed local port: `OFFLINE`, app fully usable). Settings, staging and the demo workspace
+  are scratch; the helper runs quietly (`EDGELAB_UPDATER_QUIET=1`, no dialog) and the ready wait is 120 s
+  (`EDGELAB_UPDATE_READY_TIMEOUT`, tests only). `--results-json FILE` writes every check. Verified on the Linux
+  build (the locked-installation phase is SKIP there); must be run on Windows.
+- Windows validation of a working-tree change set: `packaging/windows_validation.py` (run from an extracted
+  validation package with `<repo>\.venv\Scripts\python.exe`): manifests (path, size, mtime, SHA-256) of
+  `%LOCALAPPDATA%\EdgeLab`, `%LOCALAPPDATA%\EdgeLab-Updater`, `%APPDATA%\EdgeLab` and the saved workspace, plus
+  git status, before and after; applies only unmodified files; build, packaged smoke, native window and the packaged
+  updater test with scratch TEMP / settings / staging and an empty local release source; prints
+  `WINDOWS VALIDATION: PASS` only when every required item passed.
+- Full local flow: build the NEW version, run `packaging/release.py --out D:\edgelab-release`, then start an
+  OLDER packaged build with `EDGELAB_UPDATE_SOURCE=D:\edgelab-release` (a local release folder replaces GitHub
+  as the source; it is shown in Settings → Updates) and click *Check for updates*.
+
 ## Port, startup and shutdown
 
 - **Binding:** always 127.0.0.1. Port 0 means the OS assigns a free port, so there's no race and no
   fixed port. `--port N` is honoured, and if that port is busy you get a clear error. The UI isn't
-  exposed to the LAN, and there's no auth, telemetry or network call.
+  exposed to the LAN, and there's no auth or telemetry. The only outbound request is the update check
+  (packaged app only, switchable off in Settings; see "Updates"): an anonymous GET of the public GitHub
+  release metadata. It sends no research data and its failure never affects the app.
 - **Startup:**
   - Checks the IANA timezone database (the Windows build bundles `tzdata`).
   - Checks the build manifest.
@@ -402,7 +537,10 @@ automatically. A guided, verified copy command is future work.
 - A second launch focuses the running window. If the running instance has no window (`--ui none` or
   `browser`), the second launch opens a window onto the same backend. There is never a second server.
 - There is no tray icon and no in-app "Quit": closing the window quits.
-- Unsigned executable: Windows SmartScreen will warn. No installer or auto-update exists.
+- Unsigned executable: Windows SmartScreen will warn. There is no installer: the app is a folder (see
+  "Updates" for the recommended location). Updates are verified by SHA-256 against the release manifest,
+  which protects against corruption and tampered mirrors but not against a compromised GitHub account
+  (no code signing yet).
 - The server is still werkzeug's threaded server (loopback, single user).
 - File import still reads from `<workspace>\data\import\`. There's no browser upload or file picker
   yet.

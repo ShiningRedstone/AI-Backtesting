@@ -1143,7 +1143,8 @@ class Services:
 
     def list_protocols(self) -> list[dict]:
         return _jsonable([{k: r[k] for k in ("protocol_id", "status", "created_at")} | {
-            "scope": r["material"]["scope"], "name": r["material"]["name"]} for r in self.store.list_protocols()])
+            "scope": r["material"]["scope"], "name": r["material"]["name"],
+            "protocol_version": r["material"].get("protocol_version")} for r in self.store.list_protocols()])
 
     def retire_protocol(self, protocol_id: str) -> dict:
         """ACTIVE -> RETIRED (the only lifecycle change; material and ledgers are kept unchanged)."""
@@ -1486,6 +1487,32 @@ class Services:
     def run_curve(self, run_id: str) -> dict:
         from edgelab.research import lab
         return _jsonable(lab.run_curve(self, run_id))
+
+    # ------------------------------------------------------------ research terminal read models (UI)
+    # All read-only (research/overview.py): no evaluation, no trial, no ledger or protocol change.
+    def research_overview(self) -> dict:
+        from edgelab.research import overview as ov
+        return _jsonable(ov.overview(self))
+
+    def explore_strategies(self, params: Mapping) -> dict:
+        from edgelab.research import overview as ov
+        return _jsonable(ov.explorer(self, params))
+
+    def research_dashboard(self, params: Mapping) -> dict:
+        from edgelab.research import overview as ov
+        return _jsonable(ov.research_dashboard(self, params))
+
+    def run_analytics(self, run_id: str) -> dict:
+        from edgelab.research import overview as ov
+        return _jsonable(ov.run_analytics(self, run_id))
+
+    def strategy_pipeline(self, strategy_id: str) -> dict:
+        from edgelab.research import overview as ov
+        return _jsonable(ov.strategy_pipeline(self, strategy_id))
+
+    def pipeline_board(self) -> dict:
+        from edgelab.research import overview as ov
+        return _jsonable(ov.pipeline_board(self))
 
     def oos_random_control(self, src: Any, dataset_id: str, split_at: Any, n_controls: int = 20,
                            seed: int = 0) -> dict:

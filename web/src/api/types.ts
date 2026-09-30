@@ -200,7 +200,7 @@ export interface SearchBatch {
   search_id: string; search_hash: string; config_hash: string; created_at: string; finished_at: string | null;
   status: string; spec: SearchSpec; shortlist: Shortlist | null; warnings: string[];
   n_planned: number; n_eligible: number; n_ineligible: number; n_evaluated: number; n_skipped_resume: number;
-  n_failed: number; n_cancelled: number; n_trials: number;
+  n_failed: number; n_cancelled: number; n_trials: number; protocol_id?: string | null;
 }
 export interface SearchCell {
   search_id: string; cell_id: string; plan_index: number; strategy_id: string; dataset_id: string;
@@ -318,3 +318,122 @@ export interface WorkspaceState {
   current: WorkspaceInfo | null; switchable: boolean; notice: string | null; settings_path: string | null;
   default: { path: string; info: WorkspaceInfo } | null; browse_available: boolean;
 }
+
+// ---------------------------------------------------------------- research terminal read models (research/overview.py)
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export type Num = number | null;
+export interface Hist { edges: number[]; counts: number[]; n: number; clipped: number; median?: number; mean?: number }
+export interface ProtocolStatus {
+  protocol_id: string; status: string; error?: string; scope: { instrument: string; provider: string; timeframe: string };
+  source_dataset: { dataset_id: string; content_hash: string; calendar: string; has_ask_ohlc: boolean; quality_status?: string };
+  windows: Record<"discovery" | "holdout", { trading_dates: [string, string]; first_bar: string; last_bar: string; n_bars: number }>;
+  trials: { unique_numerical_trials: number; budget: number; remaining: number; unique_logic_hashes: number; evaluation_events: number;
+    duplicate_events: number; failed_events: number; by_entry_point: Record<string, number>; by_family: Record<string, number> };
+  proposal_attempts: { total: number; by_source: Record<string, number>; by_gate_status: Record<string, number>; distinct_logic_hashes: number };
+  holdout: { looks_used: number; budget: number; remaining: number; refusals: number; evaluated_strategy_ids: string[] };
+  multiple_testing: { family_size: number; per_test_alpha: number; familywise_alpha: number; z_one_sided: number; effect: string; method?: string };
+  pre_protocol_exposure: { statement: string; runs: { run_id: string }[] };
+}
+export interface ProtocolRecordRow { protocol_id: string; status: string; created_at: string; name: string;
+  scope: { instrument: string; provider: string; timeframe: string }; protocol_version?: number }
+export interface ExecutionModel {
+  status: string; instrument: string; provider?: string; reason?: string; cost_scenario?: string; cost_profile?: string;
+  spread_source?: string; quote_model?: string; has_ask_ohlc?: boolean; spread_treatment?: string;
+  quote_sides?: { long_entry: string; long_exit: string; short_entry: string; short_exit: string } | null;
+  cost_model?: Record<string, unknown>;
+}
+export interface OverviewRun { run_id: string; created_at: string; status: string; scope: string; holdout?: boolean; strategy_id: string; strategy_name: string | null;
+  dataset_id: string; trade_count: number; expectancy_r: Num; net_r: Num; profit_factor: Num; max_drawdown_r: Num; synthetic: boolean;
+  cost_status: string | null }
+export interface Overview {
+  facts: { strategies: number; families: number; runs: number; runs_by_status: Record<string, number>; searches: number;
+    variation_batches: number; prop_simulations: number; ai_generations: number; datasets: number; store_backend: string };
+  protocols: ProtocolStatus[]; protocol_records: ProtocolRecordRow[];
+  dataset: { manifest: Record<string, any>; manifest_hash: string; identity: Record<string, any>; limitations: string[];
+    validation_report: Record<string, any> | null; error?: string; dataset_id?: string } | null;
+  dataset_source: string | null; execution: ExecutionModel | null;
+  recent_runs: OverviewRun[];
+  recent_searches: { search_id: string; created_at: string; status: string; n_trials: number; n_evaluated: number; n_failed: number;
+    protocol_id: string | null }[];
+  candidates: { strategy_id: string; protocol_id: string | null; status: string; reason_code?: string | null; outcome?: string | null;
+    created_at?: string; run_id?: string | null; search_id?: string }[];
+  warnings: { level: "info" | "warn"; text: string }[]; code_version: Record<string, unknown>; note: string;
+}
+export interface ExplorerRow {
+  strategy_id: string; name: string | null; family_id: string | null; family_name: string | null; category: string | null;
+  hypothesis: string | null; timeframe: string | null; session: string | null; direction: string | null; entry_type: string;
+  stop_type: string | null; target_type: string; source: string | null; proposal_id: string | null; created_at: string | null;
+  logic_hash: string | null; state: string; state_label: string; n_runs: number; n_oos_runs: number; protocols: string[];
+  oos_expectancy_r: Num; oos_run_id: string | null; holdout_outcome: string | null; holdout_random_control_p: Num;
+  ref_run: { run_id: string; status: string; scope: string; dataset_id: string; instrument: string; synthetic: boolean;
+    cost_status: string | null; start: string; end: string } | null;
+  instrument: string | null; trade_count: number | null; trades_per_week: Num; win_rate: Num; expectancy_r: Num;
+  gross_r_per_trade: Num; net_r: Num; profit_factor: Num; max_drawdown_r: Num; cost_r_per_trade: Num;
+  sample_label: string | null; synthetic: boolean | null;
+}
+export interface ExplorerResponse {
+  rows: ExplorerRow[]; total: number; page: number; page_size: number; pages: number; scope: string; scope_label: string;
+  sort: string; order: "asc" | "desc"; facets: Record<string, string[]>; states: Record<string, string>;
+  protocols: ProtocolRecordRow[]; library_total: number; basis: string; note: string;
+}
+export interface GroupRow { group: string; runs: number; trades: number; net_r_per_trade: Num; gross_r_per_trade: Num;
+  median_run_expectancy_r: Num; pct_runs_positive_net: Num }
+export interface CalendarRow { bucket: string; trades: number; net_r: number; net_r_per_trade: Num; gross_r_per_trade: Num }
+export interface ResearchDashboard {
+  scope: string; scope_label: string; basis: string; n_runs: number; n_strategies: number; n_trades: number;
+  synthetic_excluded: number; includes_synthetic: boolean; holdout_runs_excluded: number; breakdowns: Record<string, GroupRow[]>;
+  distributions: Record<string, Hist>; pct_runs_positive_net: Num;
+  cost_share: { gross_r: number; cost_r: number; net_r: number; trades: number; cost_r_per_trade: Num };
+  calendar: { weekday: CalendarRow[]; month: CalendarRow[]; year: CalendarRow[]; runs_pooled: number; timezone?: string; note?: string };
+  filters: { instruments: string[]; datasets: string[]; families: string[] }; note: string;
+}
+export interface BucketRow { bucket: string; trade_count: number; sample_label: string; gross_r?: Num; net_r?: Num; cost_r?: Num;
+  expectancy_r?: Num; profit_factor?: Num; win_rate?: Num; [k: string]: unknown }
+export interface RunAnalytics {
+  run_id: string; run: Record<string, any>; labels: string[]; note: string; n_trades: number;
+  basis: { net: string; gross: string };
+  metrics?: { net: Record<string, any>; gross: Record<string, any> };
+  curve?: RunCurve; rolling_expectancy?: { window: number; points: { i: number; exit_ts: string; value: number }[]; basis: string };
+  direction?: BucketRow[]; year?: BucketRow[]; month?: BucketRow[]; weekday?: BucketRow[];
+  session?: { note: string; rows: (BucketRow & { session: string; window: string | null })[] };
+  hour?: { timezone: string; rows: BucketRow[] }; exit_reason?: BucketRow[]; entry_type?: BucketRow[];
+  monthly_heatmap?: { years: string[]; months: string[]; cells: Record<string, Record<string, { net_r: number; trades: number }>> };
+  r_histogram?: { net: Hist; gross: Hist }; holding_minutes?: Hist;
+  win_loss?: { wins: number; losses: number; flat: number };
+  streaks?: { wins: Record<string, number>; losses: Record<string, number> };
+  trades_per_month?: { month: string; trades: number }[];
+  cost_sensitivity?: { rows: Record<string, unknown>[]; breakeven_cost_multiplier?: Num };
+  breakeven_cost_multiplier?: Num;
+  monte_carlo?: Record<string, Record<string, any>>;
+  monte_carlo_paths?: { paths: number[][]; fan: Record<string, number[]>; index?: number[]; observed?: number[]; n_sims: number;
+    seed?: number; method?: string; note?: string };
+  quote_sides?: { counts: Record<string, number>; rule: string } | null;
+  mfe_mae?: { avg_mfe_r: Num; avg_mae_r: Num };
+}
+export interface PipelineStage { id: string; label: string; state: "done" | "failed" | "refused" | "pending" | "not_recorded" | "not_available";
+  evidence: string }
+export interface HoldoutAccess { protocol_id: string; access_id: string; status: string; reason_code: string | null; run_id: string | null;
+  outcome: string | null; random_control?: Record<string, any> | null; created_at: string; search_id?: string | null }
+export interface StrategyPipeline { strategy_id: string; stages: PipelineStage[]; furthest_stage: string | null; note: string;
+  holdout: HoldoutAccess[]; shortlists: { search_id: string; protocol_id: string | null }[] }
+export interface PipelineBoard {
+  stages: { id: string; label: string; counts: Record<string, number> }[];
+  candidates: { strategy_id: string; name: string | null; family_id: string | null; state: string; state_label: string; stages: PipelineStage[] }[];
+  n_strategies: number; protocols: ProtocolRecordRow[]; note: string;
+}
+
+// ---------------------------------------------------------------- version + updates
+export interface AppVersion { version: string; packaged: boolean; build_id: string | null; git_commit: string | null; built_at: string | null; build: string }
+export interface UpdateStatus {
+  current_version: string; platform: string; source: string; auto_check: boolean; skipped_versions: string[];
+  check: { state: "idle" | "checking" | "done" | "error"; checked_at: string | null; last_success_at?: string | null;
+    error: { code: string; message: string } | null };
+  release: { version: string; tag: string; published_at: string | null; notes: string; size: number; artifact: string; sha256: string;
+    platform: string } | null;
+  available: boolean; note: string | null; skipped: boolean; prompt: boolean;
+  download: { state: "idle" | "downloading" | "verifying" | "ready" | "error"; bytes: number; total: number | null;
+    error: { code: string; message: string } | null; version: string | null; staged?: string };
+  apply_supported: boolean; apply_unsupported_reason: string | null; install_dir: string | null; cache_dir: string; log: string;
+  last_update: Record<string, any> | null; applying?: boolean;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */

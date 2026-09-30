@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -42,7 +43,7 @@ def control(info, path, body=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(info["url"] + path, data=data, method="POST" if data is not None else "GET",
                                  headers={TOKEN_HEADER: info["control_token"], "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=15) as r:   # loopback: no proxy
         return json.loads(r.read())
 
 
@@ -92,7 +93,12 @@ def main(argv=None) -> int:
     root = base / "demo"
     print(f"exe {exe}\nscratch data root {base}")
     check(exe.is_file(), "EdgeLab.exe exists")
-    proc = subprocess.Popen([str(exe), "--data-root", str(base), "--demo"])
+    # scratch settings (incl. the WebView2 profile and update state), update staging and an EMPTY local release
+    # folder: the test never touches %APPDATA%\EdgeLab or %LOCALAPPDATA%\EdgeLab and never contacts GitHub
+    (base.parent / "no-release").mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "EDGELAB_SETTINGS": str(base.parent / "settings" / "settings.json"),
+           "EDGELAB_UPDATE_CACHE": str(base.parent / "update-cache"), "EDGELAB_UPDATE_SOURCE": str(base.parent / "no-release")}
+    proc = subprocess.Popen([str(exe), "--data-root", str(base), "--demo"], env=env)
     try:
         print("\n1-2. launch and backend readiness")
         rt = root / "logs" / "runtime.json"
@@ -124,6 +130,8 @@ def main(argv=None) -> int:
             if wait_for(lambda: control(info, "/api/desktop/status")["served"].get(api, 0) > before, 60,
                         f"{route} page loaded ({api} served)"):
                 check(True, f"{route} page loaded ({api} served)")
+        check(control(info, "/api/desktop/status")["served"].get("/api/update", 0) >= 1,
+              "the window asked for the update status (local empty release: no GitHub contact)")
 
         print("\n6. close the window -> clean shutdown")
         if hwnd:

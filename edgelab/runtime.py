@@ -89,6 +89,25 @@ def user_data_root(environ: Mapping[str, str] | None = None, system: str | None 
     return base / APP_NAME
 
 
+UPDATE_CACHE_ENV = "EDGELAB_UPDATE_CACHE"
+
+
+def update_cache_dir(environ: Mapping[str, str] | None = None, system: str | None = None) -> Path:
+    """Where verified update downloads are staged: its own folder, never inside the installation, a
+    workspace or the default data root. Windows: %LOCALAPPDATA%\\EdgeLab-Updater. ``EDGELAB_UPDATE_CACHE``
+    overrides it (tests)."""
+    env = os.environ if environ is None else environ
+    if env.get(UPDATE_CACHE_ENV):
+        return Path(env[UPDATE_CACHE_ENV]).expanduser()
+    return user_data_root({k: v for k, v in env.items() if k != DATA_ROOT_ENV}, system).with_name(
+        f"{APP_NAME}-Updater")
+
+
+def install_dir() -> Path | None:
+    """The folder holding the running EdgeLab executable (packaged only)."""
+    return Path(sys.executable).resolve().parent if is_frozen() else None
+
+
 def _inside(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(parent.resolve())

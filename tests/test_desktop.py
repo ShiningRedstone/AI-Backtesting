@@ -153,12 +153,43 @@ def _wait_runtime(path, proc, timeout=180):
     return None
 
 
+class TestLoopbackIgnoresProxy(unittest.TestCase):
+    def test_readiness_check_never_goes_through_a_proxy(self):
+        """A user environment with HTTP(S)_PROXY set must not break start-up: the launcher's own calls to
+        127.0.0.1 bypass any proxy (regression: the offline update smoke test found this)."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from edgelab.desktop import wait_ready
+
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200 if self.path == "/api/health" else 404)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        dead = "http://127.0.0.1:9"                                   # nothing listens there
+        with mock.patch.dict(os.environ, {"HTTP_PROXY": dead, "http_proxy": dead, "HTTPS_PROXY": dead,
+                                          "https_proxy": dead, "NO_PROXY": "", "no_proxy": ""}):
+            wait_ready(f"http://127.0.0.1:{srv.server_port}", timeout=10)   # raises StartupError if proxied
+
+
 class TestLauncher(unittest.TestCase):
     """The development launcher (python -m edgelab.desktop) on a scratch workspace."""
 
     def launch(self, root, *extra):
         return subprocess.Popen([sys.executable, "-m", "edgelab.desktop", "--data-root", str(root), "--no-browser",
-                                 *extra], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                 *extra], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                # Windows: CTRL_BREAK_EVENT below is addressed to a process GROUP. Without its own group
+                                # it is broadcast to every process on the console, ending the test runner (and anything
+                                # that started it) without a traceback.
+                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
 
     def test_start_ready_single_instance_and_clean_shutdown(self):
         with tempfile.TemporaryDirectory() as d:

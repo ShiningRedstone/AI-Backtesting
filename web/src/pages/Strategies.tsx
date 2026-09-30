@@ -11,8 +11,8 @@ import { ChooseWorkspaceLink } from "../components/workspace";
 import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TextInput, fmt, shortTime } from "../components/ui";
 import type { StrategyDoc } from "../dsl/types";
 
-// =========================================================================== dashboard
-export function DashboardPage() {
+// =========================================================================== system panel (Settings & About)
+export function SystemPanel() {
   const { data: s, error, loading } = useApi<SystemStatus>("/api/status");
   const { data: build } = useApi<{ source_sha256: string; built_at: string; react: string; esbuild: string }>("/build-info.json");
   if (error) return <ErrorPanel error={error} title="Backend status unavailable" />;
@@ -26,8 +26,6 @@ export function DashboardPage() {
       why: s.datasets ? "save a strategy first" : "import a dataset first", testId: "qa-backtest" },
   ];
   return (
-    <div className="page">
-      <header className="page-head"><h1>Dashboard</h1></header>
       <div className="grid-cards">
         <Card title="System status" testId="system-status">
           <KeyValues rows={[
@@ -48,7 +46,7 @@ export function DashboardPage() {
             <a href={href("/results")}><b>{s.runs}</b><span>recorded runs</span></a>
           </div>
           <KeyValues rows={[["Last run", s.last_run ? <a href={href(`/results/${s.last_run.run_id}`)}><Mono>{String(s.last_run.run_id)}</Mono></a> : "none yet"],
-            ["Last research run (Phase 4)", <span className="muted">Not available — batch research arrives in Phase 4</span>]]} />
+            ["Research searches", <a href={href("/research")}>Experiments</a>]]} />
         </Card>
         <Card title="Quick actions">
           <div className="quick">
@@ -60,7 +58,6 @@ export function DashboardPage() {
           {actions.filter((a) => !a.enabled).map((a) => <p key={a.label} className="muted small">{a.label}: {a.why}.</p>)}
         </Card>
       </div>
-    </div>
   );
 }
 

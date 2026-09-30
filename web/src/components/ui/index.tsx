@@ -213,3 +213,175 @@ export function fmt(v: unknown): string {
 }
 
 export const shortTime = (iso: string | null | undefined) => (iso ? iso.replace("T", " ").slice(0, 16) : "—");
+
+// =========================================================================== research-terminal primitives
+/** Numbers: fixed decimals, "—" when missing/non-finite. */
+export function n(v: unknown, digits = 2): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return v === Infinity ? "∞" : "—";
+  return v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+/** R values always carry the unit and an explicit sign. */
+export function r(v: unknown, digits = 3): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  return `${v > 0 ? "+" : ""}${v.toFixed(digits)} R`;
+}
+export function pct(v: unknown, digits = 1): string {
+  return typeof v === "number" && Number.isFinite(v) ? `${(v * 100).toFixed(digits)}%` : "—";
+}
+export const signCls = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? (v > 0 ? "pos" : v < 0 ? "neg" : "") : "");
+export function bytes(v: number | null | undefined): string {
+  if (typeof v !== "number") return "—";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0, x = v;
+  while (x >= 1024 && i < u.length - 1) { x /= 1024; i++; }
+  return `${x.toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+
+export function useDebounced<T>(value: T, ms = 300): T {
+  const [v, setV] = useState(value);
+  useEffect(() => { const t = window.setTimeout(() => setV(value), ms); return () => window.clearTimeout(t); }, [value, ms]);
+  return v;
+}
+
+const ICONS: Record<string, string> = {
+  home: "M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z", chart: "M4 20V10m6 10V4m6 16v-8m4 8H2", search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zm10 3-5-5",
+  layers: "m12 3 9 5-9 5-9-5zm-9 9 9 5 9-5m-18 4 9 5 9-5", flask: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3",
+  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01", grid: "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z",
+  shuffle: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5", flow: "M5 12h14m-4-4 4 4-4 4M3 5h4m-4 14h4",
+  shield: "M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z", wallet: "M3 7h18v12H3zm0 0 2-3h12l2 3M16 13h2",
+  file: "M14 3H6v18h12V7zm0 0v4h4", db: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6m-16 6c0 1.7 3.6 3 8 3s8-1.3 8-3",
+  gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8-3 2-1-2-4-2 1-2-1V5l-4-1-1 2h-2L8 4 4 5v2l-2 1 2 4-2 1 2 4 2-1 2 1v2l4 1 1-2h2l1 2 4-1v-2l2-1z",
+  build: "M14 6l4 4-8 8H6v-4zM3 21h18", sparkle: "M12 3v4m0 10v4M3 12h4m10 0h4M6 6l2.5 2.5m7 7L18 18M6 18l2.5-2.5m7-7L18 6",
+  compare: "M8 3v18M16 3v18M3 8h5m8 0h5M3 16h5m8 0h5", pause: "M8 5v14m8-14v14", tree: "M12 3v6m0 0-6 6m6-6 6 6M6 15v6m12-6v6",
+};
+export function Icon({ name, size = 15 }: { name: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name] ?? ICONS.list} /></svg>
+  );
+}
+
+/** What a number is: net/gross, and which sample (in-sample, OOS, holdout, simulated, control, synthetic). */
+export type ScopeKind = "net" | "gross" | "is" | "oos" | "wf" | "holdout" | "sim" | "control" | "synthetic" | "descriptive";
+const SCOPE_TEXT: Record<ScopeKind, [string, string]> = {
+  net: ["Net of costs", "scope-net"], gross: ["Gross", "scope-gross"], is: ["Discovery / in-sample", "scope-is"],
+  oos: ["Out-of-sample", "scope-oos"], wf: ["Walk-forward", "scope-oos"], holdout: ["Holdout", "scope-holdout"],
+  sim: ["Simulated", "scope-sim"], control: ["Randomized control", "scope-control"], synthetic: ["Synthetic data", "scope-synthetic"],
+  descriptive: ["Descriptive", "scope-is"],
+};
+export function Scope({ kind, children }: { kind: ScopeKind; children?: ReactNode }) {
+  const [text, cls] = SCOPE_TEXT[kind];
+  return <span className={`scope ${cls}`}>{children ?? text}</span>;
+}
+/** A run's sample scope. A protocol holdout evaluation is stored with status OUT_OF_SAMPLE but is always shown as Holdout. */
+export function ScopeOf({ status, holdout }: { status: string | null | undefined; holdout?: boolean | null }) {
+  const k: ScopeKind = holdout ? "holdout" : status === "OUT_OF_SAMPLE" ? "oos" : status === "WALK_FORWARD" ? "wf" : "is";
+  return <Scope kind={k} />;
+}
+export function Labels({ children }: { children?: ReactNode }) { return <span className="labels">{children}</span>; }
+
+export function Kpi({ label, value, sub, tone, accent, testId, meter, meterTone }: {
+  label: ReactNode; value: ReactNode; sub?: ReactNode; tone?: "pos" | "neg" | ""; accent?: boolean; testId?: string;
+  meter?: number | null; meterTone?: "warn" | "error";
+}) {
+  return (
+    <div className={`kpi${accent ? " accent" : ""}`} data-testid={testId}>
+      <div className="kpi-label">{label}</div>
+      <div className={`kpi-value ${tone ?? ""}`}>{value}</div>
+      {sub != null && <div className="kpi-sub">{sub}</div>}
+      {meter != null && <div className={`meter ${meterTone ?? ""}`}><span style={{ width: `${Math.max(0, Math.min(1, meter)) * 100}%` }} /></div>}
+    </div>
+  );
+}
+
+export function Modal({ open, title, children, actions, onClose, wide, testId }: {
+  open: boolean; title: ReactNode; children?: ReactNode; actions?: ReactNode; onClose: () => void; wide?: boolean; testId?: string;
+}) {
+  const id = useId();
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className={`modal${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={id} data-testid={testId}
+        onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>
+        <h2 id={id}>{title}</h2>
+        <div className="modal-body">{children}</div>
+        {actions && <div className="modal-actions">{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function Drawer({ open, onClose, title, subtitle, actions, children, testId }: {
+  open: boolean; onClose: () => void; title: ReactNode; subtitle?: ReactNode; actions?: ReactNode; children?: ReactNode; testId?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer" role="dialog" aria-modal="true" data-testid={testId}>
+        <header className="drawer-head">
+          <div style={{ minWidth: 0, flex: 1 }}><h2 style={{ fontSize: 16 }}>{title}</h2>{subtitle && <div className="subtitle small">{subtitle}</div>}</div>
+          <div className="actions">{actions}<Button small kind="ghost" onClick={onClose} testId="drawer-close">Close ✕</Button></div>
+        </header>
+        <div className="drawer-body">{children}</div>
+      </aside>
+    </>
+  );
+}
+
+export function Pager({ page, pages, total, pageSize, onPage, onPageSize }: {
+  page: number; pages: number; total: number; pageSize: number; onPage: (p: number) => void; onPageSize?: (n: number) => void;
+}) {
+  const from = total ? (page - 1) * pageSize + 1 : 0, to = Math.min(total, page * pageSize);
+  return (
+    <div className="pager" data-testid="pager">
+      <span><b className="num">{from.toLocaleString()}–{to.toLocaleString()}</b> of <b className="num">{total.toLocaleString()}</b></span>
+      <span className="spacer" />
+      {onPageSize && <label className="inline small">Rows <select className="input input-sm" value={pageSize}
+        onChange={(e: { target: HTMLSelectElement }) => onPageSize(Number(e.target.value))}>
+        {[25, 50, 100, 200].map((x) => <option key={x} value={x}>{x}</option>)}</select></label>}
+      <Button small disabled={page <= 1} onClick={() => onPage(1)}>«</Button>
+      <Button small disabled={page <= 1} onClick={() => onPage(page - 1)} testId="page-prev">‹ Prev</Button>
+      <span className="num">{page} / {pages}</span>
+      <Button small disabled={page >= pages} onClick={() => onPage(page + 1)} testId="page-next">Next ›</Button>
+      <Button small disabled={page >= pages} onClick={() => onPage(pages)}>»</Button>
+    </div>
+  );
+}
+
+/** Sortable header cell (server-side sort: it only reports the requested key/order). */
+export function SortTh({ k, label, sort, order, onSort, right, title, width }: {
+  k: string; label: ReactNode; sort: string; order: "asc" | "desc"; onSort: (k: string, o: "asc" | "desc") => void;
+  right?: boolean; title?: string; width?: number;
+}) {
+  const on = sort === k;
+  const [w, setW] = useState<number | undefined>(width);
+  const drag = (e: MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const th = (e.target as HTMLElement).parentElement as HTMLElement;
+    const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
+    const move = (ev: MouseEvent) => setW(Math.max(48, w0 + ev.clientX - x0));
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  };
+  return (
+    <th className={`sortable${on ? " sorted" : ""}${right ? " r" : ""}`} title={title} style={w ? { width: w, minWidth: w } : undefined}
+      aria-sort={on ? (order === "asc" ? "ascending" : "descending") : "none"}
+      onClick={() => onSort(k, on && order === "desc" ? "asc" : "desc")}>
+      {label}{on ? (order === "asc" ? " ▲" : " ▼") : ""}
+      <span className="resizer" onMouseDown={drag} onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()} />
+    </th>
+  );
+}

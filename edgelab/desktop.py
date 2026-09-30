@@ -7,6 +7,7 @@
     EdgeLab.exe --ui none   (alias --no-browser)  headless: serve only (tests, automation)
     EdgeLabConsole.exe ...                        the same launcher with a console (logs visible)
     EdgeLabConsole.exe cli research run spec.yaml ...   the command line (edgelab.cli), same workspace rules
+    EdgeLab.exe --apply-update ...                internal: the update helper (edgelab.updater.apply)
 
 Development equivalent: ``python -m edgelab.desktop`` (defaults to the per-user data root too;
 ``python -m edgelab.web`` keeps serving the repository workspace).
@@ -106,12 +107,15 @@ class InstanceLock:
             self.fh = None
 
 
+_LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # never route 127.0.0.1 via a proxy
+
+
 def wait_ready(url: str, timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
     last = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url + "/api/health", timeout=5) as r:
+            with _LOOPBACK.open(url + "/api/health", timeout=5) as r:
                 if r.status == 200:
                     return
         except OSError as exc:
@@ -169,6 +173,7 @@ def parse_args(argv):
 
 
 def run(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(argv)
     ui = "none" if args.no_browser else args.ui
     from edgelab import runtime
@@ -268,6 +273,12 @@ def run(argv=None) -> int:
         if controller is not None:
             host.browse = controller.browse_folder
         install_control(host.shell, token, ui, controller, served=host.served)
+        stop = threading.Event()
+        if runtime.is_frozen():                       # packaged: updates may replace this installation
+            from edgelab.updater import service as updates
+            updates.configure(install_dir=runtime.install_dir(), restart_args=argv, shutdown=stop.set,
+                              protected=lambda: [p for p in (runtime.user_data_root(), runtime.settings_path().parent,
+                                                             host.root) if p is not None])
         threading.Thread(target=server.serve_forever, name="edgelab-http", daemon=True).start()
         wait_ready(url, args.ready_timeout)
         from edgelab.core.identity import code_version
@@ -278,11 +289,11 @@ def run(argv=None) -> int:
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
         state["info"] = info
         (logs / RUNTIME_FILE).write_text(json.dumps(info, indent=1))
+        _report_ready(info)                           # to the update helper that relaunched us (if any)
         print(f"EdgeLab running at {url}\n  workspace: {host.root or 'none selected (first run)'} ({host.source})\n"
               f"  build: {runtime.build_label()}\n  ui: {ui}\n"
               + ("Close the EdgeLab window to stop." if ui == "window" else
                  "Keep this window open while you use EdgeLab; close it (or press Ctrl+C) to stop."), flush=True)
-        stop = threading.Event()
         _stop_on_signals(stop)
         if ui == "window":
             controller.run(stop)                      # blocks until the window is closed
@@ -333,7 +344,7 @@ def _hand_off(root: Path, logs: Path, ui: str) -> int:
         req = urllib.request.Request(info["url"] + "/api/desktop/focus", data=b"{}", method="POST",
                                      headers={TOKEN_HEADER: info.get("control_token", ""),
                                               "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with _LOOPBACK.open(req, timeout=10) as r:
             if r.status == 200:
                 return 0                              # the running window is now in front
     except OSError:
@@ -348,6 +359,21 @@ def _hand_off(root: Path, logs: Path, ui: str) -> int:
         return 1
     WindowController(info["url"], root / "webview").run()     # a viewer onto the running backend
     return 0
+
+
+def _report_ready(info: dict) -> None:
+    """The update helper waits for this file (edgelab.updater.apply.READY_ENV) before it treats a relaunched new
+    version as started; written only after /api/health answered. Best effort: no helper, nothing written."""
+    path = os.environ.get("EDGELAB_UPDATE_READY_FILE")
+    if not path:
+        return
+    try:
+        import edgelab
+        tmp = Path(path).with_suffix(".tmp")
+        tmp.write_text(json.dumps({"pid": info["pid"], "url": info["url"], "version": edgelab.__version__}))
+        tmp.replace(path)
+    except OSError:
+        pass
 
 
 def _redirect_missing_streams(logs: Path) -> None:
@@ -379,6 +405,9 @@ def _log(logs: Path, text: str) -> None:
 def main(argv=None) -> int:
     multiprocessing.freeze_support()                  # MUST run first in a frozen executable
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["--apply-update"]:                 # the update helper (launched from a staged, verified build)
+        from edgelab.updater.apply import main as apply_main
+        return apply_main(argv[1:])
     if argv[:1] == ["cli"]:                           # command line against the same workspace rules
         from edgelab import runtime
         from edgelab.cli import main as cli_main

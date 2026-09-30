@@ -43,8 +43,10 @@ a = Analysis(
 pyz = PYZ(a.pure)
 # Two launchers over one bundle: EdgeLab (windowed, no console: the desktop app) and EdgeLabConsole
 # (console: logs visible, CLI pass-through, headless smoke tests). Same code, same manifest.
+version_file = os.environ.get("EDGELAB_VERSION_FILE")                  # Windows file properties (app version)
+version_kw = {"version": version_file} if version_file and Path(version_file).is_file() else {}
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="EdgeLab", console=False,
-          debug=False, strip=False, upx=False)
+          debug=False, strip=False, upx=False, **version_kw)
 exe_console = EXE(pyz, a.scripts, [], exclude_binaries=True, name="EdgeLabConsole", console=True,
-                  debug=False, strip=False, upx=False)
+                  debug=False, strip=False, upx=False, **version_kw)
 coll = COLLECT(exe, exe_console, a.binaries, a.datas, strip=False, upx=False, name="EdgeLab")

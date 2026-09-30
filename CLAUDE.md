@@ -33,6 +33,11 @@ the fill prices, no separate spread cost; commission/slippage are assumptions); 
 (`ASK_OHLC_REQUIRED`). Real ASK-OHLC datasets `NQ_DUKASCOPY_BIDASK_OHLC_2021_2026_*` live in the user's workspace; the frozen
 BID/BIDASK datasets and legacy single-series runs are kept as evidence (read-only check: `scripts/dukascopy_inspect.py`).
 Calendar `DUKASCOPY_USATECH_OBSERVED` (NY 18:00->16:15) comes from the real-file inspection; holidays unresolved.
+Version 0.2.0 (ADR-58/59): research-terminal UI (dark design system, Home, Research dashboard, Explorer + drawer,
+Controls, Candidate pipeline, Settings & About) over READ-ONLY read models `research/overview.py` (holdout-evaluation
+runs are always labelled Holdout, never OOS), and a Windows updater `edgelab/updater/` (GitHub Releases manifest,
+SHA-256-verified staging, helper-process swap with rollback; `packaging/release.py` prepares but never publishes).
+`edgelab.__version__` is the single version (web/package.json must match; the build refuses otherwise).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

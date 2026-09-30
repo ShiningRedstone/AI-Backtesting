@@ -794,6 +794,58 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-58 Versioned, verified application updates (packaged Windows app)
+- **Problem:** the packaged app (PyInstaller folder) had no way to update itself; a running `EdgeLab.exe` cannot be
+  replaced in place on Windows, and pulling source from a branch would bypass every release check.
+- **Decision:** one authoritative version (`edgelab.__version__`, MAJOR.MINOR.PATCH) stamped into the UI bundle,
+  build manifest and exe metadata, with builds refusing mismatches. Updates come only from GitHub Releases
+  (`/releases/latest`, no drafts/pre-releases) carrying `edgelab-release.json` (schema `edgelab-release/1`: version,
+  tag, platform, artifact name/size/SHA-256, notes, build) and the zipped app folder. `edgelab/updater/`:
+  `core` (strict manifest validation), `source` (GitHub + local-folder sources behind an injectable transport;
+  HTTPS to GitHub hosts only), `manager` (check / later / persistent skip / staged download → size + SHA-256 →
+  safe extraction → version check → hand-off; never fatal, offline-safe), `apply` (separate helper process started
+  from the staged, verified build: wait for exit, refuse non-app or workspace-bearing folders, copy → two-rename swap
+  → relaunch → rollback on immediate failure; JSON-lines log), `service` (process-wide manager + `/api/version`,
+  `/api/update/*`, also served by the workspace shell). `packaging/release.py` prepares (never publishes) the assets.
+- **Safety:** downgrades and other-platform releases are never offered; nothing is executed or installed before the
+  SHA-256 matches; the old installation is kept until the new one is in place; user data (workspaces, settings,
+  staging) lives outside the install folder and folders overlapping it are refused. Automatic checks run only in the
+  packaged app (development runs and tests never contact the network by themselves).
+- **Limits:** no code signing (SHA-256 anchors trust in the GitHub release, not in a signing key); no delta updates;
+  a helper killed between the two renames needs a manual rename (documented).
+- **Changes to earlier modules (minimal, additive):** `edgelab/__init__.py` version 0.1.0 → 0.2.0 (single source);
+  `desktop.py` dispatches `--apply-update` and configures the updater when frozen (the stop event is created before
+  the server thread starts); `runtime.py` adds `update_cache_dir()` / `install_dir()`; `workspace_host.py` routes
+  `/api/version` and `/api/update/*` to the shell; `web/bundle.py` treats a version mismatch as a stale bundle;
+  `packaging/build.py` + `edgelab.spec` add the version checks and the Windows version resource.
+- **Bug fix found by the offline update smoke test:** the launcher's own loopback calls (`wait_ready`, the
+  second-launch focus request) went through `urllib`'s environment proxy, so a user with `HTTP(S)_PROXY` set could
+  not start EdgeLab. They now use a no-proxy opener (`desktop._LOOPBACK`); regression test in `tests/test_desktop.py`.
+  If the folder swap fails after EdgeLab has exited, the helper now relaunches the unchanged previous version.
+- **Readiness handshake (audit fix):** "the new process is still alive after 8 s" was not proof of a working
+  start: a windowed exe that fails at start-up blocks in a modal error dialog and stays alive. The helper now passes
+  `EDGELAB_UPDATE_READY_FILE` to the relaunched app, which writes it only after its own `/api/health` answered
+  (`desktop._report_ready`). Exited or not ready within 180 s -> the new process is stopped, kept as
+  `<install>.failed-<stamp>`, the previous version restored and relaunched, and `update_failed` (step `restart`)
+  is logged; `update_completed` is written only after the ready report.
+
+### ADR-59 Research-terminal UI and read models
+- **Problem:** the UI had no overview of protocol budgets, no server-side strategy search, no per-run analytics
+  beyond Phase 5 tables and no presentation of controls, the candidate pipeline or simulated prop paths.
+- **Decision:** `research/overview.py` adds READ-ONLY read models (overview, explorer with server-side
+  filter/sort/paging, cross-run research dashboard, per-run analytics, per-strategy and board pipeline states)
+  behind thin `Services` methods and GET routes; they reuse `compute_metrics`, the Phase-5 breakdowns, cost
+  sensitivity and Monte Carlo and never evaluate, count a trial, touch a ledger or change a protocol (tests assert
+  unchanged ledgers, runs and protocol hashes). Pipeline states are derived from stored facts only (library, runs,
+  shortlist tags, holdout ledger); later stages (paper, human review) are reported "not implemented".
+  A protocol holdout-evaluation run (stored `OUT_OF_SAMPLE`) is identified from the holdout ledger and always
+  labelled Holdout, never counted as OOS nor pooled into aggregates. The React UI gets a dark design system, an SVG
+  chart kit (palette validated for colour-vision deficiency) and new pages (Home, Research dashboard, Explorer with
+  a detail drawer, Controls, Candidate pipeline, Paper placeholder, richer Results/Prop/Settings & About).
+- **Minor additive change:** `Services.list_protocols` rows add `protocol_version`. Ad-hoc random-entry controls stay
+  descriptive (a rank, no p-value; `test_random_control`); the UI shows an exact Monte-Carlo p-value only where the
+  protocol stored one (holdout evaluations). No HTTP route creates, edits or retires a protocol or resets a ledger.
+
 ### ADR-57 Robust acceptance statistics (research protocol version 2)
 - **Problem:** the v1 OOS confidence criterion was the normal bound `mean - z*se` at the Bonferroni
   one-sided alpha `0.05/N`. At N = 2000 that is alpha 2.5e-5, z ~ 4.06. For left-skewed trade returns

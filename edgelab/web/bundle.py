@@ -37,5 +37,8 @@ def bundle_status() -> dict:
         return {"built": False, "up_to_date": False}
     info = json.loads(info_path.read_text())
     current = source_hash() if (WEB / "src").is_dir() and not is_frozen() else None
+    import edgelab
+    version_ok = info.get("app_version") == edgelab.__version__
     return {"built": True, **info, "current_source_sha256": current, "packaged": is_frozen(),
-            "up_to_date": current is None or current == info.get("source_sha256")}
+            "backend_version": edgelab.__version__, "version_matches": version_ok,
+            "up_to_date": (current is None or current == info.get("source_sha256")) and version_ok}

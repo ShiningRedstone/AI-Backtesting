@@ -1,4 +1,5 @@
-import type { BatchDetail, BatchRow, FamilyDetail, RunDetail, RunRow } from "../api/types";
+import type { BatchDetail, BatchRow, FamilyDetail, RunAnalytics, RunDetail, RunRow } from "../api/types";
+import { CostPanel, EquityPanels, MonteCarloPanel, PerformanceKpis, PerformancePanels, TradePanels } from "../components/analytics";
 import { go, href, useRoute } from "../app/router";
 import { useApi } from "../app/context";
 import { LineageTable, LineageTree, MetricsView, SYNTHETIC_NOTICE, VariationResults } from "../components/strategy";
@@ -124,6 +125,38 @@ function RunAnalytics({ runId }: { runId: string }) {
   );
 }
 
+// =========================================================================== integrity / provenance
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function ProvenanceSection({ r, id }: { r: Record<string, any>; id: string }) {
+  const d = r.dataset ?? {}, a = r.assumptions ?? {}, c = a.costs ?? {}, s = r.strategy ?? {}, cv = r.code_version ?? {};
+  const quotes = c.spread_source === "quotes";
+  return (
+    <Card title="Integrity / provenance" testId="run-provenance">
+      <p className="small muted" style={{ marginTop: 0 }}>Everything that produced this result. Re-running the same strategy definition on the
+        same dataset content with the same config and code reproduces the same trades hash.</p>
+      <div className="grid2">
+        <KeyValues rows={[["Run", <Mono>{id}</Mono>], ["Status", <Badge>{r.status}</Badge>],
+          ["Strategy", <><Mono>{s.strategy_id}</Mono> {s.dsl?.name ? <span className="small muted">{s.dsl.name}</span> : null}</>],
+          ["Logic hash", <Mono>{s.dsl?.logic_hash ?? "—"}</Mono>], ["Definition hash", <Mono>{s.dsl?.definition_hash ?? "—"}</Mono>],
+          ["Parent strategy", s.parent_strategy_id ? <Mono>{s.parent_strategy_id}</Mono> : "—"],
+          ["Dataset", <Mono>{d.dataset_id}</Mono>], ["Parent dataset", d.parent_dataset_id ? <Mono>{d.parent_dataset_id}</Mono> : "—"],
+          ["Dataset content hash", <Mono>{String(d.content_hash ?? "—").slice(0, 24)}</Mono>],
+          ["Period", `${String(d.start ?? "").slice(0, 16)} → ${String(d.end ?? "").slice(0, 16)}`],
+          ["Instrument / provider / TF", `${d.instrument} / ${d.provider} / ${d.timeframe}`]]} />
+        <KeyValues rows={[["Config hash", <Mono>{String(r.config_hash).slice(0, 24)}</Mono>],
+          ["Code", <Mono>{cv.app_version ? `v${cv.app_version} · ` : ""}{String(cv.git_commit ?? "—").slice(0, 12)}{cv.dirty ? " (modified)" : ""}</Mono>],
+          ["Source hash", <Mono>{String(cv.source_sha256 ?? "—").slice(0, 16)}</Mono>],
+          ["Trades hash", <Mono>{String(r.trades_hash).slice(0, 24)}</Mono>],
+          ["Causality check", r.causality_check ? `passed=${r.causality_check.passed}, cuts=${r.causality_check.cuts_tested}` : "—"],
+          ["Execution", quotes ? "directional BID/ASK quotes (long ASK→BID, short BID→ASK)" : `single series, spread ${c.spread_source ?? "fixed"}`],
+          ["Cost scenario", <Mono>{c.scenario || c.profile || "—"}</Mono>], ["Cost status", <Badge tone={a.cost_status === "assumed" ? "warn" : "neutral"}>{a.cost_status}</Badge>],
+          ["Cost basis", <span className="small">{c.basis || "—"}</span>], ["Seed", String(r.seed ?? "—")]]} />
+      </div>
+    </Card>
+  );
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 // =========================================================================== results
 export function ResultsPage() {
   const route = useRoute();
@@ -147,8 +180,8 @@ function RunList() {
   return (
     <div className="page">
       <header className="page-head"><h1>Results</h1></header>
-      <Banner tone="info">Single backtests recorded in the run registry (status IN_SAMPLE). Listed chronologically — no ranking, no
-        “best strategy”, no significance verdict. Analytics, OOS and robustness arrive in Phases 5–6.</Banner>
+      <Banner tone="info">Runs recorded in the run registry, each with its own status (in-sample, out-of-sample, walk-forward). Listed
+        chronologically — no ranking, no “best strategy”, no significance verdict. Open a run for analytics, provenance and robustness.</Banner>
       <Card title="Research runs">{real.length ? table(real, "runs-real") : <Empty>No stored research runs in this workspace. <ChooseWorkspaceLink /></Empty>}</Card>
       <Card title="Synthetic demonstrations">
         <p className="muted small">{SYNTHETIC_NOTICE} Kept separate from research runs.</p>
@@ -160,6 +193,7 @@ function RunList() {
 
 function RunPage({ id }: { id: string }) {
   const { data, error } = useApi<RunDetail>(`/api/results/${id}`, [id]);
+  const an = useApi<RunAnalytics>(`/api/results/${id}/analytics`, [id]);
   if (error) return <ErrorPanel error={error} />;
   if (!data) return <Loading label="Loading run…" />;
   const r = data.record as Record<string, any>;
@@ -175,6 +209,11 @@ function RunPage({ id }: { id: string }) {
           <Button small onClick={() => go(`/prop?run=${id}`)} testId="run-prop">Prop simulation</Button>
         </div></header>
       {data.synthetic && <Banner tone="demo" testId="synthetic-banner"><b>{SYNTHETIC_NOTICE}</b></Banner>}
+      {an.data?.run.holdout && <Banner tone="info" testId="holdout-run-banner"><b>Protocol holdout evaluation.</b> This run is the one
+        permitted look at the locked holdout for this candidate. Its formal outcome (criteria met / not met, never “accepted”) is in the holdout
+        ledger; the statistics below are descriptive.</Banner>}
+      {an.data && an.data.n_trades > 0 && <PerformanceKpis a={an.data} />}
+      <ProvenanceSection r={r} id={id} />
       <Card title="Record">
         <KeyValues rows={[["Status", <Badge>{r.status}</Badge>], ["Strategy", <Mono>{r.strategy?.strategy_id}</Mono>],
           ["Dataset", <Mono>{r.dataset?.dataset_id}</Mono>], ["Created", shortTime(r.created_at)],
@@ -185,6 +224,14 @@ function RunPage({ id }: { id: string }) {
       <Card title="Headline metrics"><MetricsView metrics={r.headline_metrics ?? {}} /></Card>
       <Card title="Equity and drawdown (net R)"><EquityChart runId={id} /></Card>
       <RunAnalytics runId={id} />
+      {an.error ? <ErrorPanel error={an.error} title="Detailed analytics unavailable" /> : !an.data ? <Loading label="Computing detailed analytics…" />
+        : an.data.n_trades > 0 && <>
+          <h3>Performance breakdowns</h3><PerformancePanels a={an.data} />
+          <h3>Equity, drawdown and rolling expectancy</h3><EquityPanels a={an.data} />
+          <h3>Trade behaviour</h3><TradePanels a={an.data} />
+          <h3>Robustness (descriptive)</h3>
+          <div className="panel-grid"><CostPanel a={an.data} /><MonteCarloPanel a={an.data} /></div>
+        </>}
       <Card title="Assumptions"><pre className="code">{JSON.stringify(r.assumptions, null, 2)}</pre></Card>
       <Card title={`Trades (${data.trades_shown} of ${data.n_trades})`}>
         {data.trades.length ? <TableWrap><table>

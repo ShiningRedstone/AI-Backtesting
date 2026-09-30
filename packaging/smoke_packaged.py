@@ -28,6 +28,46 @@ import urllib.request
 from pathlib import Path
 
 problems: list[str] = []
+_procs: list[subprocess.Popen] = []          # every process this script starts: all are reaped in main()'s finally
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Terminate proc AND its children (packaged workers), then reap it. Windows: taskkill /T (Popen.kill ends only
+    the parent and would leave worker processes holding the SQLite file)."""
+    if proc.poll() is None:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL) if os.getpgid(proc.pid) == proc.pid else proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(30)
+    except subprocess.TimeoutExpired:
+        pass
+    if proc.stdout:
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+
+
+def run_tree(cmd, timeout):
+    """subprocess.run(capture_output, timeout) that also ends the child's process tree on a timeout."""
+    kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
+    _procs.append(p)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(p)
+        raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def check(cond, what):
@@ -40,7 +80,7 @@ def check(cond, what):
 def http(url, body=None, timeout=120):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"} if data else {})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout) as r:   # loopback: no proxy
         raw = r.read()
         return r.status, raw, r.headers.get("Content-Type", "")
 
@@ -50,11 +90,17 @@ def api(base, path, body=None):
 
 
 def start(cmd, root, extra=()):
-    kw = {}
-    if os.name == "nt":
-        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    return subprocess.Popen([*cmd, "--data-root", str(root), "--no-browser", "--demo", *extra],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kw)
+    kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    # scratch settings / update staging / an empty local release folder: the smoke test never touches the
+    # user's settings and never contacts GitHub (the packaged updater would otherwise check at start-up)
+    scratch = Path(root)
+    (scratch / "no-release").mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "EDGELAB_SETTINGS": str(scratch / "settings" / "settings.json"),
+           "EDGELAB_UPDATE_CACHE": str(scratch / "update-cache"), "EDGELAB_UPDATE_SOURCE": str(scratch / "no-release")}
+    proc = subprocess.Popen([*cmd, "--data-root", str(root), "--no-browser", "--demo", *extra],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, **kw)
+    _procs.append(proc)
+    return proc
 
 
 def stop(proc):
@@ -65,8 +111,8 @@ def stop(proc):
     try:
         out, _ = proc.communicate(timeout=60)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        out, _ = proc.communicate()
+        kill_tree(proc)
+        out = ""
     return proc.returncode, out
 
 
@@ -84,7 +130,7 @@ def wait_runtime(path: Path, proc, timeout=180):
     return None
 
 
-def main(argv=None) -> int:
+def _main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--exe", help="packaged executable (dist/EdgeLab/EdgeLab[.exe])")
@@ -145,6 +191,23 @@ def main(argv=None) -> int:
         check(cv.get("build_id") == manifest["build_id"] == status["runtime"]["build_id"],
               f"build id {cv.get('build_id')} matches the bundled manifest")
         check(cv.get("source_sha256") == manifest["source_sha256"], "source hash comes from the manifest")
+    print("\n10b. version, updater and research-terminal read models")
+    ver = api(base_url, "/api/version")
+    info_ui = json.loads(http(base_url + "/build-info.json")[1])
+    check(ver.get("version") and ver["version"] == info_ui.get("app_version"), f"one version across backend and UI ({ver.get('version')})")
+    if bundle:
+        check(ver["version"] == manifest.get("app_version"), "the build manifest carries the same version")
+    us = api(base_url, "/api/update/status")
+    check(us.get("current_version") == ver.get("version"), "updater reports the installed version")
+    if bundle:
+        check(us.get("apply_supported") is True and Path(us.get("install_dir") or "").resolve() == bundle.resolve(),
+              f"updater knows the installation ({us.get('install_dir')})")
+    chk = api(base_url, "/api/update/check", {})
+    check(chk["check"]["state"] == "error" and chk["check"]["error"]["code"] == "NO_RELEASE" and not chk["available"],
+          "a check without a release is reported, never fatal")
+    check(api(base_url, "/api/health").get("backend") == "ok", "the app keeps running after a failed check")
+    for route in ("/api/overview", "/api/explorer/strategies?scope=any", "/api/research/dashboard?include_synthetic=1", "/api/pipeline"):
+        check(isinstance(api(base_url, route), dict), f"{route} responds")
     print("\n11. datasets and UI workflows (same API the UI calls)")
     ds = api(base_url, "/api/datasets")
     check(len(ds) >= 2, f"datasets listed ({len(ds)})")
@@ -191,7 +254,7 @@ def main(argv=None) -> int:
     runs_before = len(api(base_url, "/api/results"))
 
     print("\n   single instance")
-    second = subprocess.run([*cmd, "--data-root", str(base), "--no-browser", "--demo"], capture_output=True, text=True, timeout=120)
+    second = run_tree([*cmd, "--data-root", str(base), "--no-browser", "--demo"], 120)
     check(second.returncode == 0 and "already running" in second.stdout, "a second launch reuses the running instance")
 
     print("\n12. shutdown")
@@ -213,7 +276,7 @@ def main(argv=None) -> int:
         check(len(api(info2["url"], "/api/results")) == runs_before, "runs still listed after restart")
         check(stop(proc)[0] == 0, "second shutdown clean")
     else:
-        proc.kill()
+        kill_tree(proc)
 
     print("\n   CLI and process-parallel research (worker processes)")
     fixtures_ids = [x["strategy_id"] for x in strategies][:3]
@@ -221,8 +284,7 @@ def main(argv=None) -> int:
             "max_cells": 50, "seed": 1, "workers": 2}
     spec_file = base / "smoke_search.json"
     spec_file.write_text(json.dumps(spec))
-    cli = subprocess.run([*cmd, "cli", "--root", str(root), "--json", "research", "run", str(spec_file), "--workers", "2"],
-                         capture_output=True, text=True, timeout=900)
+    cli = run_tree([*cmd, "cli", "--root", str(root), "--json", "research", "run", str(spec_file), "--workers", "2"], 900)
     try:
         res = json.loads(cli.stdout[cli.stdout.index("{"):])
     except ValueError:
@@ -235,6 +297,23 @@ def main(argv=None) -> int:
         shutil.rmtree(base.parent, ignore_errors=True)
     print("\n==== PACKAGED SMOKE TEST:", "PASS" if not problems else f"FAIL {problems}")
     return 0 if not problems else 1
+
+
+def main(argv=None) -> int:
+    """_main inside a guard: whatever happens (failed check, HTTP error, timeout, crash), every process started here
+    is ended and reaped before returning, so nothing keeps the scratch SQLite store open; a crash is a recorded FAIL."""
+    try:
+        return _main(argv)
+    except SystemExit:
+        raise
+    except BaseException:                                                   # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        print("\n==== PACKAGED SMOKE TEST: FAIL (unexpected exception, see above)", flush=True)
+        return 1
+    finally:
+        for p in _procs:
+            kill_tree(p)
 
 
 if __name__ == "__main__":

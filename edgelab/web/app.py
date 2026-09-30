@@ -35,6 +35,7 @@ PROP_SIM_ID = re.compile(r"^PROP_[0-9A-F]{16}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
 AI_GEN_ID = re.compile(r"^AIG_[0-9A-F]{12}$")
 AI_PROP_ID = re.compile(r"^AIP_[0-9A-F]{12}$")
+PROTOCOL_ID = re.compile(r"^RP_[0-9A-F]{12}$")
 
 
 class ApiError(Exception):
@@ -637,6 +638,70 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if not isinstance(ids, list):
             raise _bad("strategy_ids must be a JSON list")
         return jsonify(call(svc.select_shortlist, _id(sid, SEARCH_ID, "search id"), ids))
+
+    # ------------------------------------------------------------------ version + application updates
+    from edgelab.updater.service import register_routes as register_update_routes
+    register_update_routes(app, body, _bad)
+
+    # ------------------------------------------------------------------ research terminal (read-only)
+    @app.get("/api/overview")
+    def research_overview():
+        return jsonify(call(svc.research_overview))
+
+    def _params(keys: tuple[str, ...]) -> dict:
+        out = {}
+        for k in keys:
+            v = request.args.get(k)
+            if v is None or v == "":
+                continue
+            if len(v) > 200:
+                raise _bad(f"{k} is too long")
+            out[k] = v
+        for k in ("page", "page_size"):
+            if k in out and not out[k].isdigit():
+                raise _bad(f"{k} must be a positive integer")
+        for k in ("min_trades", "max_trades_per_week"):
+            if k in out:
+                try:
+                    float(out[k])
+                except ValueError:
+                    raise _bad(f"{k} must be a number") from None
+        return out
+
+    @app.get("/api/explorer/strategies")
+    def explorer_strategies():
+        return jsonify(call(svc.explore_strategies, _params((
+            "q", "strategy_id", "family_id", "timeframe", "session", "direction", "entry_type", "stop_type",
+            "target_type", "source", "instrument", "state", "protocol", "scope", "min_trades",
+            "max_trades_per_week", "tested_only", "sort", "order", "page", "page_size"))))
+
+    @app.get("/api/research/dashboard")
+    def research_dashboard():
+        return jsonify(call(svc.research_dashboard, _params(("scope", "instrument", "dataset_id", "family_id",
+                                                             "include_synthetic"))))
+
+    @app.get("/api/results/<rid>/analytics")
+    def result_analytics(rid):
+        return jsonify(call(svc.run_analytics, _id(rid, RUN_ID, "run id")))
+
+    @app.get("/api/strategies/<sid>/pipeline")
+    def strategy_pipeline(sid):
+        return jsonify(call(svc.strategy_pipeline, _id(sid, STRATEGY_ID, "strategy id")))
+
+    @app.get("/api/pipeline")
+    def pipeline_board():
+        return jsonify(call(svc.pipeline_board))
+
+    @app.get("/api/protocols")
+    def protocols():
+        return jsonify(call(svc.list_protocols))
+
+    @app.get("/api/protocols/<pid>")
+    def protocol_detail(pid):
+        """Read-only: the verified protocol record and its counters. There is deliberately no HTTP route
+        that creates, edits or retires a protocol, or resets a ledger."""
+        pid = _id(pid, PROTOCOL_ID, "protocol id")
+        return jsonify({"record": call(svc.get_protocol, pid), "status": call(svc.protocol_status, pid)})
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")
