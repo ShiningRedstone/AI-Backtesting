@@ -148,7 +148,7 @@ class TestProtocolRecord(ProtocolBase):
         forged = copy.deepcopy(rec)
         forged["material"]["holdout_budget"]["max_unique_candidate_evaluations"] = 99
         forged["material_hash"] = hash_obj(forged["material"])
-        self.refused("PROTOCOL_IMMUTABLE", s.store.save_protocol, forged, "NQ_DUKASCOPY@DUKASCOPY")
+        self.refused("PROTOCOL_TAMPERED", s.store.save_protocol, forged, "NQ_DUKASCOPY@DUKASCOPY")    # id != hash
         s.store._exec("UPDATE research_protocols SET record_json = ? WHERE protocol_id = ?",
                       (json.dumps(forged), p["protocol_id"]))                                   # direct tampering
         self.refused("PROTOCOL_TAMPERED", s.get_protocol, p["protocol_id"])

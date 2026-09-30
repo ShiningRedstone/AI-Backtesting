@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Robust acceptance statistics, protocol version 2 (ADR-57)
+
+| Item | Status |
+|---|---|
+| OOS confidence = `min(normal, bootstrap-t)` lower bound at the Bonferroni per-test alpha; B = 1,000,000, derived seed, deterministic, monotone in trial count; degenerate/small samples never met | IMPLEMENTED, TESTED (synthetic) |
+| Random-entry control = exact Monte-Carlo p-value (<= 0.05 with 100 controls), documented as a robustness filter, not a familywise test | IMPLEMENTED, TESTED |
+| Version-1 protocol records keep their own rules; `save_protocol` verifies record identity | IMPLEMENTED, TESTED |
+| Retire the zero-trial v1 protocol `RP_257969CFAFFD` and create the v2 protocol in the user workspace | PENDING (Windows command; requires this code) |
+| Serial dependence (block bootstrap) | NOT IMPLEMENTED (documented limitation) |
+
 ## Locked research protocol and ledgers (ADR-56, pre-AI gate)
 
 | Item | Status |

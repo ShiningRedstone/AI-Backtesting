@@ -794,6 +794,51 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-57 Robust acceptance statistics (research protocol version 2)
+- **Problem:** the v1 OOS confidence criterion was the normal bound `mean - z*se` at the Bonferroni
+  one-sided alpha `0.05/N`. At N = 2000 that is alpha 2.5e-5, z ~ 4.06. For left-skewed trade returns
+  (many small wins, rare large losses) the studentized mean's upper tail is heavier than normal. In a
+  synthetic check at alpha 1e-3 the normal bound exceeded the true mean ~3x as often as nominal
+  (right-skewed returns: ~nominal), so v1 was anti-conservative for exactly the strategies it must
+  reject. The v1 control rule (a linear-interpolated 95th percentile of 100 controls) had an inexact
+  definition and could be misread as a significance test.
+- **Chosen (protocol_version 2, `research/protocol.py`):**
+  - `oos_confidence` = `min_normal_bootstrap_t_v1`:
+    `LB = min(mean - z*se, mean - q*se) = mean - max(z, q)*se`, with
+    `se = std(ddof=1)/sqrt(n)` of the OOS per-trade net R, `z = Phi^-1(1 - alpha')`, and `q` the
+    `ceil((1 - alpha')*B)`-th smallest of `B` studentized bootstrap statistics
+    `t*_b = (mean*_b - mean) / (std*_b/sqrt(n))`.
+  - Bootstrap parameters, all pre-registered:
+    - trades resampled with replacement, `B = 1,000,000`, which leaves >= 25 replicates beyond the
+      tail at the full 2000-trial budget;
+    - drawn in chunks of 2000 with `numpy.random.default_rng(seed)`;
+    - `seed = int(hash_obj({protocol_id, logic_hash, purpose})[:16], 16)`: derived, never chosen,
+      and one look per candidate, so no seed shopping;
+    - a zero resample se gives a signed `inf` (conservative).
+  - `n < 30`, `se = 0` or non-finite returns -> unavailable -> NOT met.
+  - The minimum of the two bounds is valid whenever either approximation is. It is never easier than
+    the normal bound, and it is monotone non-increasing in the trial count (the same `B` draws; only
+    the quantile level moves).
+  - Multiple testing is unchanged (`Bonferroni-familywise-alpha`, familywise 0.05, family = counted
+    unique trials). The per-test `alpha' = 0.05/N` is passed exactly into both bounds.
+  - Random control = `monte_carlo_pvalue_v1`: `p = (1 + #{controls with expectancy_r >= candidate or
+    non-finite}) / (100 + 1) <= 0.05`, i.e. at most 4 of 100 controls may match or beat the candidate.
+    It is a **robustness filter** against a conditional null, not a familywise test: its smallest
+    attainable p is 1/101, so it cannot and does not carry the trial-count adjustment.
+  - Protocol records store the whole definition. Version-1 records are still assessed by their own
+    rules (normal / percentile).
+  - `store.save_protocol` verifies a record's identity (`PROTOCOL_TAMPERED`) before any write.
+- **Limitations (disclosed, not solved):**
+  - trade-level resampling assumes i.i.d. trades; serial dependence and regime change are not modelled
+    (a block bootstrap would be the next step);
+  - bootstrap quantiles at ~2.5e-5 rest on ~25 tail replicates and on the empirical distribution,
+    which cannot represent losses larger than any observed;
+  - results depend on numpy's PCG64 stream (the numpy version is recorded in each assessment).
+- **Protocol versioning:** the change alters `acceptance_criteria` and `protocol_version`, so it is a
+  new protocol identity. The user-workspace protocol `RP_257969CFAFFD` (v1) had zero trials, zero
+  proposal attempts and zero holdout looks. It is retired, never edited, before any numerical trial,
+  and a v2 protocol with the same windows, budgets and exposure replaces it.
+
 ### ADR-56 Locked research protocol, holdout ledger, program-level trial ledger (pre-AI gate)
 - **Problem:** the pre-AI audit found three protocol blockers:
   - no locked holdout (OOS splits were chosen per call and searches could span all data);

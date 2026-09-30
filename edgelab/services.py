@@ -1187,9 +1187,13 @@ class Services:
                         "refusals": sum(1 for h in ho if h["status"] == "refused"),
                         "evaluated_strategy_ids": [h["strategy_id"] for h in looks]},
             "multiple_testing": {**mt, "effect": (
-                f"a holdout candidate passes oos_confidence only if its OOS expectancy_r lower bound "
-                f"mean - {mt['z_one_sided']:.4f} * se exceeds {mat['acceptance_criteria']['oos_confidence']['must_exceed']}; "
-                "z grows with every counted unique trial (family_size) and is recomputed at evaluation time")},
+                f"a holdout candidate passes oos_confidence only if its OOS expectancy_r lower bound at one-sided "
+                f"alpha {mt['per_test_alpha']:.3g} exceeds {mat['acceptance_criteria']['oos_confidence']['must_exceed']}: "
+                + ("mean - max(z, q_boot) * se with z = "
+                   f"{mt['z_one_sided']:.4f} and q_boot the bootstrap-t quantile at the same alpha"
+                   if mat['acceptance_criteria']['oos_confidence'].get('method_id') == 'min_normal_bootstrap_t_v1'
+                   else f"mean - {mt['z_one_sided']:.4f} * se")
+                + "; alpha shrinks with every counted unique trial (family_size) and is recomputed at evaluation time")},
             "pre_protocol_exposure": mat["pre_protocol_exposure"]})
 
     def _protocol_gate(self, ds, strat, entry_point: str, holdout_access_id: str | None) -> dict | None:
@@ -1419,7 +1423,9 @@ class Services:
             costs = (cost_sensitivity(trades, mat["acceptance_criteria"]["cost_stress"]["multipliers"]).to_dict("records")
                      if len(trades) else [])
             verdict = rp.assess_holdout(mat, cell["metrics"], costs,
-                                        [r.get("expectancy_r") for r in ctrl["realizations"]], n_trials)
+                                        [r.get("expectancy_r") for r in ctrl["realizations"]], n_trials,
+                                        trade_r=trades["net_r"].to_numpy(float) if len(trades) else [],
+                                        seed=rp.derive_seed(protocol_id, doc["logic_hash"]))
         except Exception as exc:
             self.store.update_holdout_access(aid, status="failed", completed_at=now(),
                                              reason=f"{type(exc).__name__}: {exc}")

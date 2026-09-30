@@ -26,6 +26,12 @@ Trials. One unique numerical trial = (protocol, logic_hash, content hash of the 
 only the first completed event of a key is ``counted``. Proposal attempts (AI generations, Mode B
 batches) are a separate ledger: a duplicate definition is a new attempt but never a new trial.
 
+Acceptance statistics (protocol_version 2, ADR-57). The OOS confidence criterion uses
+``LB = min(normal bound, bootstrap-t bound) = mean - max(z, q*) * se`` at the Bonferroni per-test alpha,
+with a pre-registered replicate count and a seed derived from (protocol, candidate logic) - see
+``robust_lower_bound``. The random-entry control is an exact Monte-Carlo p-value robustness filter,
+NOT a familywise test. Version-1 records keep their own (normal / percentile) rules when assessed.
+
 Refusals are ``ProtocolRefusal`` (a ValueError) with a machine-readable ``code``.
 Nothing here reads results into AI context; the AI layer only sees the protocol id and the
 discovery window (edgelab/ai/context.py FORBIDDEN_KEYS still applies).
@@ -42,7 +48,7 @@ import pandas as pd
 
 from edgelab.core.identity import hash_obj
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 STATUSES = ("ACTIVE", "RETIRED")
 ENTRY_POINTS = ("backtest_strategy", "search_cell", "internal_validation", "random_control_candidate",
                 "holdout_evaluation")
@@ -50,20 +56,41 @@ SAMPLE_ORDER = ("LOW SAMPLE SIZE", "MODERATE SAMPLE", "ADEQUATE SAMPLE")
 
 DEFAULT_TRIAL_BUDGET = 2000
 DEFAULT_HOLDOUT_LOOKS = 10
+BOOTSTRAP_REPLICATES = 1_000_000     # 25 / (0.05 / 2000): >= 25 replicates beyond the tail at the full trial budget
+BOOTSTRAP_MIN_TRADES = 30
+BOOTSTRAP_CHUNK = 2000
 DEFAULT_ACCEPTANCE = {
     "min_oos_sample_label": "ADEQUATE SAMPLE",
     "min_oos_expectancy_r_exclusive": 0.0,
     "oos_confidence": {
-        "statistic": "one-sided lower confidence bound of OOS expectancy_r",
-        "method": "normal approximation mean - z * se (the metrics layer's expectancy_se), z = "
-                  "inverse normal of (1 - per-test alpha) from the multiple_testing rule",
+        "method_id": "min_normal_bootstrap_t_v1",
+        "statistic": "one-sided lower confidence bound of OOS expectancy_r (per-trade net R)",
+        "definition": "LB = min(mean - z*se, mean - q_boot*se) = mean - max(z, q_boot)*se, se = std(ddof=1)/sqrt(n); "
+                      "z = inverse standard normal of (1 - per_test_alpha); q_boot = the ceil((1 - per_test_alpha)*B)-th "
+                      "smallest of t*_b = (mean*_b - mean) / (std*_b(ddof=1)/sqrt(n)), b = 1..B",
+        "bootstrap": {"method": "studentized bootstrap (bootstrap-t), trades resampled with replacement",
+                      "resampling_unit": "one trade (i.i.d. assumption; serial dependence is NOT modelled)",
+                      "replicates": BOOTSTRAP_REPLICATES, "chunk": BOOTSTRAP_CHUNK,
+                      "rng": "numpy.random.default_rng(seed) (PCG64), integers(0, n, (chunk, n)) per chunk",
+                      "seed": "int(first 16 hex of hash_obj({protocol_id, logic_hash, purpose: "
+                              "'oos_confidence_bootstrap_t_v1'}), 16) - derived, never chosen",
+                      "zero_resample_se": "t* = +inf if mean* > mean, -inf if mean* < mean, 0 if equal (conservative)",
+                      "min_trades": BOOTSTRAP_MIN_TRADES},
+        "degenerate": "n < min_trades, se == 0 or any non-finite value -> unavailable -> criterion NOT met",
+        "combination": "the minimum of both bounds: valid whenever either approximation is valid; never easier than "
+                       "the normal bound alone",
         "must_exceed": 0.0},
     "min_profit_factor_exclusive": 1.0,
     "random_control": {
+        "rule_id": "monte_carlo_pvalue_v1",
         "method": "matched random-entry control (research/controls.py) on the holdout window",
-        "n_controls": 100, "seed": 0, "statistic": "expectancy_r", "percentile": 95,
-        "rule": "candidate OOS expectancy_r must exceed the 95th percentile of the control realizations "
-                "(unadjusted for multiple testing; the trial-count adjustment is carried by oos_confidence)"},
+        "n_controls": 100, "seed": 0, "statistic": "expectancy_r",
+        "p_value": "(1 + #{controls with expectancy_r >= candidate or non-finite}) / (n_controls + 1)",
+        "max_p_value": 0.05,
+        "role": "robustness filter against a conditional null (entry timing/direction randomized among the "
+                "candidate's own eligible bars; same exits, costs, sizing). NOT a familywise significance test and "
+                "NOT a multiple-testing correction: the smallest attainable p is 1/101; the trial-count adjustment "
+                "is carried by oos_confidence only"},
     "cost_stress": {"multipliers": [1.5, 2.0], "rule": "OOS net_r >= 0 at each multiplier of the modelled "
                                                        "transaction costs (analytics.metrics.cost_sensitivity)"},
     "in_sample_rank_sufficient": False,
@@ -233,6 +260,67 @@ def bonferroni(multiple_testing: Mapping, family_size: int) -> dict:
             "family_size": m, "per_test_alpha": alpha, "z_one_sided": NormalDist().inv_cdf(1.0 - alpha)}
 
 
+def derive_seed(protocol_id: str, logic_hash: str, purpose: str = "oos_confidence_bootstrap_t_v1") -> int:
+    """The pre-registered bootstrap seed of one candidate under one protocol (never user-chosen)."""
+    return int(hash_obj({"protocol_id": protocol_id, "logic_hash": logic_hash, "purpose": purpose})[:16], 16)
+
+
+def bootstrap_t_stats(r: np.ndarray, replicates: int, seed: int, chunk: int = BOOTSTRAP_CHUNK) -> np.ndarray:
+    """B studentized bootstrap statistics t*_b = (mean*_b - mean) / (std*_b / sqrt(n)), trades resampled
+    with replacement. Deterministic for (r, replicates, seed, chunk); zero resample se -> signed inf / 0."""
+    r = np.asarray(r, float)
+    n, m0 = len(r), float(r.mean())
+    rng = np.random.default_rng(seed)
+    out = np.empty(int(replicates))
+    for i in range(0, int(replicates), chunk):
+        k = min(chunk, int(replicates) - i)
+        x = r[rng.integers(0, n, size=(k, n))]
+        d = x.mean(axis=1) - m0
+        se = x.std(axis=1, ddof=1) / math.sqrt(n)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = d / se
+        zero = se == 0
+        t[zero] = np.where(d[zero] > 0, np.inf, np.where(d[zero] < 0, -np.inf, 0.0))
+        out[i:i + k] = t
+    return out
+
+
+def robust_lower_bound(r: Sequence[float], per_test_alpha: float, spec: Mapping, seed: int,
+                       replicates: int | None = None, t_stats: np.ndarray | None = None) -> dict:
+    """``oos_confidence`` method ``min_normal_bootstrap_t_v1``: LB = mean - max(z, q_boot) * se at the
+    one-sided ``per_test_alpha``. Unavailable (never met) for degenerate / too small / non-finite samples."""
+    b = spec["bootstrap"]
+    x = np.asarray(r, float)
+    n = int(len(x))
+    base = {"method_id": spec["method_id"], "n": n, "per_test_alpha": per_test_alpha, "seed": int(seed),
+            "replicates": int(replicates or b["replicates"]), "numpy": np.__version__}
+    if n < b["min_trades"] or not np.isfinite(x).all():
+        return {**base, "available": False, "reason": f"n < {b['min_trades']} or non-finite trade returns", "lb": None}
+    mean, sd = float(x.mean()), float(x.std(ddof=1))
+    se = sd / math.sqrt(n)
+    if not se > 0:
+        return {**base, "available": False, "reason": "zero standard error (degenerate sample)", "lb": None}
+    if not 0 < per_test_alpha < 1:
+        raise ValueError("per_test_alpha must be in (0, 1)")
+    z = NormalDist().inv_cdf(1.0 - per_test_alpha)
+    t = t_stats if t_stats is not None else bootstrap_t_stats(x, base["replicates"], seed, b.get("chunk", BOOTSTRAP_CHUNK))
+    k = math.ceil((1.0 - per_test_alpha) * len(t))                 # order statistic (1-based), conservative
+    q = float(np.sort(t)[min(k, len(t)) - 1])
+    lb_n, lb_b = mean - z * se, (mean - q * se if math.isfinite(q) else -math.inf)
+    return {**base, "available": True, "mean": mean, "se": se, "z": z, "q_boot": q, "order_statistic": k,
+            "lb_normal": lb_n, "lb_bootstrap_t": lb_b, "lb": min(lb_n, lb_b),
+            "binding": "normal" if lb_n <= lb_b else "bootstrap_t"}
+
+
+def control_p_value(candidate: float | None, controls: Sequence[float]) -> float | None:
+    """Exact Monte-Carlo p-value; ties and non-finite control statistics count against the candidate."""
+    if candidate is None or not np.isfinite(candidate) or not len(controls):
+        return None
+    c = np.array([np.nan if v is None else v for v in controls], float)
+    worse = int(np.sum(~np.isfinite(c) | (c >= candidate)))
+    return (1 + worse) / (len(c) + 1)
+
+
 def _num(x) -> float | None:
     try:
         v = float(x)
@@ -242,7 +330,8 @@ def _num(x) -> float | None:
 
 
 def assess_holdout(material: Mapping, metrics: Mapping, cost_rows: Sequence[Mapping],
-                   control_expectancies: Sequence[float], family_size: int) -> dict:
+                   control_expectancies: Sequence[float], family_size: int, trade_r: Sequence[float] | None = None,
+                   seed: int | None = None) -> dict:
     """Apply the protocol's pre-registered criteria to one holdout evaluation. Every criterion is
     reported (pass / fail / unavailable); unavailable counts as not met. Never 'accepted'."""
     ac, mt = material["acceptance_criteria"], material["multiple_testing"]
@@ -255,20 +344,38 @@ def assess_holdout(material: Mapping, metrics: Mapping, cost_rows: Sequence[Mapp
     e, se, n = _num(metrics.get("expectancy_r")), _num(metrics.get("expectancy_se")), metrics.get("trade_count") or 0
     crit["expectancy"] = {"value": e, "required": f"> {ac['min_oos_expectancy_r_exclusive']}",
                           "met": e is not None and e > ac["min_oos_expectancy_r_exclusive"]}
-    lb = e - adj["z_one_sided"] * se if (e is not None and se is not None and n > 1) else None
-    crit["adjusted_confidence"] = {"lower_bound": lb, "z": adj["z_one_sided"], "per_test_alpha": adj["per_test_alpha"],
-                                   "family_size": adj["family_size"],
-                                   "required": f"> {ac['oos_confidence']['must_exceed']}",
-                                   "met": lb is not None and lb > ac["oos_confidence"]["must_exceed"]}
+    oc = ac["oos_confidence"]
+    if oc.get("method_id") == "min_normal_bootstrap_t_v1":
+        if trade_r is None or seed is None:
+            raise ValueError("the robust lower bound needs the OOS per-trade net R and the derived seed")
+        rb = robust_lower_bound(trade_r, adj["per_test_alpha"], oc, seed)
+        lb = rb["lb"]
+        crit["adjusted_confidence"] = {**rb, "lower_bound": lb, "family_size": adj["family_size"],
+                                       "required": f"> {oc['must_exceed']}",
+                                       "met": bool(rb["available"] and lb is not None and lb > oc["must_exceed"])}
+    else:                                    # protocol_version 1 records: normal approximation only
+        lb = e - adj["z_one_sided"] * se if (e is not None and se is not None and n > 1) else None
+        crit["adjusted_confidence"] = {"method_id": "normal_v1", "lower_bound": lb, "z": adj["z_one_sided"],
+                                       "per_test_alpha": adj["per_test_alpha"], "family_size": adj["family_size"],
+                                       "required": f"> {oc['must_exceed']}",
+                                       "met": lb is not None and lb > oc["must_exceed"]}
     pf = metrics.get("profit_factor")
     pf_v = math.inf if (pf is None and (metrics.get("loss_rate") == 0 and (metrics.get("net_r") or 0) > 0)) else _num(pf)
     crit["profit_factor"] = {"value": pf_v, "required": f"> {ac['min_profit_factor_exclusive']}",
                              "met": pf_v is not None and pf_v > ac["min_profit_factor_exclusive"]}
     rc = ac["random_control"]
-    fin = np.array([x for x in control_expectancies if x is not None and np.isfinite(x)], float)
-    thr = float(np.percentile(fin, rc["percentile"])) if len(fin) else None
-    crit["random_control"] = {"threshold": thr, "percentile": rc["percentile"], "n_finite_controls": int(len(fin)),
-                              "candidate": e, "met": thr is not None and e is not None and e > thr}
+    if rc.get("rule_id") == "monte_carlo_pvalue_v1":
+        pv = control_p_value(e, list(control_expectancies))
+        crit["random_control"] = {"rule_id": rc["rule_id"], "p_value": pv, "max_p_value": rc["max_p_value"],
+                                  "n_controls": len(control_expectancies), "candidate": e,
+                                  "role": "robustness filter, not a familywise test",
+                                  "met": pv is not None and len(control_expectancies) == rc["n_controls"]
+                                  and pv <= rc["max_p_value"]}
+    else:                                    # protocol_version 1 records: linear-interpolated percentile
+        fin = np.array([x for x in control_expectancies if x is not None and np.isfinite(x)], float)
+        thr = float(np.percentile(fin, rc["percentile"])) if len(fin) else None
+        crit["random_control"] = {"threshold": thr, "percentile": rc["percentile"], "n_finite_controls": int(len(fin)),
+                                  "candidate": e, "met": thr is not None and e is not None and e > thr}
     stress = {float(r["cost_multiplier"]): _num(r["net_r"]) for r in cost_rows}
     need_m = [float(x) for x in ac["cost_stress"]["multipliers"]]
     crit["cost_stress"] = {"net_r": {str(k): stress.get(k) for k in need_m},

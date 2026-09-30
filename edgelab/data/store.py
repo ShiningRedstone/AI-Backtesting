@@ -275,8 +275,9 @@ class ResultStore(ABC):
     def save_protocol(self, record: dict, scope_key: str) -> bool:
         """Insert-only. The same id with the same material is a no-op (False); the same id with
         different material cannot happen honestly and is refused (PROTOCOL_IMMUTABLE)."""
-        from edgelab.research.protocol import ProtocolRefusal
+        from edgelab.research.protocol import ProtocolRefusal, verify_record
         self._require_search_storage()
+        verify_record(record)                    # id and material_hash must both be the hash of the material
         rows = self._query("SELECT material_hash FROM research_protocols WHERE protocol_id = ?", (record["protocol_id"],))
         if rows:
             if rows[0][0] != record["material_hash"]:
