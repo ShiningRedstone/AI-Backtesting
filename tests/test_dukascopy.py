@@ -288,10 +288,17 @@ class TestResearchRefusals(DukascopyBase):
     def test_backtest_refused_only_by_unconfigured_costs(self):
         with self.assertRaises(CostConfigError) as cm:
             self.svc.backtest_strategy(EMA.read_text(), self.m5)
-        self.assertIn("NQ_DUKASCOPY@DUKASCOPY", str(cm.exception))
+        self.assertIn("NQ_DUKASCOPY.providers.DUKASCOPY is incomplete - set: commission_per_million", str(cm.exception))
+        row0 = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
+        self.assertIn("set: commission_per_million", row0["cost"]["reason"])      # missing commission is the reason
         row = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
         self.assertFalse(row["runnable"])
-        self.assertEqual(row["reasons"], ["broker/provider cost profile is unconfigured - configure verified costs first"])
+        self.assertEqual(row["reasons"], ["cost scenario 'tradovate_average_slippage_proxy_v1' (assumed) is "
+                                          "incomplete - missing commission_per_million"])
+        self.assertFalse(any("unconfigured" in r for r in row["reasons"]))          # not called unconfigured
+        self.assertEqual((row["cost"]["status"], row["cost"]["incomplete"], row["cost"]["missing"]),
+                         ("assumed", True, ["commission_per_million"]))
+        self.assertIn("set: commission_per_million:", row["cost"]["reason"])       # precise error unchanged
         self.assertTrue(any("NOT verified: holidays" in x for x in row["limitations"]))       # caveat stays visible
 
     def test_calendar_back_to_provisional_is_refused_again(self):
@@ -320,7 +327,7 @@ class TestResearchRefusals(DukascopyBase):
         self.assertIsNone(identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
         with self.assertRaises(CostConfigError) as cm:
             cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
-        self.assertIn("NQ_DUKASCOPY@DUKASCOPY", str(cm.exception))
+        self.assertIn("NQ_DUKASCOPY.providers.DUKASCOPY is incomplete - set: commission_per_million", str(cm.exception))
         svc = Services(cfg=cfg, root=self.root)
         try:
             with self.assertRaises(CostConfigError):

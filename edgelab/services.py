@@ -740,13 +740,18 @@ class Services:
         """Whether one dataset (a `list_datasets` row) can run a strategy on `tf_minutes` bars
         (None = timeframe not checked), with every reason it cannot. Nothing is invented: an
         unconfigured cost profile makes the dataset ineligible."""
-        from edgelab.engine.costs import CostConfigError, cost_model_from_config
+        from edgelab.engine.costs import CostConfigError, CostScenarioIncomplete, cost_model_from_config
         from edgelab.data.schema import timeframe_minutes
         m = self.store.get_manifest(d["dataset_id"])
         reasons = []
         try:
             cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)
             cost = {"status": cm.status, "profile": getattr(cm, "profile", None)}
+        except CostScenarioIncomplete as exc:          # configured status, but the named scenario lacks fields
+            cost = {"status": exc.status, "incomplete": True, "scenario": exc.scenario, "missing": exc.missing,
+                    "reason": str(exc)}
+            name = f"'{exc.scenario}'" if isinstance(exc.scenario, str) and exc.scenario else "(unnamed)"
+            reasons.append(f"cost scenario {name} ({exc.status}) is incomplete - missing {', '.join(exc.missing)}")
         except CostConfigError as exc:
             cost = {"status": "unconfigured", "reason": str(exc)}
             reasons.append("broker/provider cost profile is unconfigured - configure verified costs first")

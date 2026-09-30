@@ -54,11 +54,36 @@ class TestDukascopyTemplate(unittest.TestCase):
 
     def test_template_shape_and_refusal(self):
         prov = self.cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
-        self.assertEqual((prov["status"], prov["commission_mode"], prov["spread_source"], prov["financing_mode"]),
-                         ("unconfigured", "notional", "dataset", "not_modeled"))
+        self.assertEqual((prov["commission_mode"], prov["spread_source"], prov["financing_mode"], prov["slippage_unit"]),
+                         ("notional", "dataset", "not_modeled", "points"))
         self.assertIsNone(prov["commission_per_million"])
         with self.assertRaises(CostConfigError):
             cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
+
+    def test_agreed_slippage_scenario_is_set_and_commission_is_the_only_gap(self):
+        prov = self.cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
+        self.assertEqual(prov["scenario"], "tradovate_average_slippage_proxy_v1")
+        self.assertEqual(prov["status"], "assumed")
+        self.assertEqual(prov["basis"].strip(),                                     # YAML '>' folds lines with spaces
+                         "Central public-evidence assumption of 2 CME NQ ticks (0.50 index points) per market/stop "
+                         "execution. Based on Tradovate's statement that slippage is normal and public Tradovate-user "
+                         "reports describing roughly 1–2 ticks / a couple ticks. This is not a statistically measured "
+                         "Tradovate-wide average and is not broker-verified for Dukascopy USATECH.IDX/USD.")
+        self.assertEqual((prov["slippage_ticks_market"], prov["slippage_ticks_stop"]), (0.50, 0.50))
+        self.assertIsNone(prov["commission_per_million"])                           # commission still unset
+        with self.assertRaises(CostConfigError) as cm:
+            cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
+        msg = str(cm.exception)
+        from edgelab.engine.costs import CostScenarioIncomplete
+        self.assertIsInstance(cm.exception, CostScenarioIncomplete)               # still a CostConfigError
+        self.assertEqual((cm.exception.scenario, cm.exception.status, cm.exception.missing),
+                         ("tradovate_average_slippage_proxy_v1", "assumed", ["commission_per_million"]))
+        self.assertIn("set: commission_per_million:", msg)                        # the ONLY missing item
+        for other in ("scenario:", "basis:", "slippage_ticks_market:", "slippage_ticks_stop:", "status:",
+                      "slippage_unit:", "commission_mode:"):
+            self.assertNotIn(other, msg)
+        # HistData's profile is untouched
+        self.assertEqual(cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA").status, "assumed")
 
     def test_notional_profile_requires_the_per_million_rate(self):
         cfg = copy.deepcopy(self.cfg)
@@ -67,10 +92,7 @@ class TestDukascopyTemplate(unittest.TestCase):
         with self.assertRaises(CostConfigError) as cm:
             cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertIn("commission_per_million", str(cm.exception))
-        prov["commission_per_million"] = 1.0
-        with self.assertRaises(CostConfigError):                                   # scenario + basis still missing
-            cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
-        prov.update(scenario="test_scenario", basis="test inputs only")
+        prov["commission_per_million"] = 1.0                                       # test input only
         m = cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertEqual((m.commission_mode, m.spread_source, m.financing_mode, m.commission_per_side),
                          ("notional", "dataset", "not_modeled", 0.0))
@@ -88,7 +110,8 @@ class TestNamedCostScenario(unittest.TestCase):
         return cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
 
     def test_each_required_field_is_named_when_missing(self):
-        self.prov["status"] = "assumed"
+        self.prov.update(status="assumed", scenario=None, basis=None, slippage_ticks_market=None,
+                         slippage_ticks_stop=None)
         with self.assertRaises(CostConfigError) as cm:
             self.model()
         msg = str(cm.exception)

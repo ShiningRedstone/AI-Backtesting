@@ -53,6 +53,14 @@ class CostConfigError(ValueError):
     """A cost model was requested for a profile that has no real numbers."""
 
 
+class CostScenarioIncomplete(CostConfigError):
+    """A named research-cost scenario (status assumed/broker_verified) lacks required fields."""
+
+    def __init__(self, message: str, scenario, status: str, missing: list[str]):
+        super().__init__(message)
+        self.scenario, self.status, self.missing = scenario, status, missing
+
+
 @dataclass(frozen=True)
 class CostModel:
     commission_per_side: float = 0.0       # $ per contract/unit per side
@@ -175,7 +183,7 @@ def _check_scenario(merged: dict, status: str, symbol: str, provider: str | None
     in points. Nothing is defaulted; a missing item refuses with the exact field."""
     import re
     where = f"costs.symbols.{symbol}{'.providers.' + provider if provider else ''}"
-    errs = []
+    errs, missing = [], []
     if not (isinstance(merged.get("scenario"), str) and re.match(SCENARIO_NAME, merged["scenario"])):
         errs.append("scenario: a name for this research-cost scenario (letters, digits, _ - .)")
     if not (isinstance(merged.get("basis"), str) and merged["basis"].strip()):
@@ -192,7 +200,9 @@ def _check_scenario(merged: dict, status: str, symbol: str, provider: str | None
         if merged.get(k) is None:
             errs.append(f"{k}: slippage in points")
     if errs:
-        raise CostConfigError(f"cost scenario at {where} is incomplete - set: " + "; ".join(errs))
+        missing = [e.split(":", 1)[0] for e in errs]
+        raise CostScenarioIncomplete(f"cost scenario at {where} is incomplete - set: " + "; ".join(errs),
+                                     merged.get("scenario"), status, missing)
 
 
 def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None = None,

@@ -89,13 +89,19 @@ costs:
       spread_points: null
       providers:
         DUKASCOPY:
-          status: unconfigured
-          notes: "shape of Dukascopy CFD pricing; every number is EMPTY until evidenced (DATA_IMPORT.md)"
+          status: assumed                   # research assumption; refused until commission_per_million is set
+          notes: "Dukascopy CFD pricing shape; slippage = agreed central assumption; commission still EMPTY (DATA_IMPORT.md)"
           # Named research-cost scenario: REQUIRED before status can change. scenario = a name (e.g.
           # "dukascopy_tier_assumption_v1"); basis = your statement of the source of each number
           # (e.g. "current published tier X; not proof of the 2021-2026 rate"). Recorded on every run.
-          scenario: null
-          basis: null
+          scenario: tradovate_average_slippage_proxy_v1
+          basis: >
+            Central public-evidence assumption of 2 CME NQ ticks (0.50 index
+            points) per market/stop execution. Based on Tradovate's statement
+            that slippage is normal and public Tradovate-user reports describing
+            roughly 1–2 ticks / a couple ticks. This is not a statistically
+            measured Tradovate-wide average and is not broker-verified for
+            Dukascopy USATECH.IDX/USD.
           # Dukascopy publishes commission per USD 1 million traded (tiered by account/volume):
           commission_mode: notional
           commission_per_million: null     # USD per USD 1,000,000 notional per side - from YOUR tier
@@ -105,8 +111,8 @@ costs:
           spread_source: dataset
           spread_points: null
           slippage_unit: points
-          slippage_ticks_market: null
-          slippage_ticks_stop: null
+          slippage_ticks_market: 0.50      # EdgeLab points (1.0 quoted price) = 50 Dukascopy points
+          slippage_ticks_stop: 0.50
           # Overnight holding costs may apply but follow changing benchmark rates: charged nothing and
           # disclosed as NOT modelled (not "none").
           financing_mode: not_modeled

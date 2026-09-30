@@ -65,9 +65,9 @@ def build_context(svc, request: Mapping, scope: Mapping, base_definition: Mappin
     ident = identity_info(inst) if inst is not None else {"identity_status": "unknown"}
     elig = svc._dataset_eligibility(next(d for d in svc.list_datasets() if d["dataset_id"] == scope["dataset_id"]))
     caveats = []
-    if elig["cost"]["status"] == "unconfigured":
-        caveats.append("the research dataset's cost profile is UNCONFIGURED: backtests are refused until costs "
-                       "are entered; do not assume any cost")
+    if elig["cost"]["status"] == "unconfigured" or elig["cost"].get("incomplete"):
+        caveats.append("the research dataset's cost profile is UNCONFIGURED or INCOMPLETE: backtests are refused "
+                       "until costs are entered; do not assume any cost")
     if ident.get("identity_status") == "provisional":
         caveats.append("the instrument's source identity is PROVISIONAL (not CME NQ; economics unknown): "
                        "express stops/targets in points or ATR, never in currency")
