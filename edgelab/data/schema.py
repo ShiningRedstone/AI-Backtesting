@@ -23,6 +23,9 @@ from edgelab.core.identity import hash_arrays
 
 BAR_COLUMNS = ("ts", "open", "high", "low", "close", "volume")
 PRICE_COLUMNS = ("open", "high", "low", "close")
+# Optional second quote side (ADR-55): the primary OHLC stays the dataset's price_basis (BID for
+# Dukascopy); these hold the ASK feed's own observed OHLC. All four or none - never inferred.
+ASK_COLUMNS = ("ask_open", "ask_high", "ask_low", "ask_close")
 ASSET_TYPES = ("FUTURE", "CFD", "SPOT", "ETF", "INDEX", "CRYPTO", "FX", "SYNTHETIC", "unspecified")
 VOLUME_TYPES = ("exchange", "tick", "none", "synthetic", "unknown")
 PRICE_BASES = ("bid", "ask", "mid", "last", "unknown")
@@ -77,9 +80,19 @@ class BarArrays:
     volume: np.ndarray
     tf_minutes: int
     spread: np.ndarray | None = None   # optional per-bar spread in price points (Phase 2, CFDs)
+    ask_open: np.ndarray | None = None   # optional observed ASK OHLC (ADR-55): all four or none
+    ask_high: np.ndarray | None = None
+    ask_low: np.ndarray | None = None
+    ask_close: np.ndarray | None = None
 
     def __post_init__(self):
-        for name in ("ts_ns", "open", "high", "low", "close", "volume", "spread"):
+        present = [getattr(self, k) is not None for k in ASK_COLUMNS]
+        if any(present) and not all(present):
+            raise ValueError("ASK OHLC is all-or-none: got only "
+                             f"{[k for k, p in zip(ASK_COLUMNS, present) if p]}")
+        if all(present) and any(len(getattr(self, k)) != len(self.ts_ns) for k in ASK_COLUMNS):
+            raise ValueError("ASK OHLC arrays must have one value per bar")
+        for name in ("ts_ns", "open", "high", "low", "close", "volume", "spread") + ASK_COLUMNS:
             arr = getattr(self, name)
             if arr is None:
                 continue
@@ -91,9 +104,22 @@ class BarArrays:
     def __len__(self) -> int:
         return len(self.ts_ns)
 
+    @property
+    def has_ask_ohlc(self) -> bool:
+        return self.ask_open is not None
+
+    def _ask(self, n: int | None = None) -> dict:
+        if not self.has_ask_ohlc:
+            return {}
+        return {k: getattr(self, k)[:n] if n is not None else getattr(self, k) for k in ASK_COLUMNS}
+
     @classmethod
     def from_frame(cls, df: pd.DataFrame, tf_minutes: int) -> "BarArrays":
         ts = to_utc_ns(df["ts"])
+        have = [k for k in ASK_COLUMNS if k in df.columns]
+        if have and len(have) != len(ASK_COLUMNS):
+            raise ValueError(f"ASK OHLC is all-or-none: frame has only {have}")
+        ask = {k: df[k].to_numpy(np.float64, copy=True) for k in have}
         return cls(ts_ns=ts.asi8.copy(),
                    open=df["open"].to_numpy(np.float64, copy=True),
                    high=df["high"].to_numpy(np.float64, copy=True),
@@ -102,13 +128,13 @@ class BarArrays:
                    volume=df["volume"].to_numpy(np.float64, copy=True),
                    tf_minutes=tf_minutes,
                    spread=(df["spread"].to_numpy(np.float64, copy=True)
-                           if "spread" in df.columns else None))
+                           if "spread" in df.columns else None), **ask)
 
     def head(self, n: int) -> "BarArrays":
         """Truncated view - used by the causality (lookahead) checker."""
         return BarArrays(self.ts_ns[:n], self.open[:n], self.high[:n], self.low[:n],
                          self.close[:n], self.volume[:n], self.tf_minutes,
-                         None if self.spread is None else self.spread[:n])
+                         None if self.spread is None else self.spread[:n], **self._ask(n))
 
     @property
     def ts(self) -> pd.DatetimeIndex:
@@ -126,6 +152,8 @@ class BarArrays:
         arrays = [self.ts_ns, self.open, self.high, self.low, self.close, self.volume]
         if self.spread is not None:          # absent spread leaves Phase 1 hashes unchanged
             arrays.append(self.spread)
+        if self.has_ask_ohlc:                # absent ASK OHLC leaves every earlier hash unchanged
+            arrays += [np.frombuffer(b"ask_ohlc", np.uint8)] + [getattr(self, k) for k in ASK_COLUMNS]
         return hash_arrays(*arrays)
 
     def to_frame(self) -> pd.DataFrame:
@@ -133,6 +161,8 @@ class BarArrays:
                            "low": self.low, "close": self.close, "volume": self.volume})
         if self.spread is not None:
             df["spread"] = self.spread
+        for k, v in self._ask().items():
+            df[k] = v
         return df
 
 
@@ -170,13 +200,17 @@ class DatasetManifest:
     has_bid_ask: bool = False
     has_spread: bool = False
     spread_source: str = "none"          # none | column | bid_ask_close
+    has_ask_ohlc: bool = False           # observed ASK OHLC stored beside the primary OHLC (ADR-55)
     provider_notes: str = ""
     import_version: str = ""
     parent_dataset_id: str | None = None  # derived (resampled) datasets point to their source
     derivation: str | None = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if not d.get("has_ask_ohlc"):        # keeps manifests (and manifest hashes) of datasets
+            d.pop("has_ask_ohlc", None)      # without ASK OHLC byte-identical to before ADR-55
+        return d
 
     def identity(self) -> dict:
         """Everything that defines the dataset, minus the wall-clock import time."""
@@ -210,6 +244,7 @@ def canonicalize(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"bars missing required columns: {missing}")
     out = df.loc[:, list(BAR_COLUMNS) + [c for c in df.columns if c not in BAR_COLUMNS]].copy()
     out["ts"] = to_utc_ns(out["ts"])
-    for c in PRICE_COLUMNS + ("volume",) + (("spread",) if "spread" in out.columns else ()):
+    extra = tuple(c for c in ("spread",) + ASK_COLUMNS if c in out.columns)
+    for c in PRICE_COLUMNS + ("volume",) + extra:
         out[c] = pd.to_numeric(out[c], errors="coerce").astype(np.float64)
     return out.reset_index(drop=True)

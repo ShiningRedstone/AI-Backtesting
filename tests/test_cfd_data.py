@@ -347,6 +347,17 @@ class TestFailuresAndGaps(Base):
         self.assertTrue(np.isnan(r["volume"].iloc[0]))                # partial -> unknown, not an under-count
         self.assertFalse(np.isnan(r["volume"].iloc[1]))
 
+    def test_resample_spread_is_the_mean_of_present_subbars_never_filled(self):
+        df = bars_from_ohlc([(100, 101, 99, 100)] * 10)
+        df["spread"] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, np.nan, 1.0, 1.0, 1.0]
+        r = resample_bars(df, UTC247, 5)
+        self.assertAlmostEqual(r["spread"].iloc[0], 3.0)                # mean of the 5 sub-bar spreads
+        self.assertTrue(np.isnan(r["spread"].iloc[1]))                  # any present sub-bar without spread -> NaN
+        gap = df.drop(index=[2]).reset_index(drop=True)                 # one 1m row MISSING in the first bucket
+        r = resample_bars(gap, UTC247, 5)
+        self.assertEqual(int(r["n_subbars"].iloc[0]), 4)
+        self.assertAlmostEqual(r["spread"].iloc[0], (1 + 2 + 4 + 5) / 4)  # observed rows only; nothing filled
+
 
 class TestStoreAndLoad(Base):
     def test_derived_timeframes_link_to_parent(self):

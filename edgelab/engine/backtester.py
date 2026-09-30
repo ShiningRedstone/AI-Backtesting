@@ -11,9 +11,16 @@ Gates (the engine refuses to run otherwise):
 R definition: 1R = |fill - stop| x point value x contracts (risk at the actual
 theoretical fill, before costs). gross_R, cost_R and net_R are all in that unit,
 so tight-stop strategies show their true cost burden.
+
+Quote model (ADR-55): ``single_series`` (default) triggers and fills every order on the dataset's
+one OHLC series (its ``price_basis``); spread, if any, is a separate cost. ``directional_bid_ask``
+(cost ``spread_source: quotes``, opt-in) fills buys on the stored ASK OHLC and sells on BID, so gross
+P&L is already after the spread and no separate spread is charged. It refuses datasets without
+complete, finite ASK OHLC; ASK is never inferred from BID and spread.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections import Counter
 from dataclasses import dataclass, field
@@ -66,6 +73,14 @@ class BacktestResult:
         return hash_arrays(*(self.trades[c].to_numpy(np.float64) for c in cols))
 
 
+def _spread_treatment(costs: CostModel) -> str:
+    if costs.spread_source == "quotes":
+        return "embedded_in_quotes"
+    if costs.spread_source == "dataset":
+        return "cost_avg_entry_exit"
+    return "fixed_cost" if costs.spread_points else "none"
+
+
 def build_market_arrays(ds: ValidatedDataset, bt_cfg: Mapping) -> MarketArrays:
     b, cal = ds.bars, ds.calendar
     ts = b.ts
@@ -84,20 +99,53 @@ def build_market_arrays(ds: ValidatedDataset, bt_cfg: Mapping) -> MarketArrays:
     return MarketArrays(b.open, b.high, b.low, b.close, force, entry_allowed, td)
 
 
-def _intrabar(ds: ValidatedDataset, ltf: ValidatedDataset | None) -> tuple[IntrabarData | None, dict]:
+def _ask_bars(b):
+    """The ASK side as a BarArrays view (OHLC = observed ASK OHLC), for map_intrabar."""
+    from edgelab.data.schema import BarArrays
+    return BarArrays(b.ts_ns, b.ask_open, b.ask_high, b.ask_low, b.ask_close, b.volume, b.tf_minutes)
+
+
+def _intrabar(ds: ValidatedDataset, ltf: ValidatedDataset | None, directional: bool = False
+              ) -> tuple[IntrabarData | None, IntrabarData | None, dict]:
+    """(bid_or_single_side, ask_side_or_None, info). Directional replay needs BOTH sides in the
+    lower-timeframe data; an HTF bar is reliable only if both sides reproduce it exactly."""
     if ltf is None:
-        return None, {"available": False, "reason": "no lower-timeframe data supplied"}
+        return None, None, {"available": False, "reason": "no lower-timeframe data supplied"}
     ltf.verify_unchanged()
     if ltf.instrument.symbol != ds.instrument.symbol:
         raise BacktestError("intrabar data is for a different instrument")
     if ltf.bars.tf_minutes >= ds.bars.tf_minutes or ds.bars.tf_minutes % ltf.bars.tf_minutes:
         raise BacktestError("intrabar timeframe must be a strict divisor of the bar timeframe")
-    start, end, reliable = map_intrabar(ds.bars, ltf.bars)
     lb = ltf.bars
+    if directional and not lb.has_ask_ohlc:
+        return None, None, {"available": False, "ltf_dataset_id": ltf.manifest.dataset_id,
+                            "ltf_has_ask_ohlc": False,
+                            "reason": "directional BID/ASK replay needs ASK OHLC in the lower-timeframe "
+                                      "dataset; it has none (never inferred) - fallback policy applies"}
+    start, end, reliable = map_intrabar(ds.bars, lb)
+    ask = None
+    if directional:
+        _, _, rel_ask = map_intrabar(_ask_bars(ds.bars), _ask_bars(lb))
+        reliable = reliable & rel_ask
+        ask = IntrabarData(lb.ask_open, lb.ask_high, lb.ask_low, lb.ask_close, start, end, reliable)
     info = {"available": True, "ltf_minutes": lb.tf_minutes,
             "ltf_dataset_id": ltf.manifest.dataset_id,
             "reliable_bar_fraction": float(reliable.mean()) if len(reliable) else 0.0}
-    return IntrabarData(lb.open, lb.high, lb.low, lb.close, start, end, reliable), info
+    if directional:
+        info.update({"ltf_has_ask_ohlc": True, "quote_sides": "entry replay on the entry side (buy: ask, "
+                     "sell: bid), exit replay on the exit side; reliable only where BID and ASK both reproduce the bar"})
+    return IntrabarData(lb.open, lb.high, lb.low, lb.close, start, end, reliable), ask, info
+
+
+def _check_quotes(bars) -> None:
+    if not bars.has_ask_ohlc:
+        raise BacktestError("cost model uses spread_source quotes (directional BID/ASK execution), but this "
+                            "dataset has no ASK OHLC - import the ASK feed's OHLC (never inferred from spread)")
+    for k in ("ask_open", "ask_high", "ask_low", "ask_close"):
+        bad = ~np.isfinite(getattr(bars, k))
+        if bad.any():
+            raise BacktestError(f"directional BID/ASK execution: {int(bad.sum())} non-finite {k} value(s) "
+                                f"(first at bar {int(np.argmax(bad))}); refusing rather than treating them as 'no trigger'")
 
 
 def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_cfg: Mapping,
@@ -123,6 +171,9 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
 
     if costs.spread_source == "dataset" and bars.spread is None:
         raise BacktestError("cost model uses dataset spread, but this dataset has no spread column")
+    directional = costs.spread_source == "quotes"
+    if directional:
+        _check_quotes(bars)
     if costs.status == "unconfigured":
         raise BacktestError("cost model is unconfigured")
     requested = bt_cfg.get("same_bar_policy", "conservative")
@@ -131,9 +182,15 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
                      limit_penetration=bt_cfg.get("limit_fill", {}).get("penetration_ticks", 0)
                      * inst.tick_size,
                      allow_next_session_entry=bt_cfg.get("entry", {}).get("allow_next_session_entry", False))
-    ib, ib_info = _intrabar(ds, ltf) if requested == "intrabar" else (None, {"available": False,
-                                                                           "reason": "policy is not intrabar"})
+    ib, ib_ask, ib_info = (_intrabar(ds, ltf, directional) if requested == "intrabar" else
+                           (None, None, {"available": False, "reason": "policy is not intrabar"}))
     A = build_market_arrays(ds, bt_cfg)
+    basis = ds.manifest.price_basis
+    if directional:     # same session masks; OHLC = observed ASK
+        A_ask = dataclasses.replace(A, o=bars.ask_open, h=bars.ask_high, l=bars.ask_low, c=bars.ask_close)
+        sides = {1: (A_ask, A, ib_ask, ib, "ask", "bid"), -1: (A, A_ask, ib, ib_ask, "bid", "ask")}
+    else:
+        sides = {d_: (A, A, ib, ib, basis, basis) for d_ in (1, -1)}
     max_per_day = bt_cfg.get("max_trades_per_day")
     ts_ns, tf_ns = bars.ts_ns, np.int64(bars.tf_minutes) * NS_PER_MIN
     pv, tick = inst.point_value, inst.tick_size
@@ -156,14 +213,15 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
             continue
         stop_abs, tgt_abs, level = sig.stop_price[i], sig.target_price[i], sig.entry_price[i]
         # --- sizing at signal time (no knowledge of the fill) -----------------------
-        planned_entry = level if order.entry_type != "market" else bars.close[i]
+        A_ent, A_ex, ib_ent, ib_ex, side_in, side_out = sides[d]
+        planned_entry = level if order.entry_type != "market" else A_ent.c[i]
         planned_risk = abs(planned_entry - stop_abs) if not math.isnan(stop_abs) else order.stop_points
         sz = size_trade(sizing, planned_risk, inst)
         if sz.contracts <= 0:
             skipped["SIZE_ZERO"] += 1
             continue
         # --- entry ------------------------------------------------------------------
-        e: Entry = find_entry(A, i, d, order.entry_type, level, order.entry_expiry_bars, pol)
+        e: Entry = find_entry(A_ent, i, d, order.entry_type, level, order.entry_expiry_bars, pol)
         if not e.filled:
             skipped[e.reason] += 1
             busy_until = max(busy_until, e.last_bar - 1)
@@ -188,8 +246,9 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
             j = int(np.searchsorted(flags, e.bar))        # first exit flag at/after the entry bar
             if j < len(flags):
                 sx = int(flags[j]) + 1                    # executes at the next bar's open
-        x = simulate_exit(A, ib, pol, e, d, stop, target, order.time_exit_bars,
-                          order.max_hold_bars, order.entry_type, level, signal_exit_bar=sx)
+        x = simulate_exit(A_ex, ib_ex, pol, e, d, stop, target, order.time_exit_bars,
+                          order.max_hold_bars, order.entry_type, level, signal_exit_bar=sx,
+                          ent=A_ent if directional else None, ib_ent=ib_ent if directional else None)
         busy_until = x["exit_bar"] - 1
         per_day[A.td[i]] += 1
 
@@ -222,7 +281,7 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
             "entry_bar": e.bar, "entry_ts": pd.Timestamp(int(ts_ns[e.bar]), tz="UTC"),
             "exit_bar": k, "exit_ts": pd.Timestamp(int(ts_ns[k] + tf_ns), tz="UTC"),
             "direction": d, "contracts": n_c, "entry_type": order.entry_type,
-            "entry_fill_kind": e.kind,
+            "entry_fill_kind": e.kind, "entry_quote_side": side_in, "exit_quote_side": side_out,
             "entry_price_theo": e.price, "entry_price_eff": e.price + d * entry_slip,
             "stop_price": stop, "target_price": target,
             "exit_price_theo": x["exit_price_theo"], "exit_price_eff": x["exit_price_theo"] - d * exit_slip,
@@ -246,18 +305,36 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
     effective = requested
     if requested == "intrabar" and not ib_info.get("available"):
         effective = f"intrabar unavailable -> {pol.fallback}"
+    if directional:
+        buy, sell = "on ASK (buy)", "on BID (sell)"
+        ent_s, ex_s = " - long: ASK, short: BID", " - long: BID, short: ASK"
+    else:
+        buy = sell = ""
+        ent_s = ex_s = f" - on the single {basis} series"
     assumptions = {
         "timestamp_convention": "bar open, UTC; bar known at its close",
         "signal_timing": "signal at bar close; earliest fill on the next bar",
-        "market_entry": "open of next bar + slippage",
-        "stop_entry": "level, or open if gapped through; + stop slippage",
-        "limit_entry": f"level, or open if gapped through; needs {bt_cfg.get('limit_fill', {}).get('penetration_ticks', 0)} tick(s) penetration; no slippage",
-        "stop_exit": "stop level; open if gapped through (worse); + stop slippage",
-        "target_exit": f"limit at target; gap-through fill = {pol.target_gap_fill}",
+        "market_entry": f"open of next bar + slippage{ent_s}",
+        "stop_entry": f"level, or open if gapped through; + stop slippage{ent_s}",
+        "limit_entry": f"level, or open if gapped through; needs {bt_cfg.get('limit_fill', {}).get('penetration_ticks', 0)} tick(s) penetration; no slippage{ent_s}",
+        "stop_exit": f"stop level; open if gapped through (worse); + stop slippage{ex_s}",
+        "target_exit": f"limit at target; gap-through fill = {pol.target_gap_fill}{ex_s}",
+        "close_exit": f"session close / time / max hold / end of data at the bar close{ex_s}",
+        "signal_exit": f"open of the next bar{ex_s}",
+        "quote_model": "directional_bid_ask" if directional else "single_series",
+        "execution_sides": {"buy": "ask", "sell": "bid"} if directional else {"buy": basis, "sell": basis},
+        "spread_treatment": _spread_treatment(costs),
+        "dataset_has_ask_ohlc": bool(bars.has_ask_ohlc),
+        "gross_pnl": ("directional quote fill prices: gross is AFTER the bid/ask spread; no separate spread "
+                      "cost; cost sensitivity / breakeven scale commission, fees, slippage and financing only"
+                      if directional else "single-series fill prices; spread (if any) is a separate cost"),
         "same_bar_policy_requested": requested,
         "same_bar_policy_effective": effective,
         "intrabar_fallback": pol.fallback,
-        "entry_bar_uncertainty": "touches not provably after a stop/limit fill are treated as conflicts",
+        "entry_bar_uncertainty": ("touches not provably after a stop/limit fill are treated as conflicts"
+                                  + ("; two-sided: a stop touch on a level-fill bar is never provable, a target "
+                                     "touch only if the entry side had to pass the fill level to reach it"
+                                     if directional else "")),
         "time_exit": "close of the Nth bar, entry bar counts as bar 1",
         "session": dict(bt_cfg.get("session", {})),
         "positions": "one position or working order at a time; no pyramiding",

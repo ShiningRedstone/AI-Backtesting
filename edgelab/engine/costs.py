@@ -19,6 +19,10 @@ Phase 2 (CFD readiness):
     column: the average of the entry-bar and exit-bar spread is charged once
     per round trip, which is the correct total whether prices are bid-, ask- or
     mid-based).
+  * ``spread_source: quotes`` (ADR-55, opt-in): directional BID/ASK execution - buys fill on the
+    dataset's observed ASK OHLC, sells on BID, so the spread is already inside the fill prices and
+    the separate spread charge is exactly 0 (never charged twice). Requires ASK OHLC in the dataset;
+    ``spread_points`` must be 0/unset.
   * Overnight financing: ``financing_mode: annual_rate`` charges
     notional x rate / day_count for every rollover instant the position is held
     through (``triple_rollover_weekday`` counts 3). Rates may be negative (credit).
@@ -94,8 +98,10 @@ class CostModel:
                 raise ValueError(f"cost field {k} must be >= 0")
         if self.slippage_unit not in ("ticks", "points"):
             raise ValueError("slippage_unit must be ticks|points")
-        if self.spread_source not in ("fixed", "dataset"):
-            raise ValueError("spread_source must be fixed|dataset")
+        if self.spread_source not in ("fixed", "dataset", "quotes"):
+            raise ValueError("spread_source must be fixed|dataset|quotes")
+        if self.spread_source == "quotes" and self.spread_points != 0:
+            raise ValueError("spread_source quotes embeds the spread in BID/ASK fills; spread_points must be 0")
         if self.financing_mode not in ("none", "annual_rate", "not_modeled"):
             raise ValueError("financing_mode must be none|annual_rate|not_modeled")
         if self.commission_mode not in ("per_unit", "notional"):
@@ -122,6 +128,10 @@ class CostModel:
         ``exit_price`` (theoretical fills) are required in notional commission mode."""
         slip_pts = self.slippage_points(entry_type, inst) + self.slippage_points(exit_type, inst)
         spread = self.spread_points if spread_points is None else spread_points
+        if self.spread_source == "quotes":
+            if spread_points:
+                raise ValueError("spread_source quotes: the spread is in the fill prices, never a separate cost")
+            spread = 0.0
         if self.commission_mode == "notional":
             if entry_price is None or exit_price is None:
                 raise ValueError("notional commission needs the entry and exit prices")
@@ -240,9 +250,12 @@ def cost_model_from_config(cfg: Mapping, symbol: str, multiplier: float | None =
             f"cost profile '{profile}' is unconfigured{f' ({notes})' if notes else ''}. "
             f"Set real broker values in configs/costs.yaml (costs.symbols.{symbol}"
             f"{'.providers.' + provider if provider else ''}): {missing or 'status: assumed|broker_verified'}")
+    if merged.get("spread_source") == "quotes" and merged.get("spread_points") not in (None, 0, 0.0):
+        raise CostConfigError(f"cost profile '{profile}': spread_source quotes embeds the spread in BID/ASK "
+                              "fills; remove spread_points (it would be charged twice)")
     if merged.get("spread_points") is None:
-        if merged.get("spread_source", "fixed") != "dataset":
-            raise CostConfigError(f"cost profile '{profile}': set spread_points or spread_source: dataset")
+        if merged.get("spread_source", "fixed") not in ("dataset", "quotes"):
+            raise CostConfigError(f"cost profile '{profile}': set spread_points or spread_source: dataset|quotes")
         merged["spread_points"] = 0.0
     merged = {k: v for k, v in merged.items() if v is not None}
     if multiplier is None:

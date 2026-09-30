@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from edgelab.data.calendar import SessionCalendar
-from edgelab.data.schema import BarArrays, canonicalize
+from edgelab.data.schema import ASK_COLUMNS, BarArrays, canonicalize
 
 NS_PER_MIN = 60_000_000_000
 
@@ -42,6 +42,18 @@ def resample_bars(df: pd.DataFrame, calendar: SessionCalendar, tf_minutes: int) 
     })
     if "spread" in bars.columns:   # mean spread of the sub-bars; NaN if any sub-bar lacks it
         out["spread"] = g["spread"].mean().where(g["spread"].count() == size)
+    if any(k in bars.columns for k in ASK_COLUMNS):
+        # Observed ASK OHLC over the SAME present sub-bars as BID (ADR-55). The whole ASK side of
+        # a bucket is NaN if any present sub-bar lacks any ASK value (pandas first/max/min/last
+        # would otherwise skip NaN and fabricate a quote); validation then FAILs the bucket.
+        missing = [k for k in ASK_COLUMNS if k not in bars.columns]
+        if missing:
+            raise ValueError(f"ASK OHLC is all-or-none: missing {missing}")
+        ask = pd.DataFrame({"ask_open": g["ask_open"].first(), "ask_high": g["ask_high"].max(),
+                            "ask_low": g["ask_low"].min(), "ask_close": g["ask_close"].last()})
+        complete = pd.concat([g[k].count() == size for k in ASK_COLUMNS], axis=1).all(axis=1)
+        for k in ASK_COLUMNS:
+            out[k] = ask[k].where(complete)
     out.insert(0, "ts", pd.DatetimeIndex(out.index.to_numpy().astype("datetime64[ns]")).tz_localize("UTC"))
     return out.reset_index(drop=True)
 

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from edgelab.core.logging import get_logger
-from edgelab.data.schema import BarArrays, DatasetManifest
+from edgelab.data.schema import ASK_COLUMNS, BarArrays, DatasetManifest
 
 log = get_logger("store")
 
@@ -102,6 +102,8 @@ class ResultStore(ABC):
                            "close": bars.close, "volume": bars.volume})
         if bars.spread is not None:
             df["spread"] = bars.spread
+        for k in ASK_COLUMNS if bars.has_ask_ohlc else ():
+            df[k] = getattr(bars, k)
         self._write_bars(manifest.dataset_id, df)
         self._exec("INSERT INTO datasets VALUES (?, ?, ?, ?)",
                    (manifest.dataset_id, manifest.content_hash, json.dumps(manifest.to_dict()),
@@ -110,6 +112,16 @@ class ResultStore(ABC):
             self._exec("INSERT INTO dataset_reports VALUES (?, ?)",
                        (manifest.dataset_id, json.dumps(report.to_dict(), default=str)))
         return True
+
+    @staticmethod
+    def _ask_arrays(manifest: DatasetManifest, df: pd.DataFrame) -> dict:
+        """Observed ASK OHLC (ADR-55), only for datasets whose manifest declares it."""
+        if not manifest.has_ask_ohlc:
+            return {}
+        missing = [k for k in ASK_COLUMNS if k not in df.columns]
+        if missing:
+            raise ValueError(f"dataset {manifest.dataset_id}: manifest declares ASK OHLC but {missing} not stored")
+        return {k: pd.to_numeric(df[k], errors="coerce").to_numpy(float) for k in ASK_COLUMNS}
 
     def load_dataset(self, dataset_id: str, tf_minutes: int) -> tuple[DatasetManifest, BarArrays]:
         rows = self._query("SELECT manifest_json FROM datasets WHERE dataset_id = ?", (dataset_id,))
@@ -123,7 +135,8 @@ class ResultStore(ABC):
         vol = pd.to_numeric(df["volume"], errors="coerce").to_numpy(float)
         bars = BarArrays(df["ts_ns"].to_numpy(np.int64), df["open"].to_numpy(float),
                          df["high"].to_numpy(float), df["low"].to_numpy(float),
-                         df["close"].to_numpy(float), vol, tf_minutes, spread)
+                         df["close"].to_numpy(float), vol, tf_minutes, spread,
+                         **self._ask_arrays(manifest, df))
         if bars.content_hash() != manifest.content_hash:
             raise ValueError(f"dataset {dataset_id}: stored bars do not match manifest hash")
         return manifest, bars
@@ -274,6 +287,7 @@ class SQLiteStore(ResultStore):
             self.con.execute(s.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER"))
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_bars ON bars(dataset_id, ts_ns)")
         self._add_missing_columns("bars", {"spread": "REAL"})   # Phase 2 migration
+        self._add_missing_columns("bars", {k: "REAL" for k in ASK_COLUMNS})   # ADR-55: NULL for older rows
         self.con.commit()
 
     def _columns(self, name):
@@ -313,7 +327,8 @@ class SQLiteStore(ResultStore):
         self._append_table("bars", df)
 
     def _read_bars(self, dataset_id):
-        return pd.read_sql_query("SELECT ts_ns, open, high, low, close, volume, spread FROM bars "
+        return pd.read_sql_query("SELECT ts_ns, open, high, low, close, volume, spread, "
+                                 + ", ".join(ASK_COLUMNS) + " FROM bars "
                                  "WHERE dataset_id = ? ORDER BY ts_ns", self.con, params=(dataset_id,))
 
     def close(self):

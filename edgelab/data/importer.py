@@ -76,6 +76,9 @@ class ImportOptions:
     spread_multiplier: float | None = None  # file spread units -> price points (default 1)
     bid_close_column: str | None = None   # alternative: spread = ask_close - bid_close
     ask_close_column: str | None = None
+    ask_open_column: str | None = None    # observed ASK OHLC (ADR-55): all four ask_* columns together,
+    ask_high_column: str | None = None    # price_basis=bid and bid_close_column = the close column;
+    ask_low_column: str | None = None     # stored verbatim beside BID, never inferred
     notes: str = ""
     contract: str = "unspecified"
     adjustment: str = "n/a"
@@ -106,6 +109,28 @@ def apply_profile(opts: ImportOptions, cfg: Mapping) -> ImportOptions:
     return ImportOptions(**d)
 
 
+def _ask_ohlc_requested(o: ImportOptions) -> bool:
+    return any((o.ask_open_column, o.ask_high_column, o.ask_low_column))
+
+
+def _check_ask_options(o: ImportOptions) -> None:
+    if not _ask_ohlc_requested(o):
+        return
+    cols = {"ask_open_column": o.ask_open_column, "ask_high_column": o.ask_high_column,
+            "ask_low_column": o.ask_low_column, "ask_close_column": o.ask_close_column}
+    missing = [k for k, v in cols.items() if not v]
+    if missing:
+        raise ImportFailed("options", f"ASK OHLC import needs all four ASK columns; missing {missing}")
+    if o.price_basis != "bid":
+        raise ImportFailed("options", "ASK OHLC import requires price_basis=bid (the primary OHLC is the BID side)")
+    if not o.bid_close_column or o.bid_close_column != (o.columns or {}).get("close", "close"):
+        raise ImportFailed("options", "ASK OHLC import requires bid_close_column = the primary close column "
+                                      "(the primary OHLC must be the BID side of the same rows)")
+    if o.spread_column:
+        raise ImportFailed("options", "ASK OHLC import derives spread from ask_close - bid_close; "
+                                      "do not also give spread_column")
+
+
 def _check_options(o: ImportOptions) -> None:
     for k, v in o.to_dict().items():
         if v == "REQUIRED":
@@ -117,6 +142,7 @@ def _check_options(o: ImportOptions) -> None:
         raise ImportFailed("options", f"asset_type must be one of {ASSET_TYPES}")
     if o.price_basis not in PRICE_BASES:
         raise ImportFailed("options", f"price_basis must be one of {PRICE_BASES}")
+    _check_ask_options(o)
     if o.volume_type is not None and o.volume_type not in VOLUME_TYPES:
         raise ImportFailed("options", f"volume_type must be one of {VOLUME_TYPES}")
     if o.timestamp_convention not in ("open", "close"):
@@ -218,8 +244,13 @@ def normalize(raw: pd.DataFrame, o: ImportOptions) -> tuple[pd.DataFrame, dict]:
         ask = pd.to_numeric(_col(raw, o.ask_close_column, "ask close"), errors="coerce").to_numpy()
         df["spread"] = ask - bid
         spread_source = "bid_ask_close"
+    if _ask_ohlc_requested(o):                       # verbatim ASK feed values, parsed like BID OHLC
+        for k, src in (("ask_open", o.ask_open_column), ("ask_high", o.ask_high_column),
+                       ("ask_low", o.ask_low_column), ("ask_close", o.ask_close_column)):
+            df[k] = pd.to_numeric(_col(raw, src, k).str.replace(",", ""), errors="coerce").to_numpy()
     facts = {"volume_type": volume_type, "spread_source": spread_source,
              "has_bid_ask": bool(o.bid_close_column and o.ask_close_column),
+             "has_ask_ohlc": _ask_ohlc_requested(o),
              "raw_rows": int(len(raw)), "raw_columns": list(raw.columns)}
     return df, facts
 
@@ -395,7 +426,10 @@ def import_dataset(o: ImportOptions, cfg: Mapping, store: ResultStore, cache=Non
                                       contract=o.contract,
                                       adjustment=o.adjustment,
                                       **{**provenance, "parent_dataset_id": dataset_id,
-                                         "derivation": f"session-anchored resample {o.timeframe}->{dm}m"})
+                                         "derivation": f"session-anchored resample {o.timeframe}->{dm}m"
+                                         + (" (BID OHLC and observed ASK OHLC: first/max/min/last of the "
+                                            "present sub-bars; spread = mean of sub-bar spreads)"
+                                            if facts["has_ask_ohlc"] else "")})
             store.save_dataset(dds.manifest, dds.bars, dds.report)
             return dds
         dds = stage(f"derive_{dm}m", _derive)

@@ -278,6 +278,20 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
        `provider_notes` keeps that lineage.
      - Import the new file as a new dataset, with a new `--dataset-name`, using
        `--bid-close-column close --ask-close-column ask_close`.
+     - **Observed ASK OHLC (ADR-55).** The combined file also carries `ask_open/ask_high/ask_low`,
+       taken verbatim from the ASK feed. To keep them, which directional BID/ASK execution
+       (`spread_source: quotes`) needs, import with `ask_open_column: ask_open`,
+       `ask_high_column: ask_high`, `ask_low_column: ask_low` (plus the two close columns above).
+       - This is currently available through `Services.import_file`; the CLI flags are not added
+         yet.
+       - Import requires all four ASK columns, `price_basis: bid`, and `bid_close_column` equal to
+         the primary close column.
+       - A row with a missing or invalid ASK value, or with ASK below BID on any of open, high,
+         low or close, fails the import. Nothing is repaired.
+       - The result is a NEW dataset (its content hash includes the ASK arrays). Its BID and
+         spread arrays are identical to the ask-close-only import of the same file.
+       - Derived timeframes aggregate ASK first/max/min/last over the same present minutes as
+         BID; the spread stays the mean of minute spreads.
    - The frozen BID-only datasets stay unchanged. Bars without an ask value get no spread, and
      trades on them are refused.
    - The alternative is a fixed spread (`spread_source: fixed`, `spread_points`) taken from evidence

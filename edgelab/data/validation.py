@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from edgelab.data.calendar import SessionCalendar
-from edgelab.data.schema import BarArrays, DatasetManifest, canonicalize
+from edgelab.data.schema import ASK_COLUMNS, BarArrays, DatasetManifest, canonicalize
 from edgelab.instruments import Instrument
 
 _ORDER = {"PASS": 0, "INFO": 1, "WARN": 2, "FAIL": 3}
@@ -96,6 +96,29 @@ def _fmt(ts_ns: np.ndarray, k: int = 5) -> list[str]:
     return [str(pd.Timestamp(int(t), tz="UTC")) for t in ts_ns[:k]]
 
 
+def _check_ask(bars, have_ask, o, h, l, c, ts, add) -> None:
+    """Observed ASK OHLC must be complete, finite, internally consistent and never below the
+    BID primary series. Violations FAIL (never repaired, never partially stored)."""
+    if len(have_ask) != len(ASK_COLUMNS):
+        add(Check("ask_ohlc_columns", "FAIL", len(have_ask),
+                  f"ASK OHLC is all-or-none; only {have_ask} present"))
+        return
+    add(Check("ask_ohlc_columns", "PASS", len(have_ask), "ask_open/high/low/close present"))
+    ao, ah, al, ac = (bars[k].to_numpy() for k in ASK_COLUMNS)
+    bad = ~np.isfinite(np.c_[ao, ah, al, ac]).all(axis=1)
+    add(Check("ask_finite_prices", "FAIL" if bad.any() else "PASS", int(bad.sum()),
+              "missing/NaN/inf ASK OHLC value (a quote side is never partially stored)", _fmt(ts[bad])))
+    with np.errstate(invalid="ignore"):
+        bad_ohlc = (ah < np.maximum(ao, ac)) | (al > np.minimum(ao, ac)) | (ah < al) | (np.c_[ao, ah, al, ac] <= 0).any(axis=1)
+        below = (ao < o) | (ah < h) | (al < l) | (ac < c)
+    add(Check("ask_ohlc_integrity", "FAIL" if bad_ohlc.any() else "PASS", int(bad_ohlc.sum()),
+              "ASK high < max(open,close), low > min(open,close), high < low, or non-positive",
+              _fmt(ts[bad_ohlc])))
+    add(Check("ask_not_below_bid", "FAIL" if below.any() else "PASS", int(below.sum()),
+              "ASK below BID on open, high, low or close (crossed quotes / misaligned feeds)",
+              _fmt(ts[below])))
+
+
 def validate_bars(df: pd.DataFrame, instrument: Instrument, calendar: SessionCalendar,
                   tf_minutes: int, thresholds: Mapping[str, Any] | None = None) -> DataQualityReport:
     th = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
@@ -131,7 +154,8 @@ def validate_bars(df: pd.DataFrame, instrument: Instrument, calendar: SessionCal
     exact_mask = bars.duplicated(list(bars.columns), keep="first").to_numpy()
     n_exact = int(exact_mask.sum())
     if dup_ts_mask.any():
-        distinct = (bars.loc[dup_ts_mask, ["ts", "open", "high", "low", "close", "volume"]]
+        ask_cols = [k for k in ASK_COLUMNS if k in bars.columns]
+        distinct = (bars.loc[dup_ts_mask, ["ts", "open", "high", "low", "close", "volume"] + ask_cols]
                     .drop_duplicates().groupby("ts").size())
         conflicting = list(_ts_ns(pd.Series(distinct.index[distinct.to_numpy() > 1])))
     else:
@@ -177,6 +201,11 @@ def validate_bars(df: pd.DataFrame, instrument: Instrument, calendar: SessionCal
         add(Check("spread_availability", "WARN" if nan_sp.any() else "PASS", int(nan_sp.sum()),
                   "bars without a spread value; dataset-spread cost mode refuses trades on them",
                   _fmt(ts[nan_sp])))
+
+    # --- ASK OHLC (optional second quote side, ADR-55) ------------------------------
+    have_ask = [k for k in ASK_COLUMNS if k in bars.columns]
+    if have_ask:
+        _check_ask(bars, have_ask, o, h, l, c, ts, add)
 
     # --- tick alignment ---------------------------------------------------------
     px = np.c_[o, h, l, c]
@@ -325,7 +354,7 @@ def validate_and_freeze(df: pd.DataFrame, instrument: Instrument, calendar: Sess
         missing_bars=report.missing_bars, duplicate_bars=raw.duplicate_bars,
         quality_status=report.status, calendar=calendar.name,
         calendar_fingerprint=calendar.fingerprint(),
-        has_spread=bars.spread is not None, **manifest_fields)
+        has_spread=bars.spread is not None, has_ask_ohlc=bars.has_ask_ohlc, **manifest_fields)
     if manifest.volume_type == "unknown" and not bars.has_volume:
         manifest.volume_type = "none"
     return ValidatedDataset(bars, instrument, calendar, report, manifest, _token=_TOKEN)

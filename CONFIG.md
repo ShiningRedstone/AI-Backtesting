@@ -59,7 +59,7 @@ All money values are per contract (futures) or per unit (CFDs) per side.
 | `fees_per_side` | exchange + clearing + NFA $ |
 | `slippage_unit` | `ticks` (default) or `points` (CFD feeds often have 0.01 ticks) |
 | `slippage_ticks_market` / `_stop` / `_limit` | adverse slippage per fill, in `slippage_unit` |
-| `spread_source` | `fixed` (use `spread_points`) or `dataset` (per-bar `spread` column) |
+| `spread_source` | `fixed` (use `spread_points`), `dataset` (per-bar `spread` column, charged as the entry/exit-bar average), or `quotes` (directional BID/ASK execution, ADR-55: buys fill on the dataset's stored ASK OHLC, sells on BID; the spread is inside the fill prices, the separate spread charge is 0 and `spread_points` must be unset/0; refuses datasets without ASK OHLC; gross P&L is then after the spread and cost sensitivity scales only the explicit costs) |
 | `spread_points` | full spread in points; charged once per round trip |
 | `scenario` / `basis` | a named research-cost scenario and the user's statement of the source of its numbers. A profile that declares `scenario` (even `null`) refuses until the scenario is complete: a name, a non-empty `basis`, `status` `assumed` or `broker_verified`, `commission_mode: notional` with `commission_per_million`, and market + stop slippage in points. Both are recorded in every run's cost assumptions |
 | `financing_mode` | `none` (there is no holding cost), `annual_rate` (one constant annual rate), or `not_modeled` (holding costs exist but are NOT charged; recorded as such on every run) |

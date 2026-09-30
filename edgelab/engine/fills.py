@@ -26,6 +26,18 @@ BEFORE the fill. A level X is *certainly* reached after the fill only if price
 had to pass L to get to X from the open: (L - open) * (X - L) > 0. Uncertain
 touches are treated as conflicts. (Market fills at the open make every touch on
 that bar certain.)
+
+DIRECTIONAL BID/ASK (ADR-55, cost ``spread_source: quotes``): the backtester passes the entry-side
+arrays (ASK for a long's buy, BID for a short's sell) to ``find_entry`` and the exit-side arrays
+(BID for a long's sell, ASK for a short's buy) to ``simulate_exit`` as ``A``, plus the entry side
+as ``ent``/``ib_ent``. Every rule above then applies unchanged on the side that executes. Entry-bar
+certainty becomes two-sided: an exit touch at X after a level fill at L is certain only if
+  (a) the exit-side touch implies the entry side also reached X (BID <= ASK at every instant: a
+      long's BID high >= target implies ASK >= target; a short's ASK low <= target implies
+      BID <= target; a STOP touch never implies it), and
+  (b) (L - entry_side_open) * (X - L) > 0 (the entry side had to pass L to reach X).
+Otherwise the touch is a conflict for the configured policy. This is never more optimistic than the
+single-series rule; it differs only for a limit-entry fill bar's stop touch (now a conflict).
 """
 from __future__ import annotations
 
@@ -162,15 +174,23 @@ def _gap(direction: int, o: float, stop: float, target: float, pol: FillPolicy):
     return None
 
 
+def _certain(L: float, o_entry: float, stop: float, target: float, two_sided: bool) -> tuple[bool, bool]:
+    """Entry-bar certainty of a stop / target touch after a level fill at L (module docstring)."""
+    return ((not two_sided) and (L - o_entry) * (stop - L) > 0,
+            (L - o_entry) * (target - L) > 0)
+
+
 def _resolve_intrabar(ib: IntrabarData, k: int, direction: int, stop: float, target: float,
-                      pending_entry: tuple | None, pol: FillPolicy):
-    """Replay LTF bars of HTF bar k. Returns (outcome, price, reason) or None if still ambiguous."""
+                      pending_entry: tuple | None, pol: FillPolicy, ib_ent: IntrabarData | None = None):
+    """Replay LTF bars of HTF bar k. Returns (outcome, price, reason) or None if still ambiguous.
+    ``ib`` is the exit side; ``ib_ent`` the entry side in directional BID/ASK mode (else ``ib``)."""
+    E = ib if ib_ent is None else ib_ent
     s, e = int(ib.start[k]), int(ib.end[k])
     m = s
     if pending_entry is not None:
         entry_type, L = pending_entry
         while m < e:
-            ok, _, kind = _trigger(direction, entry_type, ib.o[m], ib.h[m], ib.l[m], L,
+            ok, _, kind = _trigger(direction, entry_type, E.o[m], E.h[m], E.l[m], L,
                                    pol.limit_penetration)
             if ok:
                 break
@@ -179,8 +199,8 @@ def _resolve_intrabar(ib: IntrabarData, k: int, direction: int, stop: float, tar
             return None
         st, tg = _touches(direction, ib.h[m], ib.l[m], stop, target)
         certain = kind == "open"
-        d = _decide(st, certain or (L - ib.o[m]) * (stop - L) > 0,
-                    tg, certain or (L - ib.o[m]) * (target - L) > 0)
+        st_c, tg_c = _certain(L, E.o[m], stop, target, ib_ent is not None)
+        d = _decide(st, certain or st_c, tg, certain or tg_c)
         if d == AMBIG:
             return None
         if d == STOP:
@@ -207,8 +227,9 @@ def _resolve_intrabar(ib: IntrabarData, k: int, direction: int, stop: float, tar
 
 def resolve_bar(A: MarketArrays, ib: IntrabarData | None, k: int, direction: int, stop: float,
                 target: float, pol: FillPolicy, entry: Entry | None, entry_type: str,
-                entry_level: float):
+                entry_level: float, ent: MarketArrays | None = None, ib_ent: IntrabarData | None = None):
     """Stop/target outcome on bar k. entry is given only when k is the fill bar.
+    ``A``/``ib`` are the exit side; ``ent``/``ib_ent`` the entry side in directional BID/ASK mode.
     Returns (outcome, price, reason, conflict_resolution_label)."""
     is_entry_bar = entry is not None
     if not is_entry_bar:
@@ -217,8 +238,8 @@ def resolve_bar(A: MarketArrays, ib: IntrabarData | None, k: int, direction: int
             return g + ("",)
     st, tg = _touches(direction, A.h[k], A.l[k], stop, target)
     if is_entry_bar and entry.kind == "level":
-        L, o = entry.price, A.o[k]
-        d = _decide(st, (L - o) * (stop - L) > 0, tg, (L - o) * (target - L) > 0)
+        st_c, tg_c = _certain(entry.price, (A if ent is None else ent).o[k], stop, target, ent is not None)
+        d = _decide(st, st_c, tg, tg_c)
     else:
         d = _decide(st, True, tg, True)
     if d == STOP:
@@ -231,7 +252,8 @@ def resolve_bar(A: MarketArrays, ib: IntrabarData | None, k: int, direction: int
     if pol.same_bar == "intrabar":
         if ib is not None and ib.reliable[k]:
             pending = (entry_type, entry_level) if (is_entry_bar and entry.kind == "level") else None
-            r = _resolve_intrabar(ib, k, direction, stop, target, pending, pol)
+            r = _resolve_intrabar(ib, k, direction, stop, target, pending, pol,
+                                  ib_ent if ent is not None else None)
             if r is not None:
                 return r + ("INTRABAR",)
             label = f"INTRABAR_AMBIGUOUS->{pol.fallback.upper()}"
@@ -276,7 +298,8 @@ def first_event_bar(A: MarketArrays, start: int, limit: int, direction: int, sto
 def simulate_exit(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, entry: Entry,
                   direction: int, stop: float, target: float, time_bars: int | None,
                   max_hold: int | None, entry_type: str, entry_level: float,
-                  signal_exit_bar: int | None = None) -> dict:
+                  signal_exit_bar: int | None = None, ent: MarketArrays | None = None,
+                  ib_ent: IntrabarData | None = None) -> dict:
     """``signal_exit_bar`` (Phase 3, optional): bar m at whose OPEN a signal exit executes
     (the exit condition was true at the close of m-1). Earlier stop/target/session/time exits
     take precedence; if the open of m gaps through the stop or target, the resting order
@@ -303,7 +326,7 @@ def simulate_exit(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, ent
 
     conflict = ""
     out, px, reason, conflict = resolve_bar(A, ib, f, direction, stop, target, pol, entry,
-                                            entry_type, entry_level)
+                                            entry_type, entry_level, ent, ib_ent)
     k = f
     def signal_exit() -> tuple[int, float, str]:
         g = _gap(direction, float(A.o[sx]), stop, target, pol)

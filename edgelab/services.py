@@ -752,6 +752,9 @@ class Services:
             if cm.spread_source == "dataset" and not m.has_spread:      # mirrors the backtester's own refusal
                 reasons.append("cost profile charges the dataset's per-bar spread, but this dataset has no spread "
                                "(BID-only) - use a BID/ASK dataset")
+            if cm.spread_source == "quotes" and not m.has_ask_ohlc:     # mirrors the backtester's own refusal
+                reasons.append("cost profile uses directional BID/ASK execution (spread_source: quotes), but this "
+                               "dataset has no ASK OHLC - import the ASK feed's OHLC (it is never inferred)")
         except CostScenarioIncomplete as exc:          # configured status, but the named scenario lacks fields
             cost = {"status": exc.status, "incomplete": True, "scenario": exc.scenario, "missing": exc.missing,
                     "reason": str(exc)}

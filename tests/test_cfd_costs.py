@@ -167,3 +167,43 @@ class TestUnitSizing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBidSeriesFillsAndSlippageOnce(unittest.TestCase):
+    """SINGLE-SERIES mode (quote_model single_series, spread_source dataset): stops/targets trigger on
+    the one stored (BID) OHLC for both sides; spread and 0.50-point market/stop slippage are charged
+    once each as costs; a TARGET exit is a limit (limit slippage, 0 here). Directional BID/ASK execution
+    (spread_source quotes, ADR-55) is tested in tests/test_directional_quotes.py. Test assumptions only."""
+    cm = CostModel(spread_source="dataset", slippage_unit="points", slippage_ticks_market=0.5,
+                   slippage_ticks_stop=0.5, slippage_ticks_limit=0.0)
+    order = OrderSpec("market", stop_points=2.0, target_points=2.0, time_exit_bars=20)
+
+    def short_trade(self, bar5, bar7):
+        rows = [(100.0, 100.5, 99.5, 100.0)] * 12
+        rows[5], rows[7] = bar5, bar7
+        res = run_backtest(spread_ds([3.0] * 12, rows=rows), Scripted(self.order, {2: -1}), self.cm, bt_cfg(),
+                           sizing={"mode": "fixed", "contracts": 1})
+        self.assertEqual(len(res.trades), 1)
+        self.assertEqual((res.assumptions["quote_model"], res.assumptions["spread_treatment"]),
+                         ("single_series", "cost_avg_entry_exit"))
+        return res.trades.iloc[0]
+
+    def test_short_stop_is_triggered_by_the_stored_bid_high_not_bid_plus_spread(self):
+        # entry at bar 3 open 100 -> stop 102, target 98. Bar 5: BID high 101.5 < 102 although
+        # BID + spread (the ask a buy-stop executes against) reaches 104.5 -> NOT stopped (known limitation).
+        t = self.short_trade(bar5=(100.0, 101.5, 99.5, 100.0), bar7=(100.0, 100.5, 97.9, 98.5))
+        self.assertEqual((t["exit_reason"], t["exit_bar"], t["exit_price_theo"]), ("TARGET", 7, 98.0))
+        t = self.short_trade(bar5=(100.0, 102.1, 99.5, 100.0), bar7=(100.0, 100.5, 97.9, 98.5))
+        self.assertEqual((t["exit_reason"], t["exit_bar"], t["exit_price_theo"]), ("STOP", 5, 102.0))
+
+    def test_slippage_charged_once_per_fill_and_target_is_a_limit(self):
+        target = self.short_trade(bar5=(100.0, 101.5, 99.5, 100.0), bar7=(100.0, 100.5, 97.9, 98.5))
+        stop = self.short_trade(bar5=(100.0, 102.1, 99.5, 100.0), bar7=(100.0, 100.5, 97.9, 98.5))
+        self.assertAlmostEqual(target["slippage_usd"], 0.5)            # market entry 0.50 + limit exit 0
+        self.assertAlmostEqual(stop["slippage_usd"], 1.0)              # market entry 0.50 + stop exit 0.50
+        for t in (target, stop):
+            self.assertAlmostEqual(t["spread_usd"], 3.0)               # (3 + 3) / 2, once per round trip
+            # P&L uses theo prices; slippage appears only as a cost (not also in the price)
+            self.assertAlmostEqual(t["gross_usd"], -(t["exit_price_theo"] - t["entry_price_theo"]))
+            self.assertAlmostEqual(t["gross_usd"] - t["net_usd"], t["slippage_usd"] + t["spread_usd"])
+        self.assertAlmostEqual(stop["entry_price_theo"] - stop["entry_price_eff"], 0.5)   # display only

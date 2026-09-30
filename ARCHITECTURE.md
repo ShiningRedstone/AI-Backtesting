@@ -794,6 +794,84 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-55 Directional BID/ASK quote execution (after Phase 9)
+- **Problem:** every trigger and fill used the dataset's one OHLC series. For Dukascopy that series
+  is BID, so buy-side events (a long's entry, a short's stop-loss, target and close exits) were
+  evaluated on BID, although a buy executes against ASK. Short stops fired late or not at all and
+  short targets filled early (optimistic). The per-bar spread was charged as an average cost
+  instead. The imported BID/ASK datasets kept only `ask_close` (for the spread), but the combined
+  source file carries the ASK feed's own `ask_open/ask_high/ask_low/ask_close`.
+- **Chosen (data layer):**
+  - `BarArrays` gains optional `ask_open/ask_high/ask_low/ask_close`, all four or none;
+    `DatasetManifest.has_ask_ohlc` (default false) is omitted from `to_dict` when false.
+  - The content hash appends the ASK arrays only when present. Datasets without ASK keep
+    byte-identical hashes, manifests and manifest hashes.
+  - The importer adds the options `ask_open_column/ask_high_column/ask_low_column` (with
+    `ask_close_column`). It requires all four, `price_basis: bid` and `bid_close_column` = the
+    primary close column; `spread_column` is refused. Values are parsed like BID OHLC and never
+    inferred.
+  - Validation FAILs on a partial ASK set, a non-finite ASK value, an internally inconsistent ASK
+    bar, or ASK < BID on open, high, low or close. Duplicate timestamps differing only in ASK are
+    conflicts.
+  - Resampling: ASK first/max/min/last over the same present sub-bars as BID. If any present
+    sub-bar lacks an ASK value, that bucket's whole ASK side is NaN and validation then fails it.
+    BID aggregation and the spread (mean of sub-bar spreads) are unchanged.
+  - The SQLite `bars` table gains four nullable columns (migration on open); ASK is loaded only
+    when the manifest declares it.
+- **Chosen (engine), opt-in via cost `spread_source: quotes`:**
+  - **Sides:** buys execute on ASK and sells on BID. A long enters on ASK and exits on BID; a
+    short enters on BID and exits on ASK. The backtester builds a second `MarketArrays` from the
+    stored ASK OHLC (same session masks). `find_entry` runs on the entry side and
+    `simulate_exit` on the exit side, so every existing fill, gap, close-exit, signal-exit and
+    excursion rule applies unchanged on the side that executes.
+  - **Unchanged inputs:** signals and features stay on the primary BID series. Position sizing
+    for market entries uses the entry side's signal-bar close.
+  - **Entry-bar certainty (two-sided):** a touch at X on the fill bar of a level fill at L is
+    certain only if (a) the exit-side touch implies the entry side reached X, and (b)
+    `(L - entry_side_open) * (X - L) > 0`.
+    - (a) follows from BID <= ASK: a long's BID high >= target implies ASK >= target, and a
+      short's ASK low <= target implies BID <= target. A stop touch never satisfies it.
+    - Otherwise the touch is a conflict for the configured policy.
+    - This is never more optimistic than the single-series rule. It differs only for a
+      limit-entry fill bar's stop touch: previously certain, now a conflict, which gives the same
+      outcome under `conservative`.
+  - **Intrabar replay:** requires ASK OHLC in the lower-timeframe dataset, otherwise replay is
+    refused and the fallback policy applies (recorded). An HTF bar is reliable only if both BID
+    and ASK minutes reproduce it. The entry trigger replays on the entry side and stops/targets on
+    the exit side.
+  - **Refusals:** the run is refused when the dataset has no ASK OHLC or any non-finite ASK value
+    (never treated as "no trigger"). The same condition is an eligibility reason in
+    `Services._dataset_eligibility`.
+  - **Costs:** the separate spread is exactly 0: `spread_points` must be 0/unset, and
+    `round_trip_base` refuses a spread override. Commission (notional on the actual quote-side
+    fill prices), fees, slippage (once per fill: market/stop configured, limit configured) and
+    financing are unchanged.
+- **Consequences:**
+  - In `quotes` mode, gross P&L is after the bid/ask spread. `cost_sensitivity` and
+    `breakeven_cost_multiplier` scale only the explicit costs (commission, fees, slippage,
+    financing), never the spread. This is recorded in the assumption `gross_pnl`.
+  - R = |fill - stop| uses the quote-side fill, so it includes the spread paid at entry.
+- **Provenance:**
+  - Assumptions: `quote_model` (`single_series` | `directional_bid_ask`), `execution_sides`,
+    `spread_treatment` (`none` | `fixed_cost` | `cost_avg_entry_exit` | `embedded_in_quotes`),
+    `dataset_has_ask_ohlc`, `gross_pnl`, and side-naming fill-rule strings (`market_entry`,
+    `stop_entry`, `limit_entry`, `stop_exit`, `target_exit`, `close_exit`, `signal_exit`).
+  - Intrabar info: `ltf_has_ask_ohlc` and `quote_sides`.
+  - Trades: `entry_quote_side` and `exit_quote_side`. `trades_hash` is unchanged in definition.
+  - Costs: `spread_source: quotes`.
+- **Equivalence:** with ASK == BID, directional and single-series runs give identical trades
+  hashes (tested for market, stop and limit entries).
+- **Rejected:**
+  - a mid series;
+  - ASK OHLC inferred from BID + spread or from `ask_close`;
+  - charging the spread both in prices and as a cost;
+  - switching existing datasets or profiles automatically.
+- **Unchanged:**
+  - `fixed`/`dataset` spread modes and all single-series behaviour, and the Phase 1 demo;
+  - the frozen BID/BIDASK datasets;
+  - the active Dukascopy cost profile (still `spread_source: dataset`).
+  - `Services.list_datasets` rows do not yet show `has_ask_ohlc` (visible in dataset detail).
+
 ### ADR-54 Dukascopy source identity, preferred research dataset, AI discovery over the Mode B gate (Phase 9)
 - **Problem:**
   - The user's primary data is a Dukascopy Nasdaq-100 1m CSV. Its symbol, asset class, price side,
@@ -1144,6 +1222,15 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 ```
 
 ## Known limitations (Phase 9)
+
+- **Directional BID/ASK (ADR-55):**
+  - Opt-in only. The real Dukascopy data has not yet been re-imported with ASK OHLC, and the
+    active cost profile still uses `spread_source: dataset`, so real Dukascopy runs remain
+    single-series on BID (short-side optimistic) until both are done.
+  - The CLI import command and web import form do not expose the ASK OHLC columns yet;
+    `Services.import_file` accepts them.
+  - ASK-side tick alignment and range spikes are not separately checked.
+  - DuckDB bars storage carries the columns but is untested.
 
 - **Identity and calendar gates (added after ADR-54):** `NQ_DUKASCOPY` is Dukascopy USATECH.IDX/USD (feed E_NQ-100, BID)
   with `identity_status: user_specified`. `identity_problem` also refuses research while `calendar_status:

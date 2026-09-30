@@ -3,6 +3,23 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Directional BID/ASK quote execution (after Phase 9; ADR-55)
+
+| Item | Status |
+|---|---|
+| Optional observed ASK OHLC on `BarArrays` (all-or-none), `has_ask_ohlc` manifest flag, content hash includes ASK only when present (hashes/manifests without ASK unchanged) | IMPLEMENTED, TESTED |
+| Importer `ask_open/ask_high/ask_low_column` (+ `ask_close_column`); requires all four, `price_basis: bid`, `bid_close_column` = close; values verbatim, never inferred | IMPLEMENTED, TESTED (synthetic) |
+| Validation: ASK columns complete, finite, internally consistent, ASK >= BID on O/H/L/C (FAIL, never repaired) | IMPLEMENTED, TESTED |
+| 1m -> 5m: ASK first/max/min/last over the same present sub-bars; any missing ASK in a present sub-bar blanks that bucket's ASK (then FAILs); BID and spread aggregation unchanged | IMPLEMENTED, TESTED |
+| SQLite ASK columns + migration of existing databases; round trip exact | IMPLEMENTED, TESTED |
+| Cost `spread_source: quotes`: buys on ASK, sells on BID for every entry/exit type, gaps, signal and close exits, excursions; separate spread exactly 0; commission on quote-side fills; slippage once per fill | IMPLEMENTED, TESTED (synthetic) |
+| Two-sided entry-bar certainty rule; intrabar replay needs and checks both sides (entry side for the fill, exit side for stops/targets) | IMPLEMENTED, TESTED |
+| Refusal without complete, finite ASK OHLC (backtester + eligibility) | IMPLEMENTED, TESTED |
+| Provenance: `quote_model`, `execution_sides`, `spread_treatment`, `dataset_has_ask_ohlc`, `gross_pnl`, side-naming fill rules; trades `entry_quote_side`/`exit_quote_side`; `trades_hash` definition unchanged | IMPLEMENTED, TESTED |
+| ASK == BID reproduces single-series trades hash exactly (market, stop, limit entries) | TESTED |
+| Real Dukascopy re-import with ASK OHLC; switching the Dukascopy profile to `quotes` | NOT DONE (frozen datasets and active config unchanged) |
+| CLI/web import form options for ASK OHLC columns | NOT IMPLEMENTED (`Services.import_file` accepts them) |
+
 ## Dukascopy-style cost plumbing (after Phase 9)
 
 | Item | Status |

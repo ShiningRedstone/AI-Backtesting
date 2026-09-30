@@ -104,6 +104,33 @@ class TestBidAskCheck(unittest.TestCase):
         ds = svc.load_dataset(r["dataset_id"])
         self.assertTrue(np.allclose(np.sort(ds.bars.spread), np.sort(self.spreads)))
 
+    def test_derived_5m_child_keeps_bid_ask_spread_metadata_and_lineage(self):
+        from edgelab.services import Services
+        ask = self.write_ask(self.ask_df)
+        comb = self.d / "combined.csv"
+        self.run_main(self.bid, ask, "--out", self.d / "r.json", "--write-combined", comb)
+        ws = self.d / "ws"
+        shutil.copytree(REPO / "configs", ws / "configs")
+        svc = Services(root=ws)
+        self.addCleanup(svc.store.close)
+        r = svc.import_file(dict(file=str(comb), profile="dukascopy_utc_csv", instrument="NQ_DUKASCOPY",
+                                 provider="DUKASCOPY", asset_type="CFD", symbol="USATECH.IDX/USD", price_basis="bid",
+                                 timeframe="1m", dataset_name="TEST_BIDASK", bid_close_column="close",
+                                 ask_close_column="ask_close", derive_timeframes=["5m"], build_features=False,
+                                 notes="combined provenance note"))
+        p, c = r["manifest"], svc.dataset_detail(r["derived"][0])["manifest"]
+        for k in ("has_bid_ask", "has_spread", "spread_source", "source_file_sha256", "provider_notes", "price_basis",
+                  "symbol", "calendar", "calendar_fingerprint", "volume_type"):
+            self.assertEqual(c[k], p[k], k)
+        self.assertEqual((c["has_bid_ask"], c["has_spread"], c["spread_source"]), (True, True, "bid_ask_close"))
+        self.assertEqual((c["parent_dataset_id"], c["source_detail"]["derived_from"]), (r["dataset_id"], r["dataset_id"]))
+        self.assertEqual(c["derivation"], "session-anchored resample 1m->5m")
+        one, five = svc.load_dataset(r["dataset_id"]), svc.load_dataset(r["derived"][0])
+        k = len(five.bars) // 2                                          # every 5m spread = mean of its 1m spreads
+        sel = (one.bars.ts_ns >= five.bars.ts_ns[k]) & (one.bars.ts_ns < five.bars.ts_ns[k] + 300_000_000_000)
+        self.assertAlmostEqual(five.bars.spread[k], one.bars.spread[sel].mean())
+        self.assertTrue(np.isfinite(five.bars.spread).all())
+
     def test_one_sided_rows_are_reported_and_block_the_combined_file(self):
         a = self.ask_df.drop(index=[10, 11, 500])                                 # 3 BID-only minutes
         extra = a.iloc[[-1]].copy()
