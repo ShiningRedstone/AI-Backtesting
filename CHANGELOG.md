@@ -11,6 +11,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Random-entry control = exact Monte-Carlo p-value (<= 0.05 with 100 controls), documented as a robustness filter, not a familywise test | IMPLEMENTED, TESTED |
 | Version-1 protocol records keep their own rules; `save_protocol` verifies record identity | IMPLEMENTED, TESTED |
 | Retire the zero-trial v1 protocol `RP_257969CFAFFD` and create the v2 protocol in the user workspace | PENDING (Windows command; requires this code) |
+| Synthetic end-to-end preflight fix: a changed stored definition is refused (`HOLDOUT_DEFINITION_CHANGED`) before a holdout look is spent | IMPLEMENTED, TESTED |
 | Serial dependence (block bootstrap) | NOT IMPLEMENTED (documented limitation) |
 
 ## Locked research protocol and ledgers (ADR-56, pre-AI gate)

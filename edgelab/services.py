@@ -1405,6 +1405,11 @@ class Services:
         used = sum(1 for a in prior if a["status"] != "refused")
         if used >= mat["holdout_budget"]["max_unique_candidate_evaluations"]:
             refuse("HOLDOUT_BUDGET_EXHAUSTED", f"all {used} holdout looks are used")
+        from edgelab.strategy.compiler import compile_definition
+        ident = compile_definition(copy_frozen(frozen), self.sessions, self._config_hash()).identity
+        if (ident.strategy_id, ident.logic_hash) != (strategy_id, doc["logic_hash"]):             # before the look is spent
+            refuse("HOLDOUT_DEFINITION_CHANGED", "the stored definition no longer compiles to the shortlisted "
+                   "candidate's identity", compiled_strategy_id=ident.strategy_id)
         n_trials = self.store.count_trials(protocol_id)
         self.store.add_holdout_access({**base, "status": "granted"})              # the look is spent from here on
         h = mat["windows"]["holdout"]

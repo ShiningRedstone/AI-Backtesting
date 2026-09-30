@@ -256,6 +256,27 @@ class TestHoldoutLock(ProtocolBase):
         self.assertNotIn(out["run_id"], text)
         self.assertNotIn(out["access_id"], text)
 
+    def test_changed_stored_definition_is_refused_before_a_look_is_spent(self):
+        s = self.svc()
+        p = self.fresh(s, "t_tamper")
+        pid = p["protocol_id"]
+        sid = self.search(s, p, [self.ema])["search_id"]
+        s.select_shortlist(sid, [self.ema])
+        inst = s.library.root / "instances" / f"{self.ema}.json"
+        orig = inst.read_text()
+        self.addCleanup(inst.write_text, orig)
+        doc = json.loads(orig)
+        doc["definition"]["entry"]["long"]["right"]["params"]["period"] = 34                    # edited in place
+        inst.write_text(json.dumps(doc))
+        e = self.refused("HOLDOUT_DEFINITION_CHANGED", s.evaluate_holdout, pid, sid, self.ema)
+        self.assertNotEqual(e.to_dict()["compiled_strategy_id"], self.ema)
+        self.assertEqual(s.protocol_status(pid)["holdout"]["looks_used"], 0)                    # no look burned
+        inst.write_text(orig)
+        out = s.evaluate_holdout(pid, sid, self.ema)                                            # the real look
+        self.assertEqual(out["holdout_looks_used"], 1)
+        self.assertEqual([a["reason_code"] or a["status"] for a in s.store.list_holdout_access(pid)],
+                         ["HOLDOUT_DEFINITION_CHANGED", "completed"])
+
     def test_holdout_look_and_trial_budgets(self):                                              # 10
         s = self.svc()
         p = self.fresh(s, "t10", holdout_looks=1, trial_budget=3)

@@ -838,6 +838,10 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   new protocol identity. The user-workspace protocol `RP_257969CFAFFD` (v1) had zero trials, zero
   proposal attempts and zero holdout looks. It is retired, never edited, before any numerical trial,
   and a v2 protocol with the same windows, budgets and exposure replaces it.
+- **Pre-grant identity check (preflight fix):** before a holdout look is granted, `evaluate_holdout`
+  recompiles the frozen library definition. It refuses `HOLDOUT_DEFINITION_CHANGED` unless the result
+  has the shortlisted `strategy_id`/`logic_hash`. Before this fix, a library instance changed in place
+  was only caught by the gate after the grant, which spent the look.
 
 ### ADR-56 Locked research protocol, holdout ledger, program-level trial ledger (pre-AI gate)
 - **Problem:** the pre-AI audit found three protocol blockers:
