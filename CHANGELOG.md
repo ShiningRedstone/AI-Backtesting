@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Canonical directional Dukascopy execution (ADR-55 follow-up)
+
+| Item | Status |
+|---|---|
+| `NQ_DUKASCOPY@DUKASCOPY` scenario `dukascopy_directional_cost_assumption_v1`, `spread_source: quotes`; commission/fees/slippage/financing numbers unchanged; status `assumed` | CONFIGURED, TESTED |
+| Eligibility: only `has_ask_ohlc` datasets; BID-only and BID+spread (incl. frozen `NQ_DUKASCOPY_BIDASK_2021_2026_*`) refused with `reason_codes: [ASK_OHLC_REQUIRED]`; rows gain `has_ask_ohlc`, `cost.spread_source`, `cost.quote_model` | IMPLEMENTED, TESTED |
+| Legacy single-series profile (`spread_source: dataset`) keeps its old eligibility when configured | TESTED |
+| Real ASK-OHLC datasets `NQ_DUKASCOPY_BIDASK_OHLC_2021_2026_1M_6B0A245100` / `_5M_96699F7568`; real comparison RUN_2026_00027 vs RUN_2026_00028 reconciled | REAL DATA (user workspace; not in the repository) |
+| Preferred Research Dataset set to the 5m ASK-OHLC dataset; one canonical EMA baseline run | REAL DATA (user workspace) |
+| Historical runs and frozen datasets | UNCHANGED (legacy evidence, never recomputed) |
+
 ## Directional BID/ASK quote execution (after Phase 9; ADR-55)
 
 | Item | Status |
@@ -17,7 +28,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Refusal without complete, finite ASK OHLC (backtester + eligibility) | IMPLEMENTED, TESTED |
 | Provenance: `quote_model`, `execution_sides`, `spread_treatment`, `dataset_has_ask_ohlc`, `gross_pnl`, side-naming fill rules; trades `entry_quote_side`/`exit_quote_side`; `trades_hash` definition unchanged | IMPLEMENTED, TESTED |
 | ASK == BID reproduces single-series trades hash exactly (market, stop, limit entries) | TESTED |
-| Real Dukascopy re-import with ASK OHLC; switching the Dukascopy profile to `quotes` | NOT DONE (frozen datasets and active config unchanged) |
+| Real Dukascopy re-import with ASK OHLC; switching the Dukascopy profile to `quotes` | DONE later (see "Canonical directional Dukascopy execution") |
 | CLI/web import form options for ASK OHLC columns | NOT IMPLEMENTED (`Services.import_file` accepts them) |
 
 ## Dukascopy-style cost plumbing (after Phase 9)

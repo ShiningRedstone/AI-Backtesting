@@ -743,18 +743,21 @@ class Services:
         from edgelab.engine.costs import CostConfigError, CostScenarioIncomplete, cost_model_from_config
         from edgelab.data.schema import timeframe_minutes
         m = self.store.get_manifest(d["dataset_id"])
-        reasons = []
+        reasons, codes = [], []                     # codes: machine-readable, for the quote/spread refusals
         try:
             cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)
-            cost = {"status": cm.status, "profile": getattr(cm, "profile", None)}
+            cost = {"status": cm.status, "profile": getattr(cm, "profile", None), "spread_source": cm.spread_source,
+                    "quote_model": "directional_bid_ask" if cm.spread_source == "quotes" else "single_series"}
             if getattr(cm, "scenario", ""):
                 cost["scenario"] = cm.scenario
             if cm.spread_source == "dataset" and not m.has_spread:      # mirrors the backtester's own refusal
                 reasons.append("cost profile charges the dataset's per-bar spread, but this dataset has no spread "
                                "(BID-only) - use a BID/ASK dataset")
+                codes.append("DATASET_SPREAD_REQUIRED")
             if cm.spread_source == "quotes" and not m.has_ask_ohlc:     # mirrors the backtester's own refusal
                 reasons.append("cost profile uses directional BID/ASK execution (spread_source: quotes), but this "
                                "dataset has no ASK OHLC - import the ASK feed's OHLC (it is never inferred)")
+                codes.append("ASK_OHLC_REQUIRED")
         except CostScenarioIncomplete as exc:          # configured status, but the named scenario lacks fields
             cost = {"status": exc.status, "incomplete": True, "scenario": exc.scenario, "missing": exc.missing,
                     "reason": str(exc)}
@@ -782,7 +785,8 @@ class Services:
         return {**d, "cost": cost, "synthetic": self._is_synthetic(m), "identity": identity,
                 "preferred": d["dataset_id"] == pref,
                 "limitations": self._limitations(m) + ([identity["calendar_caveat"]] if identity.get("calendar_caveat") else []),
-                "runnable": not reasons, "reasons": reasons}
+                "has_ask_ohlc": bool(m.has_ask_ohlc), "runnable": not reasons, "reasons": reasons,
+                "reason_codes": codes}
 
     def _instrument_identity(self, symbol: str) -> dict:
         from edgelab.instruments import identity_info, identity_problem, load_instruments

@@ -869,8 +869,24 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
 - **Unchanged:**
   - `fixed`/`dataset` spread modes and all single-series behaviour, and the Phase 1 demo;
   - the frozen BID/BIDASK datasets;
-  - the active Dukascopy cost profile (still `spread_source: dataset`).
+  - the active Dukascopy cost profile at the time (`spread_source: dataset`; switched by the follow-up below).
   - `Services.list_datasets` rows do not yet show `has_ask_ohlc` (visible in dataset detail).
+- **Follow-up: directional BID/ASK is the canonical Dukascopy research execution model.** After the
+  real ASK-OHLC re-import (`NQ_DUKASCOPY_BIDASK_OHLC_2021_2026_1M_6B0A245100` / `_5M_96699F7568`, BID,
+  spread, timestamps, quality and gaps identical to the frozen BIDASK datasets; zero BID > ASK) and the
+  reconciled real comparison (RUN_2026_00027 single-series vs RUN_2026_00028 directional; aggregate net
+  delta closed to ~1e-14 R):
+  - `NQ_DUKASCOPY@DUKASCOPY` uses scenario `dukascopy_directional_cost_assumption_v1` with
+    `spread_source: quotes`. Every number is unchanged from `dukascopy_central_cost_assumption_v1`
+    (notional 30.15 per USD 1M per side, fees 0, slippage 0.50 / 0.50 / limit 0 points, financing
+    `not_modeled`); status stays `assumed` (not broker-verified).
+  - Only datasets with `has_ask_ohlc` are eligible. BID-only and BID+spread datasets (including the
+    frozen `NQ_DUKASCOPY_BIDASK_2021_2026_*`) are refused with reason code `ASK_OHLC_REQUIRED`.
+    Eligibility rows add `reason_codes` (quote/spread refusals: `ASK_OHLC_REQUIRED`,
+    `DATASET_SPREAD_REQUIRED`), `has_ask_ohlc`, and `cost.spread_source` / `cost.quote_model`.
+  - Legacy single-series runs (BID + explicit spread cost, scenario
+    `dukascopy_central_cost_assumption_v1`) and the frozen datasets stay stored, unchanged, as evidence;
+    they are not recomputed. Re-running them needs a config that restores the legacy profile.
 
 ### ADR-54 Dukascopy source identity, preferred research dataset, AI discovery over the Mode B gate (Phase 9)
 - **Problem:**
@@ -1224,9 +1240,13 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 ## Known limitations (Phase 9)
 
 - **Directional BID/ASK (ADR-55):**
-  - Opt-in only. The real Dukascopy data has not yet been re-imported with ASK OHLC, and the
-    active cost profile still uses `spread_source: dataset`, so real Dukascopy runs remain
-    single-series on BID (short-side optimistic) until both are done.
+  - Canonical for Dukascopy (`spread_source: quotes`, see the ADR-55 follow-up); opt-in for every
+    other profile. The real ASK-OHLC datasets live in the user's workspace, not in this repository.
+  - One cost profile per instrument/provider: the legacy single-series scenario is no longer
+    selectable from the shipped config (re-running it needs an edited config copy).
+  - The Preferred Research Dataset is one per workspace, not per instrument/timeframe.
+  - Commission and slippage remain research assumptions; the 538 partial real 5m bars, unverified
+    holidays/early closes and unmodelled financing remain disclosed limitations.
   - The CLI import command and web import form do not expose the ASK OHLC columns yet;
     `Services.import_file` accepts them.
   - ASK-side tick alignment and range spikes are not separately checked.

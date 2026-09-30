@@ -91,16 +91,19 @@ costs:
         DUKASCOPY:
           status: assumed                   # research ASSUMPTION, not broker-verified
           notes: "Dukascopy CFD pricing shape; commission and slippage = named central research assumptions (DATA_IMPORT.md)"
-          # Named research-cost scenario: recorded on every run (scenario + basis).
-          scenario: dukascopy_central_cost_assumption_v1
-          basis: "Central research assumption of USD 30.15 per USD 1,000,000 traded notional per side, equal to the simple arithmetic mean of Dukascopy's currently published Self Trader index/CFD commission tiers ($52.50 to $7.50). This is not a verified historical 2021-2026 applicable rate for a specific Dukascopy account and does not model daily tier changes. Slippage is separately assumed at 0.50 EdgeLab points per market/stop execution based on the previously documented Tradovate proxy."
+          # Named research-cost scenario: recorded on every run (scenario + basis). Canonical since ADR-55:
+          # directional BID/ASK execution. The earlier dukascopy_central_cost_assumption_v1 (identical
+          # numbers, spread_source: dataset) remains recorded on legacy single-series runs.
+          scenario: dukascopy_directional_cost_assumption_v1
+          basis: "Central research assumption of USD 30.15 per USD 1,000,000 traded notional per side, equal to the simple arithmetic mean of Dukascopy's currently published Self Trader index/CFD commission tiers ($52.50 to $7.50). This is not a verified historical 2021-2026 applicable rate for a specific Dukascopy account and does not model daily tier changes. Slippage is separately assumed at 0.50 EdgeLab points per market/stop execution based on the previously documented Tradovate proxy. Directional variant: identical commission and slippage; spread_source quotes - buys fill on the dataset's observed ASK OHLC, sells on BID, so the bid/ask spread is embedded in execution prices and the separate spread cost is zero."
           # Dukascopy publishes commission per USD 1 million traded (tiered by account/volume):
           commission_mode: notional
           commission_per_million: 30.15    # USD per USD 1,000,000 notional per side (assumption; see basis)
           fees_per_side: 0
-          # Variable spread: charged from a per-bar spread series (ask_close - bid_close). The imported
-          # BID-only datasets have none, so backtests on them refuse until an ASK series is imported.
-          spread_source: dataset
+          # Directional BID/ASK execution (ADR-55): buys fill on the dataset's observed ASK OHLC, sells on
+          # BID; the spread is inside the fill prices, so no separate spread cost is charged. Only datasets
+          # imported with ASK OHLC (has_ask_ohlc) are eligible; BID-only and BID+spread datasets refuse.
+          spread_source: quotes
           spread_points: null
           slippage_unit: points
           slippage_ticks_market: 0.50      # EdgeLab points (1.0 quoted price) = 50 Dukascopy points

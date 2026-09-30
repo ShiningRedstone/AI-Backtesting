@@ -285,20 +285,22 @@ class TestGapRunsSplitAtTradingDates(unittest.TestCase):
 
 
 class TestResearchRefusals(DukascopyBase):
-    def test_complete_costs_but_bid_only_dataset_is_refused_for_missing_spread(self):
+    def test_complete_costs_but_bid_only_dataset_is_refused_for_missing_ask_ohlc(self):
         from edgelab.engine.backtester import BacktestError
         row = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
-        self.assertEqual((row["cost"]["status"], row["cost"]["scenario"]), ("assumed", "dukascopy_central_cost_assumption_v1"))
+        self.assertEqual((row["cost"]["status"], row["cost"]["scenario"]), ("assumed", "dukascopy_directional_cost_assumption_v1"))
         self.assertNotIn("incomplete", row["cost"])                               # scenario complete
         self.assertFalse(any("incomplete" in r or "unconfigured" in r for r in row["reasons"]))
-        self.assertFalse(row["runnable"])                                          # BID-only: no per-bar spread
-        self.assertEqual(row["reasons"], ["cost profile charges the dataset's per-bar spread, but this dataset has no "
-                                          "spread (BID-only) - use a BID/ASK dataset"])
+        self.assertFalse(row["runnable"])                                          # BID-only: no ASK OHLC
+        self.assertEqual(row["reasons"], ["cost profile uses directional BID/ASK execution (spread_source: quotes), "
+                                          "but this dataset has no ASK OHLC - import the ASK feed's OHLC (it is "
+                                          "never inferred)"])
+        self.assertEqual(row["reason_codes"], ["ASK_OHLC_REQUIRED"])
         with self.assertRaises(BacktestError):                                     # the engine's own refusal agrees
             self.svc.backtest_strategy(EMA.read_text(), self.m5)
         self.assertTrue(any("NOT verified: holidays" in x for x in row["limitations"]))       # caveat stays visible
 
-    def test_bid_ask_dataset_with_complete_costs_is_eligible(self):
+    def test_bid_ask_close_only_dataset_is_refused_ask_ohlc_dataset_is_eligible(self):
         root = workspace()
         self.addCleanup(shutil.rmtree, root, True)
         csv = root / "bidask.csv"
@@ -308,15 +310,21 @@ class TestResearchRefusals(DukascopyBase):
         f.to_csv(csv, index=False)
         svc = Services(root=root)
         self.addCleanup(svc.store.close)
-        r = svc.import_file({**OPTS, "file": str(csv), "dataset_name": "TEST_BIDASK", "derive_timeframes": ["5m"],
-                             "bid_close_column": "close", "ask_close_column": "ask_close"})
+        for k in ("open", "high", "low"):                                          # synthetic ASK OHLC
+            f[f"ask_{k}"] = (f[k].astype(float) + 3.25).map(lambda x: f"{x:.3f}")
+        f.to_csv(csv, index=False)
+        base = {**OPTS, "file": str(csv), "derive_timeframes": ["5m"], "bid_close_column": "close",
+                "ask_close_column": "ask_close"}
+        old = svc.import_file({**base, "dataset_name": "TEST_BIDASK"})              # legacy: ask_close -> spread only
+        new = svc.import_file({**base, "dataset_name": "TEST_BIDASK_OHLC", "ask_open_column": "ask_open",
+                               "ask_high_column": "ask_high", "ask_low_column": "ask_low"})
         rows = {d["dataset_id"]: d for d in svc.backtest_readiness(EMA.read_text())["datasets"]}
-        five = next(d for d in rows.values() if d["timeframe"] == "5m")
-        self.assertTrue(five["has_spread"])
-        self.assertEqual((five["runnable"], five["reasons"]), (True, []))          # allowed: gate says complete
-        self.assertEqual((five["cost"]["status"], five["cost"]["scenario"]),
-                         ("assumed", "dukascopy_central_cost_assumption_v1"))
-        self.assertIn(r["dataset_id"], rows)
+        five_old, five_new = rows[old["derived"][0]], rows[new["derived"][0]]
+        self.assertTrue(five_old["has_spread"])
+        self.assertEqual((five_old["runnable"], five_old["reason_codes"]), (False, ["ASK_OHLC_REQUIRED"]))
+        self.assertEqual((five_new["runnable"], five_new["reasons"], five_new["has_ask_ohlc"]), (True, [], True))
+        self.assertEqual((five_new["cost"]["status"], five_new["cost"]["scenario"]),
+                         ("assumed", "dukascopy_directional_cost_assumption_v1"))
 
     def test_calendar_back_to_provisional_is_refused_again(self):
         cfg = copy.deepcopy(self.svc.cfg)

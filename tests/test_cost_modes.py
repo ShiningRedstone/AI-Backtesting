@@ -55,16 +55,17 @@ class TestDukascopyTemplate(unittest.TestCase):
     def test_profile_shape(self):
         prov = self.cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
         self.assertEqual((prov["commission_mode"], prov["spread_source"], prov["financing_mode"], prov["slippage_unit"]),
-                         ("notional", "dataset", "not_modeled", "points"))
+                         ("notional", "quotes", "not_modeled", "points"))       # canonical: ADR-55 directional
 
     def test_central_cost_scenario_is_complete(self):
         from edgelab.engine.costs import CostScenarioIncomplete  # noqa: F401 - no longer raised for this profile
         m = cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertEqual((m.scenario, m.status, m.commission_mode, m.commission_per_million, m.slippage_unit,
                           m.slippage_ticks_market, m.slippage_ticks_stop, m.spread_source, m.financing_mode),
-                         ("dukascopy_central_cost_assumption_v1", "assumed", "notional", 30.15, "points",
-                          0.50, 0.50, "dataset", "not_modeled"))
-        self.assertEqual(m.basis, "Central research assumption of USD 30.15 per USD 1,000,000 traded notional per side, equal to the simple arithmetic mean of Dukascopy's currently published Self Trader index/CFD commission tiers ($52.50 to $7.50). This is not a verified historical 2021-2026 applicable rate for a specific Dukascopy account and does not model daily tier changes. Slippage is separately assumed at 0.50 EdgeLab points per market/stop execution based on the previously documented Tradovate proxy.")
+                         ("dukascopy_directional_cost_assumption_v1", "assumed", "notional", 30.15, "points",
+                          0.50, 0.50, "quotes", "not_modeled"))
+        self.assertEqual((m.slippage_ticks_limit, m.fees_per_side, m.spread_points), (0.0, 0.0, 0.0))
+        self.assertEqual(m.basis, "Central research assumption of USD 30.15 per USD 1,000,000 traded notional per side, equal to the simple arithmetic mean of Dukascopy's currently published Self Trader index/CFD commission tiers ($52.50 to $7.50). This is not a verified historical 2021-2026 applicable rate for a specific Dukascopy account and does not model daily tier changes. Slippage is separately assumed at 0.50 EdgeLab points per market/stop execution based on the previously documented Tradovate proxy. Directional variant: identical commission and slippage; spread_source quotes - buys fill on the dataset's observed ASK OHLC, sells on BID, so the bid/ask spread is embedded in execution prices and the separate spread cost is zero.")
         # HistData's profile is untouched and never used for Dukascopy
         h = cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA")
         self.assertEqual((h.status, h.scenario, h.commission_mode), ("assumed", "", "per_unit"))
@@ -80,7 +81,7 @@ class TestDukascopyTemplate(unittest.TestCase):
         prov["commission_per_million"] = 1.0                                       # test input only
         m = cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertEqual((m.commission_mode, m.spread_source, m.financing_mode, m.commission_per_side),
-                         ("notional", "dataset", "not_modeled", 0.0))
+                         ("notional", "quotes", "not_modeled", 0.0))
 
 
 class TestNamedCostScenario(unittest.TestCase):

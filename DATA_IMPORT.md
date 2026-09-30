@@ -172,6 +172,22 @@ The file goes through the same pipeline as every other source (inspect, normaliz
 manifest and hashes, immutable store, derived timeframes). There is no separate importer. It is
 stored as its own source identity and is never merged with or compared into HistData.
 
+**Canonical research execution model (ADR-55): directional BID/ASK.**
+- The `NQ_DUKASCOPY@DUKASCOPY` cost profile uses scenario `dukascopy_directional_cost_assumption_v1`
+  with `spread_source: quotes`: BUY executions fill on ASK, SELL executions on BID, using the
+  dataset's observed ASK OHLC (never inferred).
+- The spread is inside the execution prices, so the separate spread cost is zero and gross P&L is
+  already after the bid/ask spread. Commission (notional) and slippage (0.50 points per market/stop
+  fill, 0 for limits) remain explicit modelled costs - research assumptions, not verified
+  account-specific historical rates.
+- New Dukascopy research uses the full ASK-OHLC datasets (`NQ_DUKASCOPY_BIDASK_OHLC_2021_2026_*`).
+  BID-only and BID+spread datasets are not eligible (reason code `ASK_OHLC_REQUIRED`).
+- Earlier single-series runs (BID + explicit spread cost, scenario
+  `dukascopy_central_cost_assumption_v1`) and the frozen `NQ_DUKASCOPY_BIDASK_2021_2026_*` datasets are
+  kept unchanged as legacy evidence.
+- Existing data-quality limits stay disclosed: 538 partial 5m bars (missing 1m minutes, nothing
+  filled), unverified holidays/early closes, financing not modelled.
+
 ### Source identity (instrument `NQ_DUKASCOPY`)
 
 It comes from the user's download code:
@@ -253,7 +269,8 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
    - The profile already has Dukascopy's cost shape, with every number left empty:
      - **Commission:** `commission_mode: notional`. The rate is `commission_per_million`, in USD per
        USD 1M traded, from your account tier.
-     - **Spread:** `spread_source: dataset`, charged from a per-bar `ask_close - bid_close` series.
+     - **Spread:** now `spread_source: quotes` (directional BID/ASK execution, see above). The legacy
+       single-series mode `spread_source: dataset` charged a per-bar `ask_close - bid_close` series.
      - **Financing:** `financing_mode: not_modeled`. Dukascopy's overnight holding costs follow
        changing benchmark rates, so they are disclosed as not modelled rather than faked with one
        constant.

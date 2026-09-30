@@ -512,10 +512,14 @@ class TestQuotesCosts(unittest.TestCase):
     def test_config_resolution(self):
         cfg = copy.deepcopy(CFG)
         prof = cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
-        self.assertEqual(prof["spread_source"], "dataset")                         # the live profile is unchanged
-        prof["spread_source"] = "quotes"
+        self.assertEqual((prof["spread_source"], prof["scenario"]),                 # canonical live profile (ADR-55)
+                         ("quotes", "dukascopy_directional_cost_assumption_v1"))
         cm = cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertEqual((cm.to_dict()["spread_source"], cm.spread_points), ("quotes", 0.0))
+        legacy = copy.deepcopy(cfg)                                                 # legacy single-series still resolves
+        legacy["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"].update(
+            spread_source="dataset", scenario="dukascopy_central_cost_assumption_v1")
+        self.assertEqual(cost_model_from_config(legacy, "NQ_DUKASCOPY", provider="DUKASCOPY").spread_source, "dataset")
         prof["spread_points"] = 1.0
         with self.assertRaises(CostConfigError):
             cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
@@ -623,18 +627,13 @@ class TestCausalityWithAsk(unittest.TestCase):
 
 
 class TestQuotesThroughServices(unittest.TestCase):
-    """Eligibility + backtester refusal + recorded provenance, on a TEMP copy of the configs whose
-    Dukascopy profile is switched to quotes (the repository's live config is not modified)."""
+    """Eligibility + backtester refusal + recorded provenance under the CANONICAL Dukascopy profile
+    (spread_source: quotes, ADR-55), on a temp copy of the repository configs; synthetic data only."""
 
     @classmethod
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
         shutil.copytree("configs", cls.root / "configs")
-        p = cls.root / "configs" / "costs.yaml"
-        txt = p.read_text()
-        old = "          spread_source: dataset\n          spread_points: null"
-        assert txt.count(old) == 1
-        p.write_text(txt.replace(old, "          spread_source: quotes\n          spread_points: null"))
         csv = cls.root / "combined.csv"
         write_fixture(csv, end="2024-03-09")
         f = pd.read_csv(csv, dtype=str)
@@ -660,7 +659,22 @@ class TestQuotesThroughServices(unittest.TestCase):
     def test_eligibility_requires_ask_ohlc(self):
         rows = {d["dataset_id"]: d for d in self.svc.backtest_readiness()["datasets"]}
         self.assertTrue(any("no ASK OHLC" in r for r in rows[self.close_only]["reasons"]))
+        self.assertEqual(rows[self.close_only]["reason_codes"], ["ASK_OHLC_REQUIRED"])     # machine-readable
+        self.assertEqual((rows[self.close_only]["runnable"], rows[self.close_only]["has_ask_ohlc"]), (False, False))
         self.assertFalse(any("ASK OHLC" in r for r in rows[self.ohlc]["reasons"]))
+        self.assertEqual((rows[self.ohlc]["reason_codes"], rows[self.ohlc]["has_ask_ohlc"]), ([], True))
+        self.assertEqual((rows[self.ohlc]["cost"]["spread_source"], rows[self.ohlc]["cost"]["quote_model"]),
+                         ("quotes", "directional_bid_ask"))
+
+    def test_legacy_single_series_profile_keeps_its_old_eligibility(self):
+        cfg = copy.deepcopy(self.svc.cfg)
+        cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"].update(
+            spread_source="dataset", scenario="dukascopy_central_cost_assumption_v1")
+        svc = Services(cfg=cfg, root=self.root)
+        rows = {d["dataset_id"]: d for d in svc.backtest_readiness()["datasets"]}
+        self.assertEqual((rows[self.close_only]["reason_codes"], rows[self.close_only]["cost"]["quote_model"]),
+                         ([], "single_series"))                                     # BID+spread dataset eligible again
+        self.assertFalse(any("ASK OHLC" in r for r in rows[self.close_only]["reasons"]))
 
     def test_backtester_refuses_and_records_provenance(self):
         with self.assertRaises(Exception) as cm:
@@ -672,7 +686,7 @@ class TestQuotesThroughServices(unittest.TestCase):
         self.assertEqual((a["quote_model"], a["spread_treatment"], a["costs"]["spread_source"],
                           a["costs"]["scenario"], a["dataset_has_ask_ohlc"]),
                          ("directional_bid_ask", "embedded_in_quotes", "quotes",
-                          "dukascopy_central_cost_assumption_v1", True))
+                          "dukascopy_directional_cost_assumption_v1", True))
         self.assertEqual((rec["dataset"]["dataset_id"], rec["dataset"]["has_ask_ohlc"]), (self.ohlc, True))
         self.assertEqual(rec["strategy"]["strategy_id"], out["strategy_id"])
         self.assertGreater(len(trades), 0)

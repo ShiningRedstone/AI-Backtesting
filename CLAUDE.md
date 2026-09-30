@@ -27,8 +27,11 @@ refused for research until its identity is stated, own unconfigured costs, provi
 context, providers incl. deterministic mock, strict 8-stage gate, human review, lineage; ADR-54). The real Dukascopy CSV
 has NOT been imported in this repository. `NQ_DUKASCOPY` = Dukascopy USATECH.IDX/USD (feed E_NQ-100), BID, index CFD research
 proxy (not CME NQ), `identity_status: user_specified`, `calendar_status: regular_hours_verified` (regular hours evidenced; holidays/early
-closes explicitly unverified and shown as a caveat); research stays refused only while its separate cost profile is
-`unconfigured` (read-only check: `scripts/dukascopy_inspect.py`).
+closes explicitly unverified and shown as a caveat). Canonical Dukascopy research execution is directional BID/ASK (ADR-55):
+cost scenario `dukascopy_directional_cost_assumption_v1`, `spread_source: quotes` (buys on ASK, sells on BID, spread in
+the fill prices, no separate spread cost; commission/slippage are assumptions); only `has_ask_ohlc` datasets are eligible
+(`ASK_OHLC_REQUIRED`). Real ASK-OHLC datasets `NQ_DUKASCOPY_BIDASK_OHLC_2021_2026_*` live in the user's workspace; the frozen
+BID/BIDASK datasets and legacy single-series runs are kept as evidence (read-only check: `scripts/dukascopy_inspect.py`).
 Calendar `DUKASCOPY_USATECH_OBSERVED` (NY 18:00->16:15) comes from the real-file inspection; holidays unresolved.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
