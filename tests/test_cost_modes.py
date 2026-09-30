@@ -52,43 +52,28 @@ class TestDukascopyTemplate(unittest.TestCase):
         from edgelab.core.config import load_config
         self.cfg = load_config("configs")
 
-    def test_template_shape_and_refusal(self):
+    def test_profile_shape(self):
         prov = self.cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
         self.assertEqual((prov["commission_mode"], prov["spread_source"], prov["financing_mode"], prov["slippage_unit"]),
                          ("notional", "dataset", "not_modeled", "points"))
-        self.assertIsNone(prov["commission_per_million"])
-        with self.assertRaises(CostConfigError):
-            cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
 
-    def test_agreed_slippage_scenario_is_set_and_commission_is_the_only_gap(self):
-        prov = self.cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
-        self.assertEqual(prov["scenario"], "tradovate_average_slippage_proxy_v1")
-        self.assertEqual(prov["status"], "assumed")
-        self.assertEqual(prov["basis"].strip(),                                     # YAML '>' folds lines with spaces
-                         "Central public-evidence assumption of 2 CME NQ ticks (0.50 index points) per market/stop "
-                         "execution. Based on Tradovate's statement that slippage is normal and public Tradovate-user "
-                         "reports describing roughly 1–2 ticks / a couple ticks. This is not a statistically measured "
-                         "Tradovate-wide average and is not broker-verified for Dukascopy USATECH.IDX/USD.")
-        self.assertEqual((prov["slippage_ticks_market"], prov["slippage_ticks_stop"]), (0.50, 0.50))
-        self.assertIsNone(prov["commission_per_million"])                           # commission still unset
-        with self.assertRaises(CostConfigError) as cm:
-            cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
-        msg = str(cm.exception)
-        from edgelab.engine.costs import CostScenarioIncomplete
-        self.assertIsInstance(cm.exception, CostScenarioIncomplete)               # still a CostConfigError
-        self.assertEqual((cm.exception.scenario, cm.exception.status, cm.exception.missing),
-                         ("tradovate_average_slippage_proxy_v1", "assumed", ["commission_per_million"]))
-        self.assertIn("set: commission_per_million:", msg)                        # the ONLY missing item
-        for other in ("scenario:", "basis:", "slippage_ticks_market:", "slippage_ticks_stop:", "status:",
-                      "slippage_unit:", "commission_mode:"):
-            self.assertNotIn(other, msg)
-        # HistData's profile is untouched
-        self.assertEqual(cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA").status, "assumed")
+    def test_central_cost_scenario_is_complete(self):
+        from edgelab.engine.costs import CostScenarioIncomplete  # noqa: F401 - no longer raised for this profile
+        m = cost_model_from_config(self.cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
+        self.assertEqual((m.scenario, m.status, m.commission_mode, m.commission_per_million, m.slippage_unit,
+                          m.slippage_ticks_market, m.slippage_ticks_stop, m.spread_source, m.financing_mode),
+                         ("dukascopy_central_cost_assumption_v1", "assumed", "notional", 30.15, "points",
+                          0.50, 0.50, "dataset", "not_modeled"))
+        self.assertEqual(m.basis, "Central research assumption of USD 30.15 per USD 1,000,000 traded notional per side, equal to the simple arithmetic mean of Dukascopy's currently published Self Trader index/CFD commission tiers ($52.50 to $7.50). This is not a verified historical 2021-2026 applicable rate for a specific Dukascopy account and does not model daily tier changes. Slippage is separately assumed at 0.50 EdgeLab points per market/stop execution based on the previously documented Tradovate proxy.")
+        # HistData's profile is untouched and never used for Dukascopy
+        h = cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA")
+        self.assertEqual((h.status, h.scenario, h.commission_mode), ("assumed", "", "per_unit"))
 
     def test_notional_profile_requires_the_per_million_rate(self):
         cfg = copy.deepcopy(self.cfg)
         prov = cfg["costs"]["symbols"]["NQ_DUKASCOPY"]["providers"]["DUKASCOPY"]
-        prov.update(status="assumed", slippage_ticks_market=0.0, slippage_ticks_stop=0.0)   # test inputs only
+        prov.update(status="assumed", slippage_ticks_market=0.0, slippage_ticks_stop=0.0,   # test inputs only
+                    commission_per_million=None)
         with self.assertRaises(CostConfigError) as cm:
             cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
         self.assertIn("commission_per_million", str(cm.exception))
@@ -111,7 +96,7 @@ class TestNamedCostScenario(unittest.TestCase):
 
     def test_each_required_field_is_named_when_missing(self):
         self.prov.update(status="assumed", scenario=None, basis=None, slippage_ticks_market=None,
-                         slippage_ticks_stop=None)
+                         slippage_ticks_stop=None, commission_per_million=None)
         with self.assertRaises(CostConfigError) as cm:
             self.model()
         msg = str(cm.exception)

@@ -285,21 +285,38 @@ class TestGapRunsSplitAtTradingDates(unittest.TestCase):
 
 
 class TestResearchRefusals(DukascopyBase):
-    def test_backtest_refused_only_by_unconfigured_costs(self):
-        with self.assertRaises(CostConfigError) as cm:
-            self.svc.backtest_strategy(EMA.read_text(), self.m5)
-        self.assertIn("NQ_DUKASCOPY.providers.DUKASCOPY is incomplete - set: commission_per_million", str(cm.exception))
-        row0 = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
-        self.assertIn("set: commission_per_million", row0["cost"]["reason"])      # missing commission is the reason
+    def test_complete_costs_but_bid_only_dataset_is_refused_for_missing_spread(self):
+        from edgelab.engine.backtester import BacktestError
         row = next(d for d in self.svc.backtest_readiness()["datasets"] if d["dataset_id"] == self.m5)
-        self.assertFalse(row["runnable"])
-        self.assertEqual(row["reasons"], ["cost scenario 'tradovate_average_slippage_proxy_v1' (assumed) is "
-                                          "incomplete - missing commission_per_million"])
-        self.assertFalse(any("unconfigured" in r for r in row["reasons"]))          # not called unconfigured
-        self.assertEqual((row["cost"]["status"], row["cost"]["incomplete"], row["cost"]["missing"]),
-                         ("assumed", True, ["commission_per_million"]))
-        self.assertIn("set: commission_per_million:", row["cost"]["reason"])       # precise error unchanged
+        self.assertEqual((row["cost"]["status"], row["cost"]["scenario"]), ("assumed", "dukascopy_central_cost_assumption_v1"))
+        self.assertNotIn("incomplete", row["cost"])                               # scenario complete
+        self.assertFalse(any("incomplete" in r or "unconfigured" in r for r in row["reasons"]))
+        self.assertFalse(row["runnable"])                                          # BID-only: no per-bar spread
+        self.assertEqual(row["reasons"], ["cost profile charges the dataset's per-bar spread, but this dataset has no "
+                                          "spread (BID-only) - use a BID/ASK dataset"])
+        with self.assertRaises(BacktestError):                                     # the engine's own refusal agrees
+            self.svc.backtest_strategy(EMA.read_text(), self.m5)
         self.assertTrue(any("NOT verified: holidays" in x for x in row["limitations"]))       # caveat stays visible
+
+    def test_bid_ask_dataset_with_complete_costs_is_eligible(self):
+        root = workspace()
+        self.addCleanup(shutil.rmtree, root, True)
+        csv = root / "bidask.csv"
+        write_fixture(csv, end="2024-04-27")
+        f = pd.read_csv(csv, dtype=str)
+        f["ask_close"] = (f["close"].astype(float) + 3.25).map(lambda x: f"{x:.3f}")   # synthetic spread
+        f.to_csv(csv, index=False)
+        svc = Services(root=root)
+        self.addCleanup(svc.store.close)
+        r = svc.import_file({**OPTS, "file": str(csv), "dataset_name": "TEST_BIDASK", "derive_timeframes": ["5m"],
+                             "bid_close_column": "close", "ask_close_column": "ask_close"})
+        rows = {d["dataset_id"]: d for d in svc.backtest_readiness(EMA.read_text())["datasets"]}
+        five = next(d for d in rows.values() if d["timeframe"] == "5m")
+        self.assertTrue(five["has_spread"])
+        self.assertEqual((five["runnable"], five["reasons"]), (True, []))          # allowed: gate says complete
+        self.assertEqual((five["cost"]["status"], five["cost"]["scenario"]),
+                         ("assumed", "dukascopy_central_cost_assumption_v1"))
+        self.assertIn(r["dataset_id"], rows)
 
     def test_calendar_back_to_provisional_is_refused_again(self):
         cfg = copy.deepcopy(self.svc.cfg)
@@ -325,21 +342,18 @@ class TestResearchRefusals(DukascopyBase):
         self.assertIn("calendar_evidence", identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
         cfg["instruments"]["NQ_DUKASCOPY"]["calendar_evidence"] = "test: inspection report"
         self.assertIsNone(identity_problem(load_instruments(cfg)["NQ_DUKASCOPY"]))
-        with self.assertRaises(CostConfigError) as cm:
-            cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")
-        self.assertIn("NQ_DUKASCOPY.providers.DUKASCOPY is incomplete - set: commission_per_million", str(cm.exception))
-        svc = Services(cfg=cfg, root=self.root)
-        try:
-            with self.assertRaises(CostConfigError):
-                svc.backtest_strategy(EMA.read_text(), self.m5)
-        finally:
-            svc.store.close()
+        self.assertEqual(cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY").profile,
+                         "NQ_DUKASCOPY@DUKASCOPY")
 
     def test_histdata_costs_never_apply_to_dukascopy(self):
         cfg = self.svc.cfg
         hist = cost_model_from_config(cfg, "NAS100_HISTDATA", provider="HISTDATA")           # unchanged: assumed
         self.assertEqual((hist.status, hist.profile), ("assumed", "NAS100_HISTDATA@HISTDATA"))
-        for prov in ("DUKASCOPY", "HISTDATA", None):
+        duka = cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")                # its OWN profile
+        self.assertEqual((duka.profile, duka.commission_mode, duka.commission_per_million),
+                         ("NQ_DUKASCOPY@DUKASCOPY", "notional", 30.15))
+        self.assertNotEqual(duka.commission_per_side, hist.commission_per_side)
+        for prov in ("HISTDATA", None):                                             # never HistData's, never a default
             with self.assertRaises(CostConfigError):
                 cost_model_from_config(cfg, "NQ_DUKASCOPY", provider=prov)
 
@@ -513,7 +527,7 @@ class TestPreferredDataset(unittest.TestCase):
         self.assertEqual(q.status_code, 200)
         self.assertIn("largest_gaps", q.get_json())
         bt = c.post("/api/backtests", json={"strategy": self.made["strategy_id"], "dataset_id": self.duka5})
-        self.assertEqual((bt.status_code, bt.get_json()["error"]["kind"]), (409, "cost_unconfigured"))
+        self.assertEqual((bt.status_code, bt.get_json()["error"]["kind"]), (422, "backtest"))   # BID-only: no spread
         self.assertEqual(c.post("/api/preferences/research-dataset", json={"dataset_id": "../x"}).status_code, 400)
         r = c.post("/api/preferences/research-dataset", json={"dataset_id": None})
         self.assertEqual(r.get_json()["state"], "unset")

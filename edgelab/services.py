@@ -747,6 +747,11 @@ class Services:
         try:
             cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)
             cost = {"status": cm.status, "profile": getattr(cm, "profile", None)}
+            if getattr(cm, "scenario", ""):
+                cost["scenario"] = cm.scenario
+            if cm.spread_source == "dataset" and not m.has_spread:      # mirrors the backtester's own refusal
+                reasons.append("cost profile charges the dataset's per-bar spread, but this dataset has no spread "
+                               "(BID-only) - use a BID/ASK dataset")
         except CostScenarioIncomplete as exc:          # configured status, but the named scenario lacks fields
             cost = {"status": exc.status, "incomplete": True, "scenario": exc.scenario, "missing": exc.missing,
                     "reason": str(exc)}
