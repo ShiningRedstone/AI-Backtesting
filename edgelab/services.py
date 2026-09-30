@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
+import pandas as pd
 
 from edgelab.core.config import load_config
 from edgelab.data.calendar import load_calendars
@@ -420,7 +421,18 @@ class Services:
         from edgelab.ai.providers import get_provider
         prov = get_provider((request or {}).get("provider") if isinstance(request, Mapping) else None,
                             user_settings=self._user_settings())
-        return _jsonable(discovery.generate(self, request, prov))
+        g = discovery.generate(self, request, prov)
+        pid = (g.get("scope") or {}).get("protocol_id")
+        if pid:                                              # ADR-56: attempts are attributed, never invisible
+            for pr in g["proposals"]:
+                ident = pr["gate"].get("identity") or {}
+                self.store.add_proposal_attempt({"protocol_id": pid, "proposal_id": pr["proposal_id"],
+                                                 "source": "ai_generation", "generation_id": g["generation_id"],
+                                                 "gate_status": pr["gate"]["status"],
+                                                 "logic_hash": ident.get("logic_hash"),
+                                                 "strategy_id": ident.get("strategy_id"),
+                                                 "created_at": g["created_at"]})
+        return _jsonable(g)
 
     def ai_generations(self) -> list[dict]:
         from edgelab.ai.discovery import DiscoveryStore
@@ -451,12 +463,14 @@ class Services:
             for rec in rep.lineage:
                 self.library.save(rep.definitions[rec.strategy_id], rep.identities[rec.strategy_id], rec)
             self.library.save_batch(rep.record())          # Mode B batch record (kind: proposal)
+        self._protocol_record_mode_b(rep)
         return _jsonable({**rep.to_dict(), "saved": save})
 
     def _run_cell(self, src: Any, dataset_id: str, record: bool = False, *,
                   parent_strategy_id: str | None = None, mutation: str | None = None,
                   notes: str | None = None, period: tuple | None = None, lock=None,
-                  status: str = "IN_SAMPLE") -> dict:
+                  status: str = "IN_SAMPLE", entry_point: str = "backtest_strategy",
+                  holdout_access_id: str | None = None) -> dict:
         """One (strategy, dataset) cell through the existing engine: load (re-validated) ->
         [optional period restriction, re-validated] -> compile -> cost model (CFD refusal) ->
         bind -> causality-checked backtest with the strategy's OWN sizing -> metrics ->
@@ -477,6 +491,10 @@ class Services:
             from edgelab.research.compare import restrict_to_period
             ds = restrict_to_period(ds, period[0], period[1], self.cfg.get("validation"))
         strat = compile_strategy(self._definition(src), self.sessions, self._config_hash())
+        # ADR-56 research protocol: refuses holdout/overlap access and over-budget trials BEFORE anything
+        # runs (worker processes have no gate; their search plan was checked by the parent)
+        gate = getattr(self, "_protocol_gate", None)
+        pctx = gate(ds, strat, entry_point, holdout_access_id) if gate is not None else None
         check_identity(ds.instrument)           # provisional source identity: economics not interpretable
         costs = cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
@@ -487,8 +505,11 @@ class Services:
         if record:
             run_id = self._record_cell(res, met, synthetic, notes=notes, parent_strategy_id=parent_strategy_id,
                                        mutation=mutation, lock=lock, status=status)
+        if pctx is not None and pctx["stage"] == "discovery" and entry_point != "search_cell":
+            with guard:                                  # search cells are recorded by the search runner
+                pctx["counted"] = self._protocol_record(pctx, res.dataset, run_id, entry_point)
         return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
-                "metrics": met, "synthetic": synthetic, "run_id": run_id}
+                "metrics": met, "synthetic": synthetic, "run_id": run_id, "protocol": pctx}
 
     def _record_cell(self, res, met: Mapping, synthetic: bool, *, notes: str | None = None,
                      parent_strategy_id: str | None = None, mutation: str | None = None, lock=None,
@@ -569,10 +590,12 @@ class Services:
         from edgelab.research.ranking import select_shortlist
         return _jsonable(select_shortlist(self.store, search_id, strategy_ids))
 
-    def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False) -> dict:
+    def backtest_strategy(self, src: Any, dataset_id: str, record: bool = False, period: tuple | None = None) -> dict:
         """One backtest through the existing engine (causality-checked). Returns measurements with
-        sample-size labels; draws no conclusions. CFD datasets need configured broker costs."""
-        cell = self._run_cell(src, dataset_id, record)
+        sample-size labels; draws no conclusions. CFD datasets need configured broker costs. Under an
+        ACTIVE research protocol (ADR-56) the evaluated bars must lie inside its discovery window
+        (pass `period`); the evaluation is attributed to the protocol's trial ledger."""
+        cell = self._run_cell(src, dataset_id, record, period=period, entry_point="backtest_strategy")
         ds, res, met = cell["ds"], cell["result"], cell["metrics"]
         exits = res.trades["exit_reason"].value_counts().to_dict() if len(res.trades) else {}
         return _jsonable({"strategy_id": cell["strategy"].strategy_id, "dataset_id": dataset_id,
@@ -583,6 +606,8 @@ class Services:
                           "cost_status": cell["costs"].status, "metrics": met,
                           "signal_diagnostics": cell["bound"].last_diagnostics,
                           "skipped": dict(res.skipped),
+                          "protocol": None if cell["protocol"] is None else
+                          {k: cell["protocol"].get(k) for k in ("protocol_id", "stage", "trial_id", "counted")},
                           "note": "historical result under the stated assumptions; not a conclusion"})
 
     # ============================================================ WEB UI (Phase 3.5)
@@ -877,7 +902,7 @@ class Services:
         from edgelab.analytics import research as ra
         from edgelab.research.validation import copy_frozen, freeze_definition
         cell = self._run_cell(copy_frozen(frozen), dataset_id, record, period=(window.start, window.end),
-                              notes=note, status=status)
+                              notes=note, status=status, entry_point="internal_validation")
         if freeze_definition(frozen)[1] != frozen_hash:                  # nothing may alter the frozen definition
             raise RuntimeError("frozen strategy definition changed during validation")
         res = cell["result"]
@@ -905,14 +930,16 @@ class Services:
                           "labels": labels, "windows": clean, **extra})
 
     def evaluate_oos(self, src: Any, dataset_id: str, split_at: Any, record: bool = False,
-                     mc_sims: int = 1000, mc_seed: int = 0) -> dict:
+                     mc_sims: int = 1000, mc_seed: int = 0, bounds: tuple | None = None) -> dict:
         """Temporal holdout of ONE fixed strategy: [start, split) = train (run status IN_SAMPLE),
         [split, end] = out-of-sample (OUT_OF_SAMPLE). Same frozen definition and cost profile on both;
         each window is a re-validated restricted dataset linked to its parent."""
         from edgelab.research.validation import freeze_definition, oos_windows, validation_id
         frozen, fh = freeze_definition(self._definition(src))
         m = self.store.get_manifest(dataset_id)
-        train, oos = oos_windows(m.start, m.end, split_at)
+        lo, hi = (m.start, m.end) if bounds is None else bounds    # bounds: e.g. a protocol's discovery window
+        train, oos = oos_windows(lo, hi, split_at)
+        self._protocol_precheck(m, [(train.start, train.end), (oos.start, oos.end)], "internal_validation")
         vid = validation_id("oos", fh, dataset_id, [train.to_dict(), oos.to_dict()])
         cells = [self._window_cell(frozen, fh, dataset_id, w, st, record, f"{vid} OOS evaluation: {w.role} window")
                  for w, st in ((train, "IN_SAMPLE"), (oos, "OUT_OF_SAMPLE"))]
@@ -920,7 +947,8 @@ class Services:
                                        {"monte_carlo_oos": self._monte_carlo(cells[1]["_trades"], mc_sims, mc_seed)})
 
     def walk_forward(self, src: Any, dataset_id: str, train_months: int, test_months: int,
-                     anchored: bool = False, record: bool = False, mc_sims: int = 1000, mc_seed: int = 0) -> dict:
+                     anchored: bool = False, record: bool = False, mc_sims: int = 1000, mc_seed: int = 0,
+                     bounds: tuple | None = None) -> dict:
         """Walk-forward of ONE fixed strategy over one dataset: consecutive non-overlapping test
         windows (run status WALK_FORWARD), each preceded by its train window (IN_SAMPLE; rolling or
         anchored). Nothing is re-fitted between windows. Pooled OOS = all test-window trades."""
@@ -928,7 +956,10 @@ class Services:
         from edgelab.research.validation import freeze_definition, validation_id, walk_forward_windows
         frozen, fh = freeze_definition(self._definition(src))
         m = self.store.get_manifest(dataset_id)
-        segs = walk_forward_windows(m.start, m.end, train_months, test_months, anchored)
+        lo, hi = (m.start, m.end) if bounds is None else bounds
+        segs = walk_forward_windows(lo, hi, train_months, test_months, anchored)
+        self._protocol_precheck(m, [(w.start, w.end) for sg in segs for w in (sg["train"], sg["test"])],
+                                "internal_validation")
         vid = validation_id("walk_forward", fh, dataset_id,
                             [{"train": s["train"].to_dict(), "test": s["test"].to_dict()} for s in segs])
         cells, tests = [], {}
@@ -953,7 +984,8 @@ class Services:
              "monte_carlo_oos": self._monte_carlo(pooled, mc_sims, mc_seed)})
 
     def random_entry_control(self, src: Any, dataset_id: str, n_controls: int = 20, seed: int = 0,
-                             period: tuple | None = None, sample_status: str = "IN_SAMPLE") -> dict:
+                             period: tuple | None = None, sample_status: str = "IN_SAMPLE",
+                             holdout_access_id: str | None = None) -> dict:
         """Matched random-entry control for ONE fixed candidate (research/controls.py): the candidate
         runs once through the normal path; each seeded realization re-uses the candidate's compiled
         definition, costs, sizing and backtest config and randomizes only entry timing/direction
@@ -971,7 +1003,8 @@ class Services:
         if sample_status not in ("IN_SAMPLE", "OUT_OF_SAMPLE", "WALK_FORWARD"):      # labelling only
             raise ValueError("sample_status must be IN_SAMPLE, OUT_OF_SAMPLE or WALK_FORWARD")
         frozen, fh = freeze_definition(self._definition(src))
-        cell = self._run_cell(copy_frozen(frozen), dataset_id, False, period=period)
+        cell = self._run_cell(copy_frozen(frozen), dataset_id, False, period=period,
+                              entry_point="random_control_candidate", holdout_access_id=holdout_access_id)
         ds, cand, costs, res = cell["ds"], cell["strategy"], cell["costs"], cell["result"]
         csig = cell["bound"].generate_signals(ds.bars)
         n_sig = int((csig.direction != 0).sum())                          # after cooldown (reported)
@@ -1037,6 +1070,369 @@ class Services:
                 if p.is_file() and p.suffix.lower() in (".csv", ".txt"):
                     out.append({"path": str(p.relative_to(self.root.resolve())), "bytes": p.stat().st_size})
         return out
+
+    # ============================================================ RESEARCH PROTOCOL (ADR-56)
+    @staticmethod
+    def _scope_key(instrument: str, provider: str) -> str:
+        return f"{instrument}@{provider}"
+
+    def _governing_protocol(self, instrument: str, provider: str) -> dict | None:
+        """The ACTIVE protocol of an instrument/provider (verified against its identity), or None.
+        Protocol storage is SQLite-only like search storage; other backends have no protocols."""
+        if getattr(self.store, "backend", None) != "sqlite":
+            return None
+        from edgelab.research.protocol import verify_record
+        act = self.store.list_protocols(self._scope_key(instrument, provider), "ACTIVE")
+        if not act:
+            return None
+        verify_record(act[0])
+        return act[0]
+
+    def create_protocol(self, dataset_id: str, discovery: tuple, holdout: tuple, *, name: str = "",
+                        pre_protocol_exposure: list | tuple = (), exposure_statement: str = "",
+                        trial_budget: int | None = None, holdout_looks: int | None = None) -> dict:
+        """Create and ACTIVATE a research protocol (immutable; see research/protocol.py). Windows are
+        trading dates on the dataset's calendar. `pre_protocol_exposure` lists run ids made before
+        activation (recorded by identity only - never metrics, never re-attributed as trials)."""
+        from edgelab.core.identity import code_version, hash_obj
+        from edgelab.engine.costs import cost_model_from_config
+        from edgelab.research import protocol as rp
+        self.store._require_search_storage()
+        ds = self.load_dataset(dataset_id)                  # re-validates + re-checks the content hash
+        m = ds.manifest
+        if m.quality_status == "FAIL":
+            raise rp.ProtocolRefusal("PROTOCOL_DATASET_INELIGIBLE", "dataset failed validation", dataset_id=dataset_id)
+        cm = cost_model_from_config(self.cfg, m.instrument, provider=m.provider)   # unconfigured costs refuse
+        windows = rp.resolve_windows(ds, discovery, holdout)
+        exposure = []
+        for item in pre_protocol_exposure:
+            rid = item if isinstance(item, str) else item["run_id"]
+            rec, _ = self.store.load_run(rid)               # KeyError: an unverifiable exposure is refused
+            d = rec.get("dataset") or {}
+            exposure.append({"run_id": rid, "strategy_id": (rec.get("strategy") or {}).get("strategy_id"),
+                             "run_status": rec.get("status"), "dataset_id": d.get("dataset_id"),
+                             "parent_dataset_id": d.get("parent_dataset_id"), "start": str(d.get("start")),
+                             "end": str(d.get("end")), "trades_hash": rec.get("trades_hash"),
+                             "note": "" if isinstance(item, str) else str(item.get("note", ""))})
+        material = rp.build_material(
+            dataset_manifest=m, windows=windows, cost_model=cm.to_dict(), backtest_config_hash=hash_obj(self.cfg["backtest"]),
+            config_hash=self._config_hash(), pre_protocol_exposure=exposure, exposure_statement=exposure_statement,
+            name=name, trial_budget=trial_budget or rp.DEFAULT_TRIAL_BUDGET,
+            holdout_looks=holdout_looks or rp.DEFAULT_HOLDOUT_LOOKS)
+        rec = rp.make_record(material, {"code_version": code_version()})
+        key = self._scope_key(m.instrument, m.provider)
+        active = self.store.list_protocols(key, "ACTIVE")
+        if active and active[0]["protocol_id"] != rec["protocol_id"]:
+            raise rp.ProtocolRefusal("PROTOCOL_ALREADY_ACTIVE", f"{active[0]['protocol_id']} is ACTIVE for {key}; "
+                                     "retire it explicitly before activating another protocol",
+                                     active_protocol_id=active[0]["protocol_id"])
+        try:
+            if self.store.get_protocol(rec["protocol_id"])["status"] == "RETIRED":
+                raise rp.ProtocolRefusal("PROTOCOL_RETIRED", "a retired protocol is never re-activated",
+                                         protocol_id=rec["protocol_id"])
+        except KeyError:
+            pass
+        created = self.store.save_protocol(rec, key)
+        return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
+
+    def get_protocol(self, protocol_id: str) -> dict:
+        from edgelab.research.protocol import verify_record
+        rec = self.store.get_protocol(protocol_id)
+        verify_record(rec)
+        return _jsonable(rec)
+
+    def list_protocols(self) -> list[dict]:
+        return _jsonable([{k: r[k] for k in ("protocol_id", "status", "created_at")} | {
+            "scope": r["material"]["scope"], "name": r["material"]["name"]} for r in self.store.list_protocols()])
+
+    def retire_protocol(self, protocol_id: str) -> dict:
+        """ACTIVE -> RETIRED (the only lifecycle change; material and ledgers are kept unchanged)."""
+        self.store.get_protocol(protocol_id)
+        self.store.retire_protocol(protocol_id)
+        return self.get_protocol(protocol_id)
+
+    def protocol_status(self, protocol_id: str) -> dict:
+        """Program-wide counters of one protocol (no metrics, no run results)."""
+        from collections import Counter
+        from edgelab.research.protocol import bonferroni, verify_record
+        p = self.store.get_protocol(protocol_id)
+        verify_record(p)
+        mat = p["material"]
+        ev = self.store.list_trial_events(protocol_id)
+        counted = [e for e in ev if e["counted"]]
+        props = self.store.list_proposal_attempts(protocol_id)
+        ho = self.store.list_holdout_access(protocol_id)
+        looks = [h for h in ho if h["status"] != "refused"]
+        n, budget = len(counted), mat["trial_budget"]["max_unique_trials"]
+        hb = mat["holdout_budget"]["max_unique_candidate_evaluations"]
+        mt = bonferroni(mat["multiple_testing"], n)
+        return _jsonable({
+            "protocol_id": protocol_id, "status": p["status"], "scope": mat["scope"],
+            "source_dataset": mat["source_dataset"],
+            "windows": {k: {x: mat["windows"][k][x] for x in ("trading_dates", "first_bar", "last_bar", "n_bars")}
+                        for k in ("discovery", "holdout")},
+            "trials": {"unique_numerical_trials": n, "budget": budget, "remaining": max(0, budget - n),
+                       "unique_logic_hashes": len({e["logic_hash"] for e in counted}),
+                       "evaluation_events": len(ev),
+                       "duplicate_events": sum(1 for e in ev if e["status"] == "completed" and not e["counted"]),
+                       "failed_events": sum(1 for e in ev if e["status"] == "failed"),
+                       "by_entry_point": dict(Counter(e["entry_point"] for e in counted)),
+                       "by_family": dict(Counter(e["family"] for e in counted)),
+                       "by_dataset_window": dict(Counter(f"{e['dataset_id']} [{e['window_start']} .. {e['window_end']}]"
+                                                         for e in counted))},
+            "proposal_attempts": {"total": len(props), "by_source": dict(Counter(a["source"] for a in props)),
+                                  "by_gate_status": dict(Counter(a["gate_status"] for a in props)),
+                                  "distinct_logic_hashes": len({a["logic_hash"] for a in props if a["logic_hash"]})},
+            "holdout": {"looks_used": len(looks), "budget": hb, "remaining": max(0, hb - len(looks)),
+                        "refusals": sum(1 for h in ho if h["status"] == "refused"),
+                        "evaluated_strategy_ids": [h["strategy_id"] for h in looks]},
+            "multiple_testing": {**mt, "effect": (
+                f"a holdout candidate passes oos_confidence only if its OOS expectancy_r lower bound "
+                f"mean - {mt['z_one_sided']:.4f} * se exceeds {mat['acceptance_criteria']['oos_confidence']['must_exceed']}; "
+                "z grows with every counted unique trial (family_size) and is recomputed at evaluation time")},
+            "pre_protocol_exposure": mat["pre_protocol_exposure"]})
+
+    def _protocol_gate(self, ds, strat, entry_point: str, holdout_access_id: str | None) -> dict | None:
+        """Classify one evaluation under the governing protocol and refuse what the protocol forbids.
+        Returns the attribution context (None when no protocol governs the dataset)."""
+        from edgelab.research import protocol as rp
+        m = ds.manifest
+        p = self._governing_protocol(m.instrument, m.provider)
+        if p is None:
+            if holdout_access_id:
+                raise rp.ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "no ACTIVE protocol governs this dataset",
+                                         dataset_id=m.dataset_id)
+            return None
+        pid, mat = p["protocol_id"], p["material"]
+        if self._config_hash() != mat["config_hash"]:
+            raise rp.ProtocolRefusal("PROTOCOL_CONFIG_CHANGED", "the research config (costs, fills, sessions, backtest "
+                                     "rules) differs from the protocol's; create a new protocol",
+                                     protocol_id=pid, protocol_config_hash=mat["config_hash"],
+                                     current_config_hash=self._config_hash())
+        first, last = int(ds.bars.ts_ns[0]), int(ds.bars.ts_ns[-1])
+        stage = rp.stage_of(p, first, last)
+        ident = strat.compiled.identity
+        ctx = {"protocol_id": pid, "stage": stage, "entry_point": entry_point,
+               "window": [rp._iso(first), rp._iso(last)], "strategy_id": ident.strategy_id,
+               "logic_hash": ident.logic_hash, "definition_hash": ident.definition_hash,
+               "family": strat.compiled.family_id, "config_hash": mat["config_hash"],
+               "cost_scenario": mat["execution"]["cost_scenario"]}
+        if stage == "discovery":
+            if holdout_access_id:
+                raise rp.ProtocolRefusal("HOLDOUT_ACCESS_INVALID", "a holdout access applies only to the exact holdout "
+                                         "window", protocol_id=pid, access_id=holdout_access_id, window=ctx["window"])
+            key = rp.trial_key(pid, ident.logic_hash, m.content_hash, mat["config_hash"])
+            ctx.update(trial_key=key, trial_id="TR_" + key[:12].upper())
+            budget = mat["trial_budget"]["max_unique_trials"]
+            if not self.store.trial_counted(pid, key) and self.store.count_trials(pid) >= budget:
+                raise rp.ProtocolRefusal("PROTOCOL_TRIAL_BUDGET_EXHAUSTED", f"the protocol's {budget} unique numerical "
+                                         "trials are used", protocol_id=pid, budget=budget)
+            return ctx
+        if stage == "holdout" and holdout_access_id and entry_point in ("holdout_evaluation", "random_control_candidate"):
+            acc = [a for a in self.store.list_holdout_access(pid) if a["access_id"] == holdout_access_id]
+            if acc and acc[0]["status"] == "granted" and acc[0]["logic_hash"] == ident.logic_hash:
+                ctx["holdout_access_id"] = holdout_access_id
+                return ctx
+            raise rp.ProtocolRefusal("HOLDOUT_ACCESS_INVALID", "the holdout access is not an open grant for this "
+                                     "strategy", protocol_id=pid, access_id=holdout_access_id)
+        raise rp.ProtocolRefusal(
+            "HOLDOUT_LOCKED", "the evaluated bars touch the locked holdout (or lie outside the discovery window); "
+            "only Services.evaluate_holdout may read the holdout", protocol_id=pid, entry_point=entry_point,
+            window=ctx["window"], discovery_trading_dates=mat["windows"]["discovery"]["trading_dates"],
+            holdout_trading_dates=mat["windows"]["holdout"]["trading_dates"])
+
+    def _proposal_of(self, strategy_id: str) -> str | None:
+        try:
+            for rec in self.library.load(strategy_id).get("lineage") or []:
+                pid = (rec.get("generation_parameters") or {}).get("proposal_id")
+                if pid:
+                    return pid
+        except (KeyError, FileNotFoundError):
+            pass
+        return None
+
+    def _protocol_record(self, ctx: Mapping, dataset: Mapping, run_id: str | None, entry_point: str,
+                         search_id: str | None = None, status: str = "completed", error: str | None = None) -> bool:
+        from datetime import datetime, timezone
+        return self.store.add_trial_event({
+            "protocol_id": ctx["protocol_id"], "trial_id": ctx.get("trial_id"), "trial_key": ctx.get("trial_key"),
+            "status": status, "entry_point": entry_point, "strategy_id": ctx["strategy_id"],
+            "logic_hash": ctx["logic_hash"], "definition_hash": ctx["definition_hash"], "family": ctx.get("family"),
+            "dataset_id": dataset.get("dataset_id"), "source_dataset_id": dataset.get("parent_dataset_id") or dataset.get("dataset_id"),
+            "evaluated_content_hash": dataset.get("content_hash"), "window_start": str(dataset.get("start")),
+            "window_end": str(dataset.get("end")), "config_hash": ctx["config_hash"], "cost_scenario": ctx.get("cost_scenario"),
+            "proposal_id": self._proposal_of(ctx["strategy_id"]), "search_id": search_id, "run_id": run_id,
+            "error": error, "created_at": datetime.now(timezone.utc).isoformat()})
+
+    def _protocol_record_search_cell(self, protocol_id: str, search_id: str, cell: Mapping, outcome: Mapping,
+                                     run_id: str | None) -> None:
+        """Search runner hook (parent process, sequential and parallel alike): one ledger event per
+        executed cell of a governed dataset; failures are recorded, never counted."""
+        from edgelab.research import protocol as rp
+        p = self.store.get_protocol(protocol_id)
+        m = self.store.get_manifest(cell["dataset_id"])
+        if self._scope_key(m.instrument, m.provider) != self._scope_key(p["material"]["scope"]["instrument"],
+                                                                          p["material"]["scope"]["provider"]):
+            return
+        doc = self.library.load(cell["strategy_id"])
+        ctx = {"protocol_id": protocol_id, "strategy_id": cell["strategy_id"], "logic_hash": doc["logic_hash"],
+               "definition_hash": doc["definition_hash"], "config_hash": p["material"]["config_hash"],
+               "cost_scenario": p["material"]["execution"]["cost_scenario"]}
+        if "error" in outcome:
+            self._protocol_record({**ctx, "family": None, "trial_key": None}, {"dataset_id": cell["dataset_id"]},
+                                  None, "search_cell", search_id, status="failed", error=outcome["error"])
+            return
+        res = outcome["result"]
+        key = rp.trial_key(protocol_id, doc["logic_hash"], res.dataset["content_hash"], ctx["config_hash"])
+        self._protocol_record({**ctx, "family": (res.strategy_spec or {}).get("family"), "trial_key": key,
+                               "trial_id": "TR_" + key[:12].upper()}, res.dataset, run_id, "search_cell", search_id)
+
+    def _protocol_interval_check(self, manifest, start: Any, end: Any, entry_point: str) -> str | None:
+        """Refuse a requested window of a governed dataset that is not inside the discovery window."""
+        from edgelab.research import protocol as rp
+        p = self._governing_protocol(manifest.instrument, manifest.provider)
+        if p is None:
+            return None
+        s = max(pd.Timestamp(start), pd.Timestamp(manifest.start)) if start is not None else pd.Timestamp(manifest.start)
+        e = min(pd.Timestamp(end), pd.Timestamp(manifest.end)) if end is not None else pd.Timestamp(manifest.end)
+        if rp.interval_stage(p, s, e) != "discovery":
+            mat = p["material"]
+            raise rp.ProtocolRefusal(
+                "HOLDOUT_LOCKED", "the requested window touches the locked holdout; restrict it to the discovery "
+                "window", protocol_id=p["protocol_id"], entry_point=entry_point, dataset_id=manifest.dataset_id,
+                requested=[str(s), str(e)], discovery_trading_dates=mat["windows"]["discovery"]["trading_dates"],
+                discovery_last_bar=mat["windows"]["discovery"]["last_bar"],
+                holdout_trading_dates=mat["windows"]["holdout"]["trading_dates"])
+        return p["protocol_id"]
+
+    def _protocol_precheck(self, manifest, windows: list, entry_point: str) -> None:
+        for s, e in windows:                               # all windows before any window runs (no side effects)
+            self._protocol_interval_check(manifest, s, e, entry_point)
+
+    def _protocol_plan_check(self, manifests: list, period: Mapping | None) -> str | None:
+        """plan_search hook: every governed dataset must be searched inside the discovery window."""
+        pids = set()
+        for m in manifests:
+            pid = self._protocol_interval_check(m, None if period is None else period["start"],
+                                                None if period is None else period["end"], "search_cell")
+            if pid:
+                pids.add(pid)
+        if len(pids) > 1:
+            from edgelab.research.protocol import ProtocolRefusal
+            raise ProtocolRefusal("PROTOCOL_MISMATCH", "one search cannot span several protocols",
+                                  protocol_ids=sorted(pids))
+        return next(iter(pids), None)
+
+    def _protocol_budget_check(self, protocol_id: str, cells_to_run: list) -> None:
+        """A search may start only if every cell it will run fits the remaining trial budget
+        (conservative: each pending cell is assumed to be a new unique trial)."""
+        from edgelab.research.protocol import ProtocolRefusal
+        mat = self.store.get_protocol(protocol_id)["material"]
+        budget = mat["trial_budget"]["max_unique_trials"]
+        used = self.store.count_trials(protocol_id)
+        if used + len(cells_to_run) > budget:
+            raise ProtocolRefusal("PROTOCOL_TRIAL_BUDGET_EXHAUSTED", f"{len(cells_to_run)} cells would exceed the "
+                                  f"remaining trial budget ({budget - used} of {budget})", protocol_id=protocol_id,
+                                  budget=budget, used=used, requested=len(cells_to_run))
+
+    def _protocol_record_mode_b(self, rep) -> None:
+        """Mode B batches (human/AI proposal ingestion) are proposal attempts of every ACTIVE protocol."""
+        if getattr(self.store, "backend", None) != "sqlite":
+            return
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for p in self.store.list_protocols(status="ACTIVE"):
+            for i, a in enumerate(rep.accepted):
+                sid = a.get("strategy_id") if isinstance(a, Mapping) else a
+                self.store.add_proposal_attempt({"protocol_id": p["protocol_id"],
+                                                 "proposal_id": f"{rep.batch_id}:{i}", "source": "mode_b_ingest",
+                                                 "generation_id": rep.batch_id, "gate_status": "valid",
+                                                 "logic_hash": None, "strategy_id": sid, "created_at": now})
+            for i, r in enumerate(rep.rejected):
+                self.store.add_proposal_attempt({"protocol_id": p["protocol_id"],
+                                                 "proposal_id": f"{rep.batch_id}:rejected:{i}", "source": "mode_b_ingest",
+                                                 "generation_id": rep.batch_id, "gate_status": "rejected",
+                                                 "logic_hash": None, "strategy_id": None, "created_at": now})
+
+    def evaluate_holdout(self, protocol_id: str, search_id: str, strategy_id: str) -> dict:
+        """THE holdout stage (ADR-56). One look per frozen, shortlisted candidate, within the protocol's
+        holdout-look budget: runs the candidate on exactly the locked holdout bars (run status
+        OUT_OF_SAMPLE), the protocol's random-entry control and cost stress, and applies the
+        pre-registered criteria with the Bonferroni family size = counted unique trials now.
+        Every attempt (granted or refused) is written to the holdout ledger first. Never 'accepted'."""
+        import json as _json
+        from datetime import datetime, timezone
+        from edgelab.analytics.metrics import cost_sensitivity
+        from edgelab.core.identity import hash_obj
+        from edgelab.research import protocol as rp
+        from edgelab.research.validation import copy_frozen, freeze_definition
+        now = lambda: datetime.now(timezone.utc).isoformat()                          # noqa: E731
+        p = self.store.get_protocol(protocol_id)                                    # KeyError: unknown protocol
+        rp.verify_record(p)
+        mat = p["material"]
+        doc = self.library.load(strategy_id)
+        frozen, fh = freeze_definition(doc["definition"])
+        aid = "HA_" + hash_obj({"protocol_id": protocol_id, "strategy_id": strategy_id, "search_id": search_id,
+                                "at": now()}, 12).upper()
+        base = {"access_id": aid, "protocol_id": protocol_id, "strategy_id": strategy_id,
+                "logic_hash": doc["logic_hash"], "definition_hash": doc["definition_hash"], "frozen_hash": fh,
+                "search_id": search_id, "created_at": now()}
+
+        def refuse(code: str, msg: str, **detail):
+            self.store.add_holdout_access({**base, "status": "refused", "reason_code": code, "reason": msg})
+            raise rp.ProtocolRefusal(code, msg, protocol_id=protocol_id, strategy_id=strategy_id, access_id=aid, **detail)
+
+        if p["status"] != "ACTIVE":
+            refuse("PROTOCOL_NOT_ACTIVE", f"protocol is {p['status']}")
+        if self._config_hash() != mat["config_hash"]:
+            refuse("PROTOCOL_CONFIG_CHANGED", "the research config differs from the protocol's")
+        b = self.store.get_search_batch(search_id)
+        if b is None or b.get("protocol_id") != protocol_id:
+            refuse("HOLDOUT_SEARCH_NOT_IN_PROTOCOL", "the search is unknown or not attributed to this protocol")
+        tag = _json.loads(b["shortlist_json"]) if b.get("shortlist_json") else {}
+        if strategy_id not in (tag.get("strategy_ids") or []):
+            refuse("HOLDOUT_NOT_SHORTLISTED", "the candidate is not on the search's shortlist")
+        if not any(e["counted"] and e["logic_hash"] == doc["logic_hash"]
+                   for e in self.store.list_trial_events(protocol_id)):
+            refuse("HOLDOUT_NOT_DISCOVERY_EVALUATED", "the candidate has no counted discovery trial in this protocol")
+        prior = self.store.list_holdout_access(protocol_id)
+        if any(a["logic_hash"] == doc["logic_hash"] and a["status"] != "refused" for a in prior):
+            refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate's logic was already evaluated on the holdout")
+        used = sum(1 for a in prior if a["status"] != "refused")
+        if used >= mat["holdout_budget"]["max_unique_candidate_evaluations"]:
+            refuse("HOLDOUT_BUDGET_EXHAUSTED", f"all {used} holdout looks are used")
+        n_trials = self.store.count_trials(protocol_id)
+        self.store.add_holdout_access({**base, "status": "granted"})              # the look is spent from here on
+        h = mat["windows"]["holdout"]
+        period = (pd.Timestamp(h["first_bar"]), pd.Timestamp(h["last_bar"]))
+        src = mat["source_dataset"]["dataset_id"]
+        try:
+            cell = self._run_cell(copy_frozen(frozen), src, True, period=period, status="OUT_OF_SAMPLE",
+                                  notes=f"protocol {protocol_id} holdout evaluation {aid}",
+                                  entry_point="holdout_evaluation", holdout_access_id=aid)
+            rc = mat["acceptance_criteria"]["random_control"]
+            ctrl = self.random_entry_control(copy_frozen(frozen), src, n_controls=rc["n_controls"], seed=rc["seed"],
+                                             period=period, sample_status="OUT_OF_SAMPLE", holdout_access_id=aid)
+            if freeze_definition(frozen)[1] != fh:
+                raise RuntimeError("frozen strategy definition changed during the holdout evaluation")
+            trades = cell["result"].trades
+            costs = (cost_sensitivity(trades, mat["acceptance_criteria"]["cost_stress"]["multipliers"]).to_dict("records")
+                     if len(trades) else [])
+            verdict = rp.assess_holdout(mat, cell["metrics"], costs,
+                                        [r.get("expectancy_r") for r in ctrl["realizations"]], n_trials)
+        except Exception as exc:
+            self.store.update_holdout_access(aid, status="failed", completed_at=now(),
+                                             reason=f"{type(exc).__name__}: {exc}")
+            raise
+        out = {"access_id": aid, "protocol_id": protocol_id, "strategy_id": strategy_id, "search_id": search_id,
+               "frozen_hash": fh, "run_id": cell["run_id"], "run_status": "OUT_OF_SAMPLE",
+               "window": {"trading_dates": h["trading_dates"], "first_bar": h["first_bar"], "last_bar": h["last_bar"]},
+               "trade_count": cell["metrics"].get("trade_count"), **verdict,
+               "holdout_looks_used": used + 1,
+               "holdout_looks_budget": mat["holdout_budget"]["max_unique_candidate_evaluations"]}
+        self.store.update_holdout_access(aid, status="completed", run_id=cell["run_id"], completed_at=now(),
+                                         result_json=_json.dumps(_jsonable(out), sort_keys=True))
+        return _jsonable(out)
 
     # ============================================================ PROP SIMULATION (Phase 6)
     def prop_configs(self) -> list[dict]:

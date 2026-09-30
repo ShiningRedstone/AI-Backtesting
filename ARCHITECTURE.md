@@ -794,6 +794,51 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   - No research semantics changed. Verified: a frozen run and a development run give identical
     trades hash, config hash, strategy id and feature-cache keys.
 
+### ADR-56 Locked research protocol, holdout ledger, program-level trial ledger (pre-AI gate)
+- **Problem:** the pre-AI audit found three protocol blockers:
+  - no locked holdout (OOS splits were chosen per call and searches could span all data);
+  - trials counted per search only;
+  - no pre-registered acceptance criteria tied to the number of trials.
+- **Chosen:** `edgelab/research/protocol.py` plus four SQLite tables in the existing store
+  (`research_protocols`, `protocol_trials`, `protocol_proposals`, `holdout_access`), and
+  `search_batches.protocol_id`.
+  - **Protocol record:** trading-date discovery and holdout windows (with exact resolved bars),
+    source dataset identity, execution (cost model, backtest-config hash, research config hash),
+    trial budget, holdout-look budget, acceptance criteria, multiple-testing rule and
+    `pre_protocol_exposure` (run identities, never metrics).
+  - **Identity and lifecycle:** `protocol_id = RP_ + hash(material)`. Records are insert-only;
+    tampering is detected. Status only moves ACTIVE -> RETIRED; one ACTIVE per instrument/provider.
+  - **Enforcement (Services):**
+    - `_run_cell` gates every evaluation by the bars it actually uses (discovery / holdout /
+      overlap) before running;
+    - `plan_search` refuses windows touching the holdout, and the protocol is part of the search
+      identity;
+    - `evaluate_oos` / `walk_forward` pre-check every window before any run (optional `bounds`
+      for internal validation inside discovery);
+    - the AI request scope must state a `date_scope` inside discovery;
+    - a changed research config is refused (`PROTOCOL_CONFIG_CHANGED`);
+    - refusals are `ProtocolRefusal(code)`, HTTP 409 `protocol_refusal`.
+  - **Trial ledger:**
+    - every discovery evaluation event is recorded (backtest_strategy, search cells sequential and
+      parallel, internal validation, random-control candidate);
+    - one unique trial = (protocol, logic_hash, content hash of the evaluated bars, config hash);
+    - duplicates and failures are recorded, never counted;
+    - AI generations and Mode B batches are separate proposal attempts;
+    - the budget is enforced before running.
+  - **Holdout:** only `Services.evaluate_holdout(protocol, search, strategy)`:
+    - requires an ACTIVE protocol with an unchanged config, a search attributed to it, a
+      shortlisted candidate with a counted discovery trial, no prior look at that logic, and
+      remaining look budget;
+    - every attempt is written to the ledger first (refusals included);
+    - runs the frozen candidate on exactly the holdout bars (OUT_OF_SAMPLE), the protocol's
+      random-entry control and cost stress, then applies the pre-registered criteria with the
+      Bonferroni family size = counted unique trials;
+    - the result is `HOLDOUT_CRITERIA_MET` / `_NOT_MET`, never "accepted".
+- **Scope limit:** enforcement is at the `Services` boundary (CLI, web, AI). Library functions called
+  directly (`run_backtest`, `research.compare.run_across_datasets`, scripts) are not governed.
+- **Unchanged:** the engine, fills, costs, DSL, stored runs, datasets, ranking maths. With no
+  ACTIVE protocol every path behaves as before (legacy suites and the Phase 1 demo unchanged).
+
 ### ADR-55 Directional BID/ASK quote execution (after Phase 9)
 - **Problem:** every trigger and fill used the dataset's one OHLC series. For Dukascopy that series
   is BID, so buy-side events (a long's entry, a short's stop-loss, target and close exits) were

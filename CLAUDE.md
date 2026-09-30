@@ -145,8 +145,9 @@ events/regimes, instruments/datasets, strategy families and controlled variation
   otherwise untested.
 - One process per data root: `next_run_id` is MAX+1 and restart reconciliation marks any `running`
   search `interrupted`, so concurrent CLI and web research on one root is not coordinated.
-- Trials are counted per search, not across searches; the seed changes the search identity without
-  changing deterministic DSL results. Needs a decision before Phase 6.
+- Trials: per search (`n_trials`) AND, under an ACTIVE research protocol (ADR-56), program-wide in the
+  protocol trial ledger (dedup by logic/evaluated bars/config). Without a protocol only per-search counts
+  exist. The seed still changes the search identity without changing deterministic DSL results.
 - Background jobs are sequential (`workers: 1`) and process-local (job ids do not survive a
   restart); worker processes copy the datasets; the service lock covers each cell's dataset load.
 - Random-entry null controls exist only in `scripts/phase1_demo.py`, not as a service.

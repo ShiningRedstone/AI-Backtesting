@@ -42,7 +42,7 @@ SEARCH_SCHEMA = [
         config_hash TEXT, code_version TEXT, created_at TEXT, finished_at TEXT, status TEXT,
         spec_json TEXT, n_planned INTEGER, n_eligible INTEGER, n_ineligible INTEGER,
         n_evaluated INTEGER, n_skipped_resume INTEGER, n_failed INTEGER, n_cancelled INTEGER,
-        n_trials INTEGER, shortlist_json TEXT, warnings_json TEXT)""",
+        n_trials INTEGER, shortlist_json TEXT, warnings_json TEXT, protocol_id TEXT)""",
     """CREATE TABLE IF NOT EXISTS search_cells (search_id TEXT, cell_id TEXT, plan_index INTEGER,
         strategy_id TEXT, dataset_id TEXT, dataset_content_hash TEXT, status TEXT, run_id TEXT,
         trades_hash TEXT, reasons_json TEXT, error TEXT, headline_json TEXT, current INTEGER,
@@ -50,9 +50,32 @@ SEARCH_SCHEMA = [
 ]
 SEARCH_BATCH_COLS = ("search_id", "search_hash", "config_hash", "code_version", "created_at", "finished_at",
                      "status", "spec_json", "n_planned", "n_eligible", "n_ineligible", "n_evaluated",
-                     "n_skipped_resume", "n_failed", "n_cancelled", "n_trials", "shortlist_json", "warnings_json")
+                     "n_skipped_resume", "n_failed", "n_cancelled", "n_trials", "shortlist_json", "warnings_json",
+                     "protocol_id")
 SEARCH_CELL_COLS = ("search_id", "cell_id", "plan_index", "strategy_id", "dataset_id", "dataset_content_hash",
                     "status", "run_id", "trades_hash", "reasons_json", "error", "headline_json", "current")
+# ADR-56 research protocol storage (SQLite only, like search storage): insert-only protocol records,
+# the program-level trial ledger, proposal attempts and the holdout-access ledger.
+PROTOCOL_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS research_protocols (protocol_id TEXT PRIMARY KEY, material_hash TEXT,
+        record_json TEXT, status TEXT, created_at TEXT, status_changed_at TEXT, scope_key TEXT)""",
+    """CREATE TABLE IF NOT EXISTS protocol_trials (event_id INTEGER PRIMARY KEY AUTOINCREMENT, protocol_id TEXT,
+        trial_id TEXT, trial_key TEXT, counted INTEGER, status TEXT, entry_point TEXT, strategy_id TEXT,
+        logic_hash TEXT, definition_hash TEXT, family TEXT, dataset_id TEXT, source_dataset_id TEXT,
+        evaluated_content_hash TEXT, window_start TEXT, window_end TEXT, config_hash TEXT, cost_scenario TEXT,
+        proposal_id TEXT, search_id TEXT, run_id TEXT, error TEXT, created_at TEXT)""",
+    """CREATE TABLE IF NOT EXISTS protocol_proposals (protocol_id TEXT, proposal_id TEXT, source TEXT,
+        generation_id TEXT, gate_status TEXT, logic_hash TEXT, strategy_id TEXT, created_at TEXT,
+        PRIMARY KEY (protocol_id, proposal_id))""",
+    """CREATE TABLE IF NOT EXISTS holdout_access (access_id TEXT PRIMARY KEY, protocol_id TEXT, strategy_id TEXT,
+        logic_hash TEXT, definition_hash TEXT, frozen_hash TEXT, search_id TEXT, status TEXT, reason_code TEXT,
+        reason TEXT, run_id TEXT, result_json TEXT, created_at TEXT, completed_at TEXT)""",
+]
+TRIAL_COLS = ("protocol_id", "trial_id", "trial_key", "counted", "status", "entry_point", "strategy_id", "logic_hash",
+              "definition_hash", "family", "dataset_id", "source_dataset_id", "evaluated_content_hash", "window_start",
+              "window_end", "config_hash", "cost_scenario", "proposal_id", "search_id", "run_id", "error", "created_at")
+HOLDOUT_COLS = ("access_id", "protocol_id", "strategy_id", "logic_hash", "definition_hash", "frozen_hash", "search_id",
+                "status", "reason_code", "reason", "run_id", "result_json", "created_at", "completed_at")
 TS_COLS = ("signal_ts", "entry_ts", "exit_ts")
 
 
@@ -248,6 +271,106 @@ class ResultStore(ABC):
         rows = self._query(f"SELECT {', '.join(SEARCH_BATCH_COLS)} FROM search_batches ORDER BY created_at, search_id")
         return [dict(zip(SEARCH_BATCH_COLS, r)) for r in rows]
 
+    # --- ADR-56 research protocol (SQLite only) -------------------------------------------
+    def save_protocol(self, record: dict, scope_key: str) -> bool:
+        """Insert-only. The same id with the same material is a no-op (False); the same id with
+        different material cannot happen honestly and is refused (PROTOCOL_IMMUTABLE)."""
+        from edgelab.research.protocol import ProtocolRefusal
+        self._require_search_storage()
+        rows = self._query("SELECT material_hash FROM research_protocols WHERE protocol_id = ?", (record["protocol_id"],))
+        if rows:
+            if rows[0][0] != record["material_hash"]:
+                raise ProtocolRefusal("PROTOCOL_IMMUTABLE", "a protocol's material fields can never be changed; "
+                                      "create a new protocol", protocol_id=record["protocol_id"])
+            return False
+        self._exec("INSERT INTO research_protocols VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (record["protocol_id"], record["material_hash"], json.dumps(record, sort_keys=True),
+                    record["status"], record["created_at"], None, scope_key))
+        return True
+
+    def get_protocol(self, protocol_id: str) -> dict:
+        self._require_search_storage()
+        rows = self._query("SELECT record_json, status, status_changed_at FROM research_protocols WHERE protocol_id = ?",
+                           (protocol_id,))
+        if not rows:
+            raise KeyError(protocol_id)
+        rec = json.loads(rows[0][0])
+        rec["status"], rec["status_changed_at"] = rows[0][1], rows[0][2]     # lifecycle only; material is immutable
+        return rec
+
+    def list_protocols(self, scope_key: str | None = None, status: str | None = None) -> list[dict]:
+        self._require_search_storage()
+        rows = self._query("SELECT protocol_id FROM research_protocols WHERE (? IS NULL OR scope_key = ?) "
+                           "AND (? IS NULL OR status = ?) ORDER BY created_at, protocol_id",
+                           (scope_key, scope_key, status, status))
+        return [self.get_protocol(r[0]) for r in rows]
+
+    def retire_protocol(self, protocol_id: str) -> None:
+        self._require_search_storage()
+        self._exec("UPDATE research_protocols SET status = 'RETIRED', status_changed_at = ? "
+                   "WHERE protocol_id = ? AND status = 'ACTIVE'", (datetime.now(timezone.utc).isoformat(), protocol_id))
+
+    def add_trial_event(self, row: dict) -> bool:
+        """Append one evaluation event; ``counted`` is decided here: the first completed event of a
+        (protocol, trial_key) is the trial, every later one is a recorded duplicate."""
+        self._require_search_storage()
+        counted = row["status"] == "completed" and not self._query(
+            "SELECT 1 FROM protocol_trials WHERE protocol_id = ? AND trial_key = ? AND counted = 1",
+            (row["protocol_id"], row["trial_key"]))
+        vals = {**row, "counted": 1 if counted else 0}
+        self._exec(f"INSERT INTO protocol_trials ({', '.join(TRIAL_COLS)}) VALUES ({', '.join('?' for _ in TRIAL_COLS)})",
+                   tuple(vals.get(c) for c in TRIAL_COLS))
+        return bool(counted)
+
+    def trial_counted(self, protocol_id: str, trial_key: str) -> bool:
+        return bool(self._query("SELECT 1 FROM protocol_trials WHERE protocol_id = ? AND trial_key = ? AND counted = 1",
+                                (protocol_id, trial_key)))
+
+    def count_trials(self, protocol_id: str) -> int:
+        return int(self._query("SELECT COUNT(*) FROM protocol_trials WHERE protocol_id = ? AND counted = 1",
+                               (protocol_id,))[0][0])
+
+    def list_trial_events(self, protocol_id: str) -> list[dict]:
+        self._require_search_storage()
+        rows = self._query(f"SELECT {', '.join(TRIAL_COLS)} FROM protocol_trials WHERE protocol_id = ? ORDER BY event_id",
+                           (protocol_id,))
+        return [dict(zip(TRIAL_COLS, r)) for r in rows]
+
+    def add_proposal_attempt(self, row: dict) -> bool:
+        self._require_search_storage()
+        if self._query("SELECT 1 FROM protocol_proposals WHERE protocol_id = ? AND proposal_id = ?",
+                       (row["protocol_id"], row["proposal_id"])):
+            return False                                     # the same generation re-stored: one attempt
+        self._exec("INSERT INTO protocol_proposals VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                   tuple(row.get(c) for c in ("protocol_id", "proposal_id", "source", "generation_id", "gate_status",
+                                              "logic_hash", "strategy_id", "created_at")))
+        return True
+
+    def list_proposal_attempts(self, protocol_id: str) -> list[dict]:
+        cols = ("protocol_id", "proposal_id", "source", "generation_id", "gate_status", "logic_hash", "strategy_id",
+                "created_at")
+        rows = self._query(f"SELECT {', '.join(cols)} FROM protocol_proposals WHERE protocol_id = ? "
+                           "ORDER BY created_at, proposal_id", (protocol_id,))
+        return [dict(zip(cols, r)) for r in rows]
+
+    def add_holdout_access(self, row: dict) -> None:
+        self._require_search_storage()
+        self._exec(f"INSERT INTO holdout_access ({', '.join(HOLDOUT_COLS)}) VALUES ({', '.join('?' for _ in HOLDOUT_COLS)})",
+                   tuple(row.get(c) for c in HOLDOUT_COLS))
+
+    def update_holdout_access(self, access_id: str, **fields) -> None:
+        bad = set(fields) - {"status", "run_id", "result_json", "completed_at", "reason", "reason_code"}
+        if bad:
+            raise ValueError(f"immutable holdout-access fields: {sorted(bad)}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self._exec(f"UPDATE holdout_access SET {sets} WHERE access_id = ?", (*fields.values(), access_id))
+
+    def list_holdout_access(self, protocol_id: str) -> list[dict]:
+        self._require_search_storage()
+        rows = self._query(f"SELECT {', '.join(HOLDOUT_COLS)} FROM holdout_access WHERE protocol_id = ? "
+                           "ORDER BY created_at, access_id", (protocol_id,))
+        return [dict(zip(HOLDOUT_COLS, r)) for r in rows]
+
     def has_run(self, run_id: str) -> bool:
         return bool(self._query("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)))
 
@@ -283,11 +406,12 @@ class SQLiteStore(ResultStore):
         # serializes every store access behind one lock, so the connection is never shared
         # concurrently. Single-threaded callers (CLI, tests) are unaffected.
         self.con = sqlite3.connect(self.path, check_same_thread=False)
-        for s in SCHEMA + SEARCH_SCHEMA:
+        for s in SCHEMA + SEARCH_SCHEMA + PROTOCOL_SCHEMA:
             self.con.execute(s.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER"))
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_bars ON bars(dataset_id, ts_ns)")
         self._add_missing_columns("bars", {"spread": "REAL"})   # Phase 2 migration
         self._add_missing_columns("bars", {k: "REAL" for k in ASK_COLUMNS})   # ADR-55: NULL for older rows
+        self._add_missing_columns("search_batches", {"protocol_id": "TEXT"})   # ADR-56: NULL = no protocol
         self.con.commit()
 
     def _columns(self, name):

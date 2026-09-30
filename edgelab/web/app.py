@@ -115,6 +115,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, HTTPException):
             kind = "not_found" if e.code == 404 else "http"
             return jsonify({"error": {"kind": kind, "message": e.description}}), e.code
+        from edgelab.research.protocol import ProtocolRefusal
+        if isinstance(e, ProtocolRefusal):                   # ADR-56: machine-readable refusal code
+            return jsonify({"error": {"kind": "protocol_refusal", "code": e.code, "message": e.message,
+                                      "refusal": e.to_dict()}}), 409
         if isinstance(e, SearchSpecError):
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],

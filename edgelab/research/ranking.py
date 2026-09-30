@@ -115,7 +115,12 @@ def rank_search(store, search_id: str, metric: str | None = None, min_sample_lab
     spec_rk = (s.get("spec") or {}).get("ranking") or {}
     out = rank_cells(s["cells"], metric or spec_rk.get("metric", DEFAULT_METRIC),
                      min_sample_label or spec_rk.get("min_sample_label", DEFAULT_MIN_SAMPLE_LABEL))
-    return {"search_id": search_id, "search_status": s["status"], **out}
+    program = None
+    if s.get("protocol_id"):                     # ADR-56: the program-wide count, not only this search's
+        program = {"protocol_id": s["protocol_id"], "program_unique_trials": store.count_trials(s["protocol_id"]),
+                   "note": "multiple testing is judged against the program-wide count of unique numerical trials; "
+                           "an in-sample rank is never acceptance"}
+    return {"search_id": search_id, "search_status": s["status"], **out, "program": program}
 
 
 def select_shortlist(store, search_id: str, strategy_ids: Any) -> dict:
@@ -132,7 +137,7 @@ def select_shortlist(store, search_id: str, strategy_ids: Any) -> dict:
     if missing:
         raise RankingError(f"not in the current plan of {search_id}: {missing}")
     tag = {"strategy_ids": chosen, "selected_at": datetime.now(timezone.utc).isoformat(),
-           "in_sample": True, "validated": False,
+           "in_sample": True, "validated": False, "protocol_id": store.get_search_batch(search_id).get("protocol_id"),
            "note": "research tag only: selection changes no run status and implies no validation"}
     store.update_search_batch(search_id, shortlist_json=json.dumps(tag, sort_keys=True))
     return {"search_id": search_id, **tag, "duplicates_removed": len(strategy_ids) - len(chosen)}

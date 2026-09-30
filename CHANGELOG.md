@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Locked research protocol and ledgers (ADR-56, pre-AI gate)
+
+| Item | Status |
+|---|---|
+| Immutable, content-addressed research protocol (trading-date discovery/holdout windows + exact bars, dataset, execution, config hash, budgets, acceptance criteria, Bonferroni rule, pre-protocol exposure); ACTIVE -> RETIRED only | IMPLEMENTED, TESTED (synthetic) |
+| Holdout lock at the Services boundary (`_run_cell` gate, `plan_search`, OOS/walk-forward pre-check, AI `date_scope`), machine-readable `ProtocolRefusal` codes, HTTP 409 | IMPLEMENTED, TESTED |
+| Program-level trial ledger (all discovery entry points, dedup by logic/evaluated-bars/config, budget) and separate proposal-attempt ledger; search identity includes the protocol | IMPLEMENTED, TESTED |
+| `Services.evaluate_holdout`: one look per shortlisted frozen candidate within the look budget; random-entry control, cost stress, Bonferroni-adjusted lower bound; never "accepted" | IMPLEMENTED, TESTED (synthetic) |
+| Real protocol on the canonical Dukascopy dataset | NOT DONE (created in the user's workspace) |
+| Direct library calls (`run_backtest`, `run_across_datasets`, scripts) governed by the protocol | NOT IMPLEMENTED (documented limitation) |
+
 ## Canonical directional Dukascopy execution (ADR-55 follow-up)
 
 | Item | Status |

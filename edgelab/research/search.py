@@ -218,6 +218,7 @@ class SearchPlan:
     excluded: list[dict] = field(default_factory=list)   # archived members of batches/families
     warnings: list[str] = field(default_factory=list)
     plan_hash: str = ""
+    protocol_id: str | None = None               # ADR-56: the ACTIVE research protocol governing this plan
 
     def eligible_cells(self) -> list[dict]:
         return [c for c in self.cells if c["eligible"]]
@@ -226,7 +227,7 @@ class SearchPlan:
         return {"search_id": self.search_id, "search_hash": self.search_hash, "config_hash": self.config_hash,
                 "plan_hash": self.plan_hash, "spec": self.spec, "strategies": self.strategies,
                 "datasets": self.datasets, "period": self.period, "cells": self.cells, "counts": self.counts,
-                "excluded": self.excluded, "warnings": self.warnings,
+                "excluded": self.excluded, "warnings": self.warnings, "protocol_id": self.protocol_id,
                 "note": "plan only: nothing has been executed"}
 
 
@@ -326,6 +327,13 @@ def plan_search(spec: Mapping, services) -> SearchPlan:
     elif canon["period"] is not None:
         period = {"mode": "explicit", **canon["period"]}
     warnings = comparison_warnings(manifests, check_periods=period is None)
+    # ADR-56: a governed dataset may only be searched inside its protocol's discovery window (refuses);
+    # the governing protocol is part of the search identity (the same spec under another protocol is
+    # a different search whose cells are counted in that protocol's ledger)
+    guard = getattr(services, "_protocol_plan_check", None)
+    protocol_id = guard(manifests, period) if guard is not None else None
+    if protocol_id:
+        s_hash = hash_obj({"search_hash": s_hash, "protocol_id": protocol_id})
 
     def outside(d: Mapping) -> str | None:
         if period is None:
@@ -372,7 +380,8 @@ def plan_search(spec: Mapping, services) -> SearchPlan:
     if n_elig == 0:
         warnings.append("no eligible cells: every strategy x dataset combination is ineligible (see reasons)")
     plan_hash = hash_obj({"search_hash": s_hash, "config_hash": cfg_hash, "period": period,
-                          "cells": [(c["cell_id"], c["eligible"], c["reasons"]) for c in cells]})
+                          "cells": [(c["cell_id"], c["eligible"], c["reasons"]) for c in cells],
+                          **({"protocol_id": protocol_id} if protocol_id else {})})
     return SearchPlan("SRCH_" + s_hash[:12].upper(), s_hash, cfg_hash, canon,
                       [strategies[s] for s in sorted(strategies)], datasets, period, cells, counts,
-                      excluded, warnings, plan_hash)
+                      excluded, warnings, plan_hash, protocol_id)

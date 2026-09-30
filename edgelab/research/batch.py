@@ -151,6 +151,16 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                 f"{sid} was stored under config {existing['config_hash'][:12]} but the current config is "
                 f"{plan.config_hash[:12]}; its cells cannot be resumed under a different config")
         prior = {c["cell_id"]: c for c in store.list_search_cells(sid)} if existing else {}
+        if existing and existing.get("protocol_id") != plan.protocol_id:     # ADR-56: never re-attribute
+            from edgelab.research.protocol import ProtocolRefusal
+            raise ProtocolRefusal("PROTOCOL_MISMATCH", f"{sid} was stored under protocol {existing.get('protocol_id')} "
+                                  f"but the governing protocol is now {plan.protocol_id}; its cells cannot be resumed",
+                                  search_id=sid, stored_protocol_id=existing.get("protocol_id"),
+                                  protocol_id=plan.protocol_id)
+        budget = getattr(services, "_protocol_budget_check", None)
+        if budget is not None and plan.protocol_id:
+            budget(plan.protocol_id, [c for c in plan.eligible_cells()
+                                      if not (prior.get(c["cell_id"]) and prior[c["cell_id"]]["status"] == "completed")])
 
     from edgelab.core.identity import code_version
     counts = {"n_planned": plan.counts["planned"], "n_eligible": plan.counts["eligible"],
@@ -172,7 +182,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
             "code_version": _dumps(code_version()), "created_at": existing["created_at"] if existing else _now(),
             "finished_at": None, "status": "running", "spec_json": _dumps(plan.spec),
             "shortlist_json": existing["shortlist_json"] if existing else None,
-            "warnings_json": _dumps(plan.warnings), **counts})
+            "warnings_json": _dumps(plan.warnings), "protocol_id": plan.protocol_id, **counts})
         for c in plan.cells:                               # every planned cell is durable before execution
             if not done(prior.get(c["cell_id"])):
                 store.upsert_search_cell(cell_row(c, status="pending" if c["eligible"] else "ineligible"))
@@ -200,6 +210,8 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
         counts["n_evaluated"] += 1
         counts["n_trials"] += 1
         with guard:
+            if plan.protocol_id:                            # ADR-56: every executed cell enters the program ledger
+                services._protocol_record_search_cell(plan.protocol_id, sid, c, outcome, row.get("run_id"))
             store.upsert_search_cell(row)
             store.update_search_batch(sid, n_evaluated=counts["n_evaluated"], n_failed=counts["n_failed"],
                                       n_trials=counts["n_trials"])
@@ -233,6 +245,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                     out = services._run_cell(c["strategy_id"], c["dataset_id"], record=True,
                                              parent_strategy_id=lin[0], mutation=lin[1],
                                              notes=f"search {sid} cell {c['cell_id']}", period=period,
+                                             entry_point="search_cell",
                                              **({} if lock is None else {"lock": lock}))
                 except Exception as exc:                    # recorded per cell, never silently dropped
                     out = {"error": f"{type(exc).__name__}: {exc}"}

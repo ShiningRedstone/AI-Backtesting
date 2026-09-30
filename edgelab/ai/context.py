@@ -48,9 +48,24 @@ def resolve_scope(svc, scope: Mapping) -> dict:
         for x in ("start", "end"):
             if ds_.get(x) and not lo <= ds_[x] <= hi:
                 raise DiscoveryScopeError(f"scope.date_scope.{x} {ds_[x]} is outside the dataset ({lo} .. {hi})")
-    return {"dataset_id": did, "instrument": d["instrument"], "timeframe": d["timeframe"],
-            "session": scope.get("session"), "direction": scope.get("direction"),
-            "date_scope": ds_, "dataset_is_preferred": did == svc.preferred_dataset_id()}
+    out = {"dataset_id": did, "instrument": d["instrument"], "timeframe": d["timeframe"],
+           "session": scope.get("session"), "direction": scope.get("direction"),
+           "date_scope": ds_, "dataset_is_preferred": did == svc.preferred_dataset_id()}
+    gp = getattr(svc, "_governing_protocol", None)
+    p = gp(d["instrument"], d["provider"]) if gp is not None else None
+    if p is not None:                            # ADR-56: discovery may never be scoped onto the locked holdout
+        from edgelab.research.protocol import ProtocolRefusal
+        disc = p["material"]["windows"]["discovery"]["trading_dates"]
+        if not (ds_ and ds_.get("start") and ds_.get("end")):
+            raise ProtocolRefusal("AI_SCOPE_DATES_REQUIRED", "under an active research protocol the request must state "
+                                  "scope.date_scope inside the discovery window", protocol_id=p["protocol_id"],
+                                  discovery_trading_dates=disc)
+        if ds_["start"] < disc[0] or ds_["end"] > disc[1]:
+            raise ProtocolRefusal("AI_SCOPE_HOLDOUT_OVERLAP", "scope.date_scope reaches outside the discovery window "
+                                  "(the holdout is locked)", protocol_id=p["protocol_id"], date_scope=ds_,
+                                  discovery_trading_dates=disc)
+        out.update(protocol_id=p["protocol_id"], discovery_trading_dates=list(disc))
+    return out
 
 
 def build_context(svc, request: Mapping, scope: Mapping, base_definition: Mapping | None = None) -> dict:
