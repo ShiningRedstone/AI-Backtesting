@@ -26,6 +26,11 @@ jobs:
       BUILD_NUMBER: ${{ github.run_number }}
       PYTHONUTF8: "1"
     steps:
+      # Keep the sources byte-identical to the repository: the build refuses a frontend bundle whose recorded source
+      # hash differs, and the runner's default core.autocrlf=true would rewrite LF as CRLF on checkout.
+      - name: Check out without line-ending conversion
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
