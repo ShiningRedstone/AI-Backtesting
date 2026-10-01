@@ -145,6 +145,7 @@ class TestWorkspaceViews(unittest.TestCase):
         p = self.svc.strategy_panel(self.sid, {})
         _, t = self.svc.store.load_run(self.run_id)
         self.assertNotIn("last_12_months", p)
+        self.assertIsNone(p["holdout_period"])                 # no research protocol in the demo workspace: nothing locked
         self.assertEqual(sum(y["trades"] for y in p["years"]), len(t))
         self.assertAlmostEqual(sum(y["net_r"] for y in p["years"]), float(t["net_r"].sum()), places=9)
         for y in p["years"]:
@@ -370,3 +371,57 @@ class TestViewCaches(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from tests.test_research_protocol import DISC, HOLD, ProtocolBase   # noqa: E402
+
+
+class TestPanelHoldoutPeriod(ProtocolBase):
+    """ADR-84: the strategy panel shows the protocol's locked holdout after a discovery run (never backtested), or the
+    strategy's own holdout evaluation, labelled and kept apart from the discovery years. Reading it changes nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from edgelab.services import Services
+        s = Services(root=cls.root)
+        p = s.create_protocol(cls.did, DISC, HOLD, name="panel", pre_protocol_exposure=[cls.pre_run], exposure_statement="x")
+        cls.pid, w = p["protocol_id"], p["material"]["windows"]
+        cls.hold = w["holdout"]
+        cls.search = s.run_search({"strategies": {"ids": [cls.ema, cls.rsi]}, "datasets": [cls.did],
+                                   "period": {"start": w["discovery"]["first_bar"], "end": w["discovery"]["last_bar"]}})["search_id"]
+        s.select_shortlist(cls.search, [cls.ema])
+        cls.holdout_run = s.evaluate_holdout(cls.pid, cls.search, cls.ema)["run_id"]
+        s.store.close()
+
+    def test_locked_holdout_without_an_evaluation(self):
+        s = self.svc()
+        before = (s.store.count_trials(self.pid), len(s.store.list_holdout_access(self.pid)), len(s.store.list_runs()))
+        p = s.strategy_panel(self.rsi, {})
+        h = p["holdout_period"]
+        self.assertEqual((h["from"], h["to"], h["trading_dates"]), (self.hold["first_bar"], self.hold["last_bar"], list(HOLD)))
+        self.assertFalse(h["evaluated"])
+        self.assertEqual(h["years"], [{"year": 2024, "locked": True}])
+        self.assertIsNone(h["curve"])
+        self.assertTrue(all(pd.Timestamp(x["exit_ts"]) < pd.Timestamp(h["from"]) for x in p["curve"]["points"]))
+        self.assertEqual(before, (s.store.count_trials(self.pid), len(s.store.list_holdout_access(self.pid)), len(s.store.list_runs())))
+
+    def test_holdout_evaluation_is_shown_separately(self):
+        s = self.svc()
+        p = s.strategy_panel(self.ema, {})
+        h = p["holdout_period"]
+        self.assertTrue(h["evaluated"])
+        self.assertEqual(h["run_id"], self.holdout_run)
+        _, ht = s.store.load_run(self.holdout_run)
+        self.assertEqual(sum(y["trades"] for y in h["years"]), len(ht))
+        self.assertAlmostEqual(sum(y["net_r"] or 0.0 for y in h["years"]), float(ht["net_r"].sum()), places=9)
+        self.assertEqual(h["curve"]["n_trades"], len(ht))
+        _, t = s.store.load_run(p["run_id"])                 # the discovery years are the panel run's trades only
+        self.assertNotEqual(p["run_id"], self.holdout_run)
+        self.assertEqual(sum(y["trades"] for y in p["years"]), len(t))
+
+    def test_no_holdout_period_when_the_run_reaches_it(self):
+        s = self.svc()
+        rec, _ = s.store.load_run(self.pre_run)               # pre-protocol run over the whole dataset
+        self.assertGreaterEqual(pd.Timestamp(rec["dataset"]["end"]), pd.Timestamp(self.hold["first_bar"]))
+        self.assertIsNone(rv.holdout_period(s, rec, [], 250.0))

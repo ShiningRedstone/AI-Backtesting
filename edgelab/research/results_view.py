@@ -408,6 +408,38 @@ def calendar_years(t: pd.DataFrame, risk_usd: float) -> list[dict]:
             for y in sorted(set(years.tolist()))]
 
 
+def holdout_period(svc, rec: Mapping, holdout_runs: list[dict], risk_usd: float) -> dict | None:
+    """The governing protocol's locked holdout when the panel's run ends before it (ADR-56/67): the backtests never
+    touched those dates. With a holdout evaluation of this strategy, its own run (latest) supplies the holdout years and
+    curve, kept separate from the discovery figures; otherwise every holdout year is listed as locked. Read only."""
+    from edgelab.research import lab
+    d = rec.get("dataset") or {}
+    try:
+        p = svc._governing_protocol(d.get("instrument"), d.get("provider"))
+    except Exception:                                        # noqa: BLE001 - no protocol storage in this store
+        p = None
+    if not p:
+        return None
+    h = p["material"]["windows"]["holdout"]
+    try:
+        if pd.Timestamp(d.get("end")) >= pd.Timestamp(h["first_bar"]):
+            return None                                      # this run already reaches the holdout dates
+    except (TypeError, ValueError):
+        return None
+    out = {"from": h["first_bar"], "to": h["last_bar"], "trading_dates": h["trading_dates"], "evaluated": False,
+           "run_id": None, "years": [], "curve": None}
+    y0, y1 = (int(x[:4]) for x in h["trading_dates"])
+    if holdout_runs:
+        hid = holdout_runs[-1]["run_id"]
+        _, ht = svc.store.load_run(hid)
+        got = {y["year"]: y for y in calendar_years(ht, risk_usd)}
+        out.update(evaluated=True, run_id=hid, curve=lab.run_curve(svc, hid),
+                   years=[got.get(y) or {"year": y, "trades": 0, "months": []} for y in range(y0, y1 + 1)])
+    else:
+        out["years"] = [{"year": y, "locked": True} for y in range(y0, y1 + 1)]
+    return out
+
+
 def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     from edgelab.prop import bootstrap as bs
     from edgelab.research import lab
@@ -470,6 +502,7 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
               "profit_factor": ref["profit_factor"], "sample_label": ref["sample_label"],
               "net_usd_recorded": ov._f(hm.get("net_usd"))},
         years=calendar_years(t, risk), curve=lab.run_curve(svc, ref["run_id"]),
+        holdout_period=holdout_period(svc, rec, holdout, risk),
         out_of_sample=[{"run_id": r["run_id"], "status": r["status"], "scope": r["scope"], "trades": r["trade_count"],
                         "expectancy_r": r["expectancy_r"], "net_r": r["net_r"], "start": r["start"], "end": r["end"],
                         "net_usd_at_risk": r["net_r"] * risk if r["net_r"] is not None else None} for r in oos[-3:]],

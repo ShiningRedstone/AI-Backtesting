@@ -99,6 +99,8 @@ ADR-82: strategy panel shows an equity curve (`StepTimeChart`, time axis) and "R
 ADR-83: paper feed checked against the research data (`paper/feed.py::source_check`: last 3 complete trading days inside the
 1m NQ_DUKASCOPY ASK-OHLC research dataset re-downloaded and compared bar by bar; never stored in the feed; verdict in
 `<data>/paper/feed/source_check.json`; mismatch pauses paper accounts until a match or "Continue anyway"); browser test `tests/test_paper_e2e.py`.
+ADR-84: the strategy panel shows the protocol's locked holdout after a discovery run (`results_view.holdout_period`: shaded curve
+band and "locked, not backtested" year rows; a holdout evaluation's own years and second curve line, labelled Holdout); read only.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -340,4 +342,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-83). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-84). Update `README.md` status for phases.

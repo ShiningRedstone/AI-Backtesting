@@ -4,7 +4,7 @@
    labelled), basis (net / gross), synthetic data and simulated results are labelled where they are shown. */
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { BootstrapResponse, ControlPanelData, PeriodStats, PropSummaryRow, ResultsOverview, StrategyPanelData, YearRow } from "../api/types";
+import type { BootstrapResponse, ControlPanelData, HoldoutPeriod, PeriodStats, PropSummaryRow, ResultsOverview, StrategyPanelData, YearRow } from "../api/types";
 import { useApi, useApp } from "../app/context";
 import { facetLabel, humanize, profileLabel, statusLabel } from "../app/labels";
 import { href, useRoute } from "../app/router";
@@ -144,6 +144,7 @@ export function StrategyPanel({ id }: { id: string }) {
   if (error) return <ErrorPanel error={error} />;
   if (!p) return <Loading label="Loading strategy…" />;
   const k = p.kpis;
+  const hp = p.holdout_period;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }} data-testid="strategy-panel">
       <div>
@@ -175,17 +176,25 @@ export function StrategyPanel({ id }: { id: string }) {
         <p className="small muted">Dollar figures are R multiplied by your risk per trade ({usd(p.risk_per_trade_usd)}, set in Settings); the
           backtest itself is unchanged.</p>
         {p.curve && <Card title={<>Equity curve <Scope kind={panelScope(p.status)} /><Scope kind="net" /></>} testId="panel-equity">
-          <StepTimeChart points={p.curve.points.map((x) => ({ t: x.exit_ts, v: x.equity_r, n: x.i }))} start={p.dataset?.start} end={p.dataset?.end}
-            testId="panel-equity-chart" />
+          <StepTimeChart points={p.curve.points.map((x) => ({ t: x.exit_ts, v: x.equity_r, n: x.i }))} start={p.dataset?.start}
+            end={hp?.to ?? p.dataset?.end} testId="panel-equity-chart"
+            band={hp ? { from: hp.from, to: hp.to, label: hp.evaluated ? "Holdout evaluation" : "Holdout · locked, not backtested",
+              seriesLabel: "Holdout (this period only)", points: hp.curve?.points.map((x) => ({ t: x.exit_ts, v: x.equity_r, n: x.i })) } : undefined} />
           <p className="small muted" style={{ marginBottom: 0 }}>Running total of net R after each trade's exit, from the stored trades
             {p.curve.thinned ? ` (thinned to ${p.curve.points.length.toLocaleString()} points for display; the values shown are exact)` : ""}.
             Flat stretches are periods without trades. Historical result under the stated costs, not a forecast.</p>
+          {hp && <p className="small muted" style={{ marginBottom: 0 }} data-testid="panel-holdout-note">
+            {hp.evaluated
+              ? <>The shaded period ({dayMonthYear(hp.trading_dates[0])} to {dayMonthYear(hp.trading_dates[1])}) is the research protocol's holdout. The
+                  second line is this strategy's holdout evaluation, continuing from the backtest's total. It is kept separate from the research results.</>
+              : <>The shaded period ({dayMonthYear(hp.trading_dates[0])} to {dayMonthYear(hp.trading_dates[1])}) is the research protocol's locked holdout.
+                  Research backtests never use it, so this strategy has no results there yet. It is kept unseen for the final holdout evaluation.</>}</p>}
         </Card>}
         {!!p.years?.length && <Card title={<>Results by year <Scope kind={panelScope(p.status)} /><Scope kind="net" /></>} testId="panel-years">
-          <YearTable years={p.years} dataset={p.dataset} />
+          <YearTable years={p.years} dataset={p.dataset} holdout={hp ?? undefined} />
           <p className="small muted" style={{ marginBottom: 0 }}>Click a year to see its months. Each trade counts in the year and month of its
             exit (New York time), so a year's total matches the equity curve. Dollar figures are R × your risk per trade ({usd(p.risk_per_trade_usd)}).
-            Only years with trades are listed.</p>
+            Only years with trades are listed{hp ? <>; holdout years are listed separately and labelled <Scope kind="holdout" /></> : null}.</p>
         </Card>}
         <Card title={<>Out-of-sample <Scope kind="oos" /></>} testId="panel-oos">
           {!p.out_of_sample?.length ? <p className="small muted" style={{ margin: 0 }}>No out-of-sample test of this strategy yet. In-sample results
@@ -213,35 +222,56 @@ export function StrategyPanel({ id }: { id: string }) {
 
 const panelScope = (status?: string) => (status === "OUT_OF_SAMPLE" ? "oos" : status === "WALK_FORWARD" ? "wf" : "is");
 
-/** Per-year results with an expandable row per year showing its twelve months (from the backend read model). */
-function YearTable({ years, dataset }: { years: YearRow[]; dataset?: StrategyPanelData["dataset"] }) {
-  const [open, setOpen] = useState<Set<number>>(new Set());
-  const toggle = (y: number) => setOpen((o) => { const s = new Set(o); if (s.has(y)) s.delete(y); else s.add(y); return s; });
-  const first = dataset?.start?.slice(0, 10), last = dataset?.end?.slice(0, 10);
-  const partial = (y: number) => [first && first.startsWith(`${y}-`) && !first.endsWith("-01-01") ? `from ${dayMonth(first)}` : null,
+/** Per-year results with an expandable row per year showing its twelve months (from the backend read model). Holdout
+    years follow, labelled Holdout: "locked, not backtested", or this strategy's holdout evaluation. */
+function YearTable({ years, dataset, holdout }: { years: YearRow[]; dataset?: StrategyPanelData["dataset"]; holdout?: HoldoutPeriod }) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (key: string) => setOpen((o) => { const s = new Set(o); if (s.has(key)) s.delete(key); else s.add(key); return s; });
+  const partialOf = (first?: string, last?: string) => (y: number) => [first && first.startsWith(`${y}-`) && !first.endsWith("-01-01") ? `from ${dayMonth(first)}` : null,
     last && last.startsWith(`${y}-`) && !last.endsWith("-12-31") ? `to ${dayMonth(last)}` : null].filter(Boolean).join(", ");
+  const partial = partialOf(dataset?.start?.slice(0, 10), dataset?.end?.slice(0, 10));
+  const hPartial = partialOf(holdout?.trading_dates[0], holdout?.trading_dates[1]);
   const cells = (x: PeriodStats) => <>
     <td className="r num">{x.trades.toLocaleString()}</td>
     <td className={`r num ${signCls(x.net_r)}`}>{n(x.net_r, 1)} R <span className="muted small">{usd(x.net_usd_at_risk)}</span></td>
     <td className={`r num ${signCls(x.expectancy_r)}`}>{r(x.expectancy_r)}</td>
     <td className="r num">{pct(x.win_rate, 0)}</td></>;
+  // a month outside the backtested period has no trades because it was never tested, not because nothing traded
+  const span = (first?: string, last?: string) => (y: number, mi: number) => {
+    const ym = `${y}-${String(mi + 1).padStart(2, "0")}`;
+    return (!first || ym >= first.slice(0, 7)) && (!last || ym <= last.slice(0, 7));
+  };
+  const inPeriod = span(dataset?.start?.slice(0, 10), dataset?.end?.slice(0, 10));
+  const inHoldout = span(holdout?.trading_dates[0], holdout?.trading_dates[1]);
+  const rows = (y: YearRow, kind: "y" | "h", part: string) => {
+    const covered = kind === "h" ? inHoldout : inPeriod;
+    const key = `${kind}-${y.year}`, isOpen = open.has(key), tid = kind === "h" ? `holdout-${y.year}` : `${y.year}`;
+    const tag = kind === "h" ? <> <Scope kind="holdout" /></> : null;
+    if (!y.trades) return [<tr key={key} data-testid={`year-${tid}`}><td><b>{y.year}</b>{tag}{part && <span className="small muted"> · {part}</span>}</td>
+      <td colSpan={4} className="r small faint">no trades</td></tr>];
+    return [<tr key={key} data-testid={`year-${tid}`}>
+      <td><button type="button" className="linklike" onClick={() => toggle(key)} aria-expanded={isOpen} data-testid={`year-toggle-${tid}`}
+        title={isOpen ? "Hide months" : "Show months"}>{isOpen ? "▾" : "▸"} <b>{y.year}</b></button>{tag}
+        {part && <span className="small muted"> · {part}</span>}</td>
+      {cells(y)}</tr>,
+    ...(isOpen ? y.months.map((m, mi) => <tr key={`${key}-${m.month}`} data-testid={`month-${tid}-${m.month}`}>
+      <td className="small" style={{ paddingLeft: 28 }}>{m.month}</td>
+      {m.trades ? cells(m) : <td colSpan={4} className="r small faint">{covered(y.year, mi) ? "no trades" : "outside the period"}</td>}</tr>) : [])];
+  };
   return (
     <TableWrap><table className="dense" data-testid="year-table"><thead><tr><th>Year</th><th className="r">Trades</th><th className="r">Total net R</th>
       <th className="r">Net R per trade</th><th className="r">Win rate</th></tr></thead>
-      <tbody>{years.map((y) => { const isOpen = open.has(y.year); const part = partial(y.year);
-        return [<tr key={y.year} data-testid={`year-${y.year}`}>
-          <td><button type="button" className="linklike" onClick={() => toggle(y.year)} aria-expanded={isOpen} data-testid={`year-toggle-${y.year}`}
-            title={isOpen ? "Hide months" : "Show months"}>{isOpen ? "▾" : "▸"} <b>{y.year}</b></button>
-            {part && <span className="small muted"> · {part}</span>}</td>
-          {cells(y)}</tr>,
-        ...(isOpen ? y.months.map((m) => <tr key={`${y.year}-${m.month}`} data-testid={`month-${y.year}-${m.month}`}>
-          <td className="small" style={{ paddingLeft: 28 }}>{m.month}</td>
-          {m.trades ? cells(m) : <td colSpan={4} className="r small faint">no trades</td>}</tr>) : [])];
-      })}</tbody></table></TableWrap>
+      <tbody>{years.map((y) => rows(y, "y", partial(y.year)))}
+        {holdout?.years.map((y) => "locked" in y
+          ? <tr key={`h-${y.year}`} data-testid={`year-holdout-${y.year}`}><td><b>{y.year}</b> <Scope kind="holdout" />
+              {hPartial(y.year) && <span className="small muted"> · {hPartial(y.year)}</span>}</td>
+              <td colSpan={4} className="r small muted">locked, not backtested</td></tr>
+          : rows(y, "h", hPartial(y.year)))}</tbody></table></TableWrap>
   );
 }
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const dayMonth = (d: string) => `${Number(d.slice(8, 10))} ${MONTH_ABBR[Number(d.slice(5, 7)) - 1]}`;
+const dayMonthYear = (d: string) => `${dayMonth(d)} ${d.slice(0, 4)}`;
 
 const TECH_LABEL: Record<string, string> = { strategy_id: "Strategy ID", logic_hash: "Logic hash", definition_hash: "Definition hash",
   machine_name: "Machine name", run_id: "Backtest ID", dataset_id: "Dataset ID", trades_hash: "Trades hash", config_hash: "Config hash",

@@ -38,8 +38,9 @@ export function niceTicks(lo: number, hi: number, count = 5): number[] {
 export const fmtTick = (v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(Math.abs(v) >= 10000 ? 0 : 1)}k`
   : Math.abs(v) < 10 && v !== Math.round(v) ? v.toFixed(Math.abs(v) < 1 ? 2 : 1) : String(Math.round(v)));
 
-function Tip({ x, y, children }: { x: number; y: number; children?: ReactNode }) {
-  return <div className="chart-tip" style={{ left: x, top: y }}>{children}</div>;
+function Tip({ x, y, inside, children }: { x: number; y: number; inside?: boolean; children?: ReactNode }) {
+  // inside: hang below y within the plot (never clipped by the card above), instead of sitting above the chart
+  return <div className="chart-tip" style={{ left: x, top: y, ...(inside ? { transform: "translate(-50%, 0)" } : {}) }}>{children}</div>;
 }
 
 export interface LegendItem { id: string; label: string; color: string; box?: boolean }
@@ -142,25 +143,38 @@ export function LineChart({ x, series, height = 220, unit = "R", xLabel, fmtX, t
 // ------------------------------------------------------------------------------------------ step line over time
 /** A running total over REAL time (x spaced by date, not by point number): a step line with a light area, since the
     total only changes at each point and holds in between. Starts at 0 at `start`, holds the last value until `end`.
-    Hover shows the date and the total on that date. Dates are shown in New York time. */
+    Optional `band`: a shaded period after the main line (e.g. a locked holdout) with its own label; with `band.points`
+    a second line continues there from the main line's last value, in its own colour. Hover shows the date and the
+    total on that date. Dates are shown in New York time. */
 export interface TimePoint { t: string; v: number; n?: number }   // n: how many trades the total includes
+export interface TimeBand { from: string; to: string; label: string; points?: TimePoint[]; seriesLabel?: string; color?: string }
 const tms = (s: string) => Date.parse(s.includes("T") ? s : s.replace(" ", "T"));
 const NY_YMD = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "America/New_York" });
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const NY_DAY = { format: (t: number) => { const [y, m, d] = NY_YMD.format(t).split("-"); return `${Number(d)} ${MON[Number(m) - 1]} ${y}`; } };
 const NY_YEAR = new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: "America/New_York" });
-export function StepTimeChart({ points, start, end, height = 220, unit = "R", label = "Cumulative net R", color = SERIES[0], testId }: {
-  points: TimePoint[]; start?: string; end?: string; height?: number; unit?: string; label?: string; color?: string; testId?: string;
+const toPts = (ps: TimePoint[]) => ps.map((p, i) => ({ t: tms(p.t), v: p.v, n: p.n ?? i + 1 })).filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v));
+export function StepTimeChart({ points, start, end, band, height = 220, unit = "R", label = "Cumulative net R", color = SERIES[0], testId }: {
+  points: TimePoint[]; start?: string; end?: string; band?: TimeBand; height?: number; unit?: string; label?: string; color?: string;
+  testId?: string;
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
-  const pts = useMemo(() => points.map((p, i) => ({ t: tms(p.t), v: p.v, n: p.n ?? i + 1 })).filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v)), [points]);
+  const pts = useMemo(() => toPts(points), [points]);
+  const bandPts = useMemo(() => toPts(band?.points ?? []), [band]);
   if (!pts.length) return <div className="empty small">No trades: no curve.</div>;
   const s0 = start ? tms(start) : NaN, s1 = end ? tms(end) : NaN;
+  const b0 = band ? tms(band.from) : NaN, b1 = band ? tms(band.to) : NaN;
+  const hasBand = Number.isFinite(b0) && Number.isFinite(b1) && b1 > b0;
   const x0 = Number.isFinite(s0) ? Math.min(s0, pts[0].t) : pts[0].t;
-  const x1 = Math.max(Number.isFinite(s1) ? s1 : pts[pts.length - 1].t, pts[pts.length - 1].t, x0 + 1);
+  const x1 = Math.max(Number.isFinite(s1) ? s1 : pts[pts.length - 1].t, pts[pts.length - 1].t, hasBand ? b1 : -Infinity,
+    bandPts.length ? bandPts[bandPts.length - 1].t : -Infinity, x0 + 1);
+  const mainEnd = hasBand ? Math.max(b0, pts[pts.length - 1].t) : x1;   // the main line stops where the band starts
+  const base = pts[pts.length - 1].v;                                   // the band line continues from here
+  const bColor = band?.color ?? SERIES[1];
   let lo = 0, hi = 0;
   for (const p of pts) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v); }
+  for (const p of bandPts) { lo = Math.min(lo, base + p.v); hi = Math.max(hi, base + p.v); }
   const ticks = niceTicks(lo, hi === lo ? lo + 1 : hi);
   const t0 = Math.min(lo, ticks[0]), t1 = Math.max(hi, ticks[ticks.length - 1]);
   const iw = width - PAD.l - PAD.r, ih = height - PAD.t - PAD.b;
@@ -168,7 +182,13 @@ export function StepTimeChart({ points, start, end, height = 220, unit = "R", la
   const Y = (v: number) => PAD.t + ih - ((v - t0) / (t1 - t0 || 1)) * ih;
   let d = `M${X(x0).toFixed(1)},${Y(0).toFixed(1)}`;
   for (const p of pts) d += `H${X(p.t).toFixed(1)}V${Y(p.v).toFixed(1)}`;
-  d += `H${X(x1).toFixed(1)}`;
+  d += `H${X(mainEnd).toFixed(1)}`;
+  let bd = "";
+  if (hasBand && bandPts.length) {
+    bd = `M${X(b0).toFixed(1)},${Y(base).toFixed(1)}`;
+    for (const p of bandPts) bd += `H${X(p.t).toFixed(1)}V${Y(base + p.v).toFixed(1)}`;
+    bd += `H${X(x1).toFixed(1)}`;
+  }
   // x ticks: 1 January of each year inside the range (every other year when crowded); otherwise the two end dates
   const y0 = Number(NY_YEAR.format(x0)), y1 = Number(NY_YEAR.format(x1));
   let years: number[] = [];
@@ -176,16 +196,20 @@ export function StepTimeChart({ points, start, end, height = 220, unit = "R", la
   if (years.length > Math.max(2, Math.floor(iw / 60))) years = years.filter((y) => y % 2 === 0);
   const yearT = (y: number) => Date.parse(`${y}-01-01T05:00:00Z`);    // midnight New York (EST)
   // the total on a date = the last point at or before it (0 before the first point)
-  const valueAt = (t: number) => { let v = 0, k = 0; for (const p of pts) { if (p.t > t) break; v = p.v; k = p.n; } return { v, k }; };
+  const valueAt = (ps: typeof pts, t: number) => { let v = 0, k = 0; for (const p of ps) { if (p.t > t) break; v = p.v; k = p.n; } return { v, k }; };
   const onMove = (e: MouseEvent) => {
     const box = (e.currentTarget as SVGElement).getBoundingClientRect();
     setHover(Math.max(x0, Math.min(x1, x0 + ((e.clientX - box.left - PAD.l) / iw) * (x1 - x0))));
   };
-  const h = hover == null ? null : valueAt(hover);
+  const inBand = hover != null && hasBand && hover >= b0;
+  const h = hover == null ? null : inBand ? (bandPts.length ? valueAt(bandPts, hover) : null) : valueAt(pts, hover);
   return (
     <div className="chart" ref={ref} data-testid={testId}>
       <svg width={width} height={height} onMouseMove={onMove} onMouseLeave={() => setHover(null)} role="img"
-        aria-label={`${label} (${unit}) over time, ending ${pts[pts.length - 1].v.toFixed(2)} ${unit}`}>
+        aria-label={`${label} (${unit}) over time, ending ${base.toFixed(2)} ${unit}${hasBand ? `; ${band!.label}` : ""}`}>
+        {hasBand && <g data-testid={testId ? `${testId}-band` : undefined}>
+          <rect x={X(b0)} y={PAD.t} width={Math.max(0, X(b1) - X(b0))} height={ih} fill="var(--c-neutral)" opacity={0.16} />
+          <text x={X(b0) + 6} y={PAD.t + 12} textAnchor="start" style={{ fontWeight: 600 }}>{band!.label}</text></g>}
         <YAxis ticks={ticks} y={Y} width={width} unit={unit} />
         <line className="axis-line" x1={PAD.l} x2={width - PAD.r} y1={PAD.t + ih} y2={PAD.t + ih} />
         {years.length >= 2 ? years.map((y) => <g key={y}>
@@ -194,18 +218,24 @@ export function StepTimeChart({ points, start, end, height = 220, unit = "R", la
           : <>
             <text x={X(x0)} y={height - 8} textAnchor="start">{NY_DAY.format(x0)}</text>
             <text x={X(x1)} y={height - 8} textAnchor="end">{NY_DAY.format(x1)}</text></>}
-        <path d={`${d}V${Y(0).toFixed(1)}Z`} fill={color} opacity={0.14} />
+        <path d={`${d}V${Y(0).toFixed(1)}H${X(x0).toFixed(1)}Z`} fill={color} opacity={0.14} />
         <path d={d} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
-        {hover != null && h && <>
+        {bd && <path d={bd} fill="none" stroke={bColor} strokeWidth={2} strokeLinejoin="round" />}
+        {hover != null && <>
           <line className="crosshair" x1={X(hover)} x2={X(hover)} y1={PAD.t} y2={PAD.t + ih} />
-          <circle cx={X(hover)} cy={Y(h.v)} r={4} fill={color} stroke="var(--surface)" strokeWidth={2} />
+          {h && <circle cx={X(hover)} cy={Y(inBand ? base + h.v : h.v)} r={4} fill={inBand ? bColor : color} stroke="var(--surface)" strokeWidth={2} />}
         </>}
       </svg>
-      {hover != null && h && (
-        <Tip x={Math.min(Math.max(X(hover), 80), width - 80)} y={PAD.t + 4}>
+      {hover != null && (
+        <Tip x={Math.min(Math.max(X(hover), 140), width - 140)} y={PAD.t + 22} inside>
           <div className="t">{NY_DAY.format(hover)}</div>
-          <div><span className="sw" style={{ background: color }} />{label}: <b>{h.v.toFixed(2)} {unit}</b></div>
-          <div className="t" style={{ margin: 0 }}>after {h.k} trade{h.k === 1 ? "" : "s"}</div>
+          {!inBand && h && <>
+            <div><span className="sw" style={{ background: color }} />{label}: <b>{h.v.toFixed(2)} {unit}</b></div>
+            <div className="t" style={{ margin: 0 }}>after {h.k} trade{h.k === 1 ? "" : "s"}</div></>}
+          {inBand && !h && <div>{band!.label}</div>}
+          {inBand && h && <>
+            <div><span className="sw" style={{ background: bColor }} />{band!.seriesLabel ?? band!.label}: <b>{h.v >= 0 ? "+" : ""}{h.v.toFixed(2)} {unit}</b></div>
+            <div className="t" style={{ margin: 0 }}>{h.k} holdout trade{h.k === 1 ? "" : "s"} · running total {(base + h.v).toFixed(2)} {unit}</div></>}
         </Tip>)}
     </div>
   );

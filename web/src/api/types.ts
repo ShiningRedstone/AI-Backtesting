@@ -474,6 +474,10 @@ export interface PropSummaryRow { profile_id: string | null; profile_name: strin
   bootstrap?: { p_pass: Num; p_first_payout: Num; p_evaluation_breach: Num; median_days_to_pass: Num; valid_replays: number } | null }
 export interface PeriodStats { trades: number; net_r: Num; net_usd_at_risk: Num; expectancy_r: Num; win_rate: Num }
 export interface YearRow extends PeriodStats { year: number; months: (PeriodStats & { month: string })[] }
+/** The protocol's locked holdout after the panel's run: never backtested (locked rows), or this strategy's holdout
+    evaluation (its own years and curve, labelled Holdout). */
+export interface HoldoutPeriod { from: string; to: string; trading_dates: [string, string]; evaluated: boolean; run_id: string | null;
+  years: (YearRow | { year: number; locked: true })[]; curve: RunCurve | null }
 export interface StrategyPanelData {
   strategy_id: string; display_name: string; explanation: string; family_id: string | null; family_name: string | null;
   facets: Record<string, unknown>; scope: string; risk_per_trade_usd: number; survivor_rule: string; tested: boolean;
@@ -484,6 +488,7 @@ export interface StrategyPanelData {
     weeks_in_data: number | null; avg_hold_minutes: Num; gross_r_per_trade: Num; profit_factor: Num; sample_label: string | null;
     net_usd_recorded: Num };
   years?: YearRow[];
+  holdout_period?: HoldoutPeriod | null;
   curve?: RunCurve;
   out_of_sample?: { run_id: string; status: string; scope: string; trades: number; expectancy_r: Num; net_r: Num; start: string; end: string;
     net_usd_at_risk: Num }[];

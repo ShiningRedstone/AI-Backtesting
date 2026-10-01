@@ -2092,3 +2092,18 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Not verified here.** The real Dukascopy comparison runs on the user's PC: the build environment cannot reach
   Dukascopy. If the user's research CSV was written with rounded prices, the report shows that as small, uniform
   `max_abs_diff` values.
+
+### ADR-84 Strategy panel shows the locked holdout period
+- **Problem.** Research runs only use the protocol's discovery window (ADR-56/67, ADR-70). On the user's data the panel
+  therefore ended in Dec 2024 although the dataset runs into 2026, which looked like missing data.
+- **What it shows now.** When the panel's run ends before the governing protocol's holdout,
+  `results_view.holdout_period` returns that holdout's window. The equity curve's time axis runs to the end of the data,
+  with the holdout shaded and labelled "Holdout · locked, not backtested". The year table adds one row per holdout
+  year, tagged Holdout: "locked, not backtested".
+- **With a holdout evaluation.** If the strategy already had a holdout evaluation (`evaluate_holdout`, one look), its
+  own run (the latest) supplies the holdout years (expandable to months) and a second curve line. The line continues
+  from the discovery total in its own colour, and the hover shows the holdout-only figure. Discovery and holdout
+  figures are never added together in the tables.
+- **Months.** A month outside the tested period reads "outside the period", not "no trades".
+- **No governance change.** This is read only. Nothing is backtested, no holdout look is used, and the protocol ledgers
+  are untouched (tested). A workspace without a protocol shows no holdout section.

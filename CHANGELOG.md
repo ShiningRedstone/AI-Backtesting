@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy panel shows the locked holdout period (ADR-84)
+
+| Item | Status |
+|---|---|
+| Equity curve runs to the end of the data; the protocol's holdout is shaded "Holdout · locked, not backtested"; the year table lists each holdout year as locked | IMPLEMENTED, TESTED (synthetic protocol; browser test run) |
+| A strategy with a holdout evaluation shows its holdout years (with months) and a second curve line, labelled Holdout and kept apart from the discovery figures | IMPLEMENTED, TESTED |
+| Months outside the tested period read "outside the period" | IMPLEMENTED |
+| Backtests, protocol, holdout looks | UNCHANGED (read only; ledgers unchanged by reading the panel, tested) |
+| Display on the user's 2021–2026 Dukascopy data | REQUIRES REAL DATA (checked on the synthetic protocol fixture only) |
+
 ## Paper data checked against your research data; paper browser test (ADR-83)
 
 | Item | Status |
