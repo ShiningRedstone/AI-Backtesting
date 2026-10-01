@@ -15,7 +15,8 @@ let lastError: ApiError | null = null;
 let timer: number | undefined;
 
 function busy(s: UpdateStatus | null) {
-  return !!s && (s.check.state === "checking" || s.download.state === "downloading" || s.download.state === "verifying" || !!s.applying);
+  return !!s && (s.check.state === "checking" || s.download.state === "downloading" || s.download.state === "verifying" || !!s.applying
+    || s.install?.state === "running" || s.install?.state === "applying");
 }
 function publish(s: UpdateStatus | null, e: ApiError | null) {
   current = s; lastError = e;
@@ -120,9 +121,21 @@ export function UpdatePanel() {
     try { await updateAction(path, body); } catch (x) { setErr(x as ApiError); }
   };
   const rel = s.release;
+  const inst = s.install;
+  const installing = inst?.state === "running" || inst?.state === "applying";
+  const stepLabel = inst?.state === "applying" || inst?.step === "applying" ? "Restarting into the new version…"
+    : inst?.step === "downloading" ? "Downloading and verifying…" : "Checking for updates…";
   return (
-    <Card title="Updates" testId="update-panel" actions={<Button small onClick={act("check")} busy={s.check.state === "checking"}
-      busyLabel="Checking…" testId="update-check">Check for updates</Button>}>
+    <Card title="Updates" testId="update-panel" actions={<>
+      <Button small onClick={act("check")} busy={s.check.state === "checking" && !installing} disabled={installing}
+        busyLabel="Checking…" testId="update-check">Check for updates</Button>
+      <Button small kind="primary" onClick={act("install")} busy={installing} busyLabel={stepLabel} disabled={!s.apply_supported}
+        title={s.apply_unsupported_reason ?? "Check, download, verify and restart into the newest release"} testId="update-install">Update now</Button></>}>
+      {inst?.state === "up_to_date" && <Banner tone="info" testId="update-uptodate">EdgeLab {s.current_version} is up to date; nothing to install.</Banner>}
+      {installing && <Banner tone="info" testId="update-installing">{stepLabel} EdgeLab will close and reopen on the new version
+        {inst?.version ? ` (${inst.version})` : ""}.</Banner>}
+      {inst?.state === "error" && inst.error && <Banner tone="error" testId="update-install-error"><b>{inst.error.code}</b> — {inst.error.message}
+        {" "}Nothing was installed; the current version is unchanged.</Banner>}
       <KeyValues rows={[
         ["Installed version", <><Mono>{s.current_version}</Mono> {v && v.version !== UI_VERSION && <Badge tone="error">UI {UI_VERSION} ≠ backend {v.version}</Badge>}</>],
         ["Latest published", rel ? <><Mono>{rel.version}</Mono> {s.available ? <Badge tone="ok">newer</Badge> : null}
@@ -139,10 +152,8 @@ export function UpdatePanel() {
           testId="update-auto" />
       </div>
       {s.available && rel && <div className="actions" style={{ marginTop: 10 }}>
-        {s.download.state !== "ready" && <Button kind="primary" onClick={act("download", { version: rel.version })}
-          busy={s.download.state === "downloading" || s.download.state === "verifying"} busyLabel="Downloading…">Download {rel.version}</Button>}
-        {s.download.state === "ready" && <Button kind="primary" onClick={act("apply", { version: rel.version })} disabled={!s.apply_supported}
-          title={s.apply_unsupported_reason ?? undefined}>Restart and update</Button>}
+        <Button kind="primary" onClick={act("install")} busy={installing} busyLabel={stepLabel} disabled={!s.apply_supported}
+          title={s.apply_unsupported_reason ?? undefined}>Update to {rel.version}</Button>
         {s.skipped ? <Button onClick={act("unskip", { version: rel.version })}>Stop skipping {rel.version}</Button>
           : <Button kind="ghost" onClick={act("skip", { version: rel.version })}>Skip {rel.version}</Button>}
       </div>}

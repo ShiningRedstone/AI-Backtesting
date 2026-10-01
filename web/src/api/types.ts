@@ -435,6 +435,8 @@ export interface UpdateStatus {
   available: boolean; note: string | null; skipped: boolean; prompt: boolean;
   download: { state: "idle" | "downloading" | "verifying" | "ready" | "error"; bytes: number; total: number | null;
     error: { code: string; message: string } | null; version: string | null; staged?: string };
+  install?: { state: "idle" | "running" | "up_to_date" | "applying" | "error"; step: "checking" | "downloading" | "applying" | null;
+    version: string | null; error: { code: string; message: string } | null };
   apply_supported: boolean; apply_unsupported_reason: string | null; install_dir: string | null; cache_dir: string; log: string;
   last_update: Record<string, any> | null; applying?: boolean;
 }

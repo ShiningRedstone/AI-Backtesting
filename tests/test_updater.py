@@ -494,6 +494,42 @@ class TestEndToEnd(Base):
         self.assertEqual(json.loads([l for l in m.log_path.read_text().splitlines() if "update_completed" in l][-1])["ok"],
                          True)
 
+    def test_one_click_install_checks_downloads_and_restarts(self):
+        """Settings 'Update now': one action goes from check to the helper restart; up to date is left alone."""
+        if os.name != "posix":
+            self.skipTest("the stub executable is a POSIX shell script")
+        inst = fake_app(self.tmp / "Programs" / "EdgeLab", "0.2.0")
+        rel = local_release(self.tmp / "rel", "0.3.0")
+        shut = []
+        app_proc = self.own(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]))
+
+        def shutdown():
+            shut.append(1)
+            app_proc.kill()
+            app_proc.wait()
+
+        helper = lambda staged, args: [sys.executable, "-m", "edgelab.updater.apply", *args,   # noqa: E731
+                                       "--ready-timeout", "20"]
+        m = self.mgr(DirectoryReleaseSource(rel), install_dir=inst, helper_cmd=helper,
+                     protected=lambda: [self.tmp / "workspace"], shutdown=shutdown)
+        m.app_pid = app_proc.pid
+        os.environ["PYTHONPATH"] = str(REPO)
+        out = m.install(wait=True)
+        self.assertEqual((out["install"]["state"], out["install"]["version"]), ("applying", "0.3.0"), out["install"])
+        self.assertTrue(wait_until(lambda: shut == [1], 5))
+        self.assertTrue(wait_until(lambda: ap._manifest_version(inst) == "0.3.0", 20))
+        self.assertTrue(wait_until(lambda: "update_completed" in m.log_path.read_text(), 20))
+        same = self.mgr(DirectoryReleaseSource(rel), current="0.3.0", install_dir=self.tmp / "other", shutdown=shutdown)
+        self.assertEqual(same.install(wait=True)["install"]["state"], "up_to_date")
+        with self.assertRaises(UpdateError) as cm:                                       # development run
+            self.mgr(DirectoryReleaseSource(rel)).install()
+        self.assertEqual(cm.exception.code, "APPLY_UNSUPPORTED")
+        bad = self.mgr(DirectoryReleaseSource(local_release(self.tmp / "bad", "0.4.0", corrupt=True)),
+                       install_dir=fake_app(self.tmp / "P2" / "EdgeLab", "0.2.0"))
+        r = bad.install(wait=True)["install"]
+        self.assertEqual((r["state"], r["error"]["code"]), ("error", "CHECKSUM_MISMATCH"))
+        self.assertEqual(ap._manifest_version(self.tmp / "P2" / "EdgeLab"), "0.2.0")      # nothing installed
+
     def test_apply_refused_in_development_and_for_unsafe_folders(self):
         rel = local_release(self.tmp / "rel", "0.3.0")
         m = self.mgr(DirectoryReleaseSource(rel))
@@ -555,6 +591,8 @@ class TestHttpRoutes(Base):
         self.assertFalse(c.post("/api/update/later", json={"version": "9.0.0"}).get_json()["prompt"])
         self.assertTrue(c.post("/api/update/skip", json={"version": "9.0.0"}).get_json()["skipped"])
         r = c.post("/api/update/apply", json={"version": "9.0.0"})
+        self.assertEqual((r.status_code, r.get_json()["error"]["code"]), (409, "APPLY_UNSUPPORTED"))
+        r = c.post("/api/update/install", json={})
         self.assertEqual((r.status_code, r.get_json()["error"]["code"]), (409, "APPLY_UNSUPPORTED"))
         self.assertEqual(c.post("/api/update/skip", json={"version": 3}).status_code, 400)
         self.assertEqual(c.post("/api/update/preferences", json={"auto_check": "yes"}).status_code, 400)

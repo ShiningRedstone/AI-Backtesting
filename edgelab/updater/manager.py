@@ -57,6 +57,7 @@ class UpdateManager:
         self._check = {"state": "idle", "checked_at": None, "error": None}
         self._download = {"state": "idle", "bytes": 0, "total": None, "error": None, "version": None}
         self._dismissed: set[str] = set()
+        self._install = {"state": "idle", "step": None, "version": None, "error": None}
         self._thread: threading.Thread | None = None
 
     # ---------------------------------------------------------------- persistent state
@@ -120,7 +121,7 @@ class UpdateManager:
                     "available": available, "note": note,
                     "skipped": bool(available and rel["version"] in skipped),
                     "prompt": bool(available and rel["version"] not in skipped and rel["version"] not in self._dismissed),
-                    "download": dict(self._download),
+                    "download": dict(self._download), "install": dict(self._install),
                     "apply_supported": self.apply_supported,
                     "apply_unsupported_reason": None if self.apply_supported else (
                         "updates install only into the packaged Windows application; this is a development run"),
@@ -331,6 +332,60 @@ class UpdateManager:
         if self.shutdown:
             threading.Timer(0.8, self.shutdown).start()     # let the HTTP response reach the UI first
         return {**self.status(), "applying": True}
+
+    # ---------------------------------------------------------------- one-click update (Settings)
+    def install(self, wait: bool = False) -> dict:
+        """Update now in one action: check, download + verify (or reuse a verified staged build), then hand
+        off to the helper and restart. Every step keeps its own checks (newer only, same platform, SHA-256);
+        an up-to-date installation is left alone."""
+        if not self.apply_supported or self.install_dir is None:
+            raise UpdateError("APPLY_UNSUPPORTED", "updates install only into the packaged application")
+        with self._lock:
+            if self._install["state"] in ("running", "applying"):
+                return self.status()
+            self._install = {"state": "running", "step": "checking", "version": None, "error": None}
+        t = threading.Thread(target=self._install_run, name="edgelab-update-install", daemon=True)
+        t.start()
+        if wait:
+            t.join()
+        return self.status()
+
+    def _set_install(self, **kw) -> None:
+        with self._lock:
+            self._install.update(kw)
+
+    def _install_run(self) -> None:
+        try:
+            self.check()
+            with self._lock:
+                rel, chk = self._release, dict(self._check)
+            if chk["state"] == "error":
+                e = chk["error"] or {}
+                raise UpdateError(e.get("code", "CHECK_FAILED"), e.get("message", "the update check failed"))
+            if rel is None or rel.manifest["platform"] != self.platform or not is_newer(rel.version, self.current):
+                self._set_install(state="up_to_date", step=None)
+                return
+            v = rel.version
+            self._set_install(version=v)
+            try:
+                staged = json.loads((self._stage_dir(v) / "READY.json").read_text(encoding="utf-8")).get("version") == v
+            except (OSError, ValueError):
+                staged = False
+            if not staged:
+                self._set_install(step="downloading")
+                self.download(v, wait=True)
+                with self._lock:
+                    d = dict(self._download)
+                if d["state"] != "ready":
+                    e = d.get("error") or {}
+                    raise UpdateError(e.get("code", "DOWNLOAD_FAILED"), e.get("message", "the download did not complete"))
+            self._set_install(step="applying")
+            self.apply(v)
+            self._set_install(state="applying")
+        except UpdateError as e:
+            self._set_install(state="error", step=None, error=e.to_dict())
+        except Exception as e:                               # noqa: BLE001 - never fatal to the app
+            self._set_install(state="error", step=None, error={"code": "UPDATE_FAILED", "message": f"{type(e).__name__}: {e}"})
 
     @staticmethod
     def _ready_timeout() -> float:

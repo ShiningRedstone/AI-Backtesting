@@ -116,3 +116,11 @@ def register_routes(app, body: Callable[[], dict], bad: Callable[[str], Exceptio
             return jsonify(manager().apply(version_arg()))
         except UpdateError as e:
             return fail(e)
+
+    @app.post("/api/update/install")
+    def update_install():
+        """Settings 'Update now': check -> download + verify -> restart into the new version (background)."""
+        try:
+            return jsonify(manager().install())
+        except UpdateError as e:
+            return fail(e)
