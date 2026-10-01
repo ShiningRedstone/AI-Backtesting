@@ -62,6 +62,13 @@ through the same runner (`campaign.run_scope` -> `run_search(include=)`); run hi
 ADR-70: research browser tree (frozen strategy-id scopes), `strategy/presentation.py` (display names / explanations, identity untouched),
 per-cell timing in `search_cells` + data-based ETA (`campaign.estimate_remaining`, "estimating" below 3 observations); the governance
 layer stays strict (windowless / holdout-reaching requests refused); ad-hoc UI paths request the protocol's `discovery_period`.
+ADR-72: branch-channel updater (release schema 2: channel/build number/commit; pre-releases `build-<branch>-<n>` built and
+smoke-tested by `.github/workflows/windows-build.yml`; banner "Restart and update"; repo must be public). ADR-73: seven tabs
+(Home, Strategies, Run backtest, Backtest results, Prop firm simulator, Paper trading, Settings; old routes kept), read-only
+`research/results_view.py` (field, survivors = net > 0 AND recorded trades pass an evaluation with a payout, breakdowns,
+strategy/control panels), `prop/bootstrap.py` (seeded day-block bootstrap through the unchanged lifecycle; intraday trailing
+refused), controls stored as control records (never runs/trials), risk per trade ($) display preference outside the config
+hash, plain-English UI (`web/src/app/labels.ts`; ids only under "Technical details"), local time for app events, no ETA.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

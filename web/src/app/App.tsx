@@ -4,7 +4,8 @@ import type { LibraryRow, ProtocolRecordRow } from "../api/types";
 import { AppProvider, useApp } from "./context";
 import { RouteContext, go, href, useHashRoute, useRoute } from "./router";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
-import { Badge, Icon, Mono } from "../components/ui";
+import { Badge, Icon } from "../components/ui";
+import { familyLabel, strategyLabel } from "./labels";
 import { BuilderPage } from "../pages/Builder";
 import { LibraryPage, StrategyPage } from "../pages/Strategies";
 import { FamiliesPage, ResultsPage, VariationsPage } from "../pages/Research";
@@ -79,7 +80,7 @@ function Search() {
   const hits = (rows ?? []).filter((r) => q && `${r.name} ${r.strategy_id} ${r.family_id}`.toLowerCase().includes(q.toLowerCase())).slice(0, 8);
   return (
     <div className="search" ref={box}>
-      <input className="input" type="search" placeholder="Search strategies…  (Enter: open · ↵ in Explorer for all)" aria-label="search strategies" value={q}
+      <input className="input" type="search" placeholder="Search strategies…" aria-label="search strategies" value={q}
         data-testid="global-search"
         onFocus={() => { setOpen(true); api.get<LibraryRow[]>("/api/strategies").then(setRows).catch(() => setRows([])); }}
         onChange={(e: { target: HTMLInputElement }) => { setQ(e.target.value); setOpen(true); }}
@@ -92,10 +93,10 @@ function Search() {
         <ul className="search-results" role="listbox">
           {hits.length ? hits.map((h) => (
             <li key={h.strategy_id}><a href={href(`/strategies/${h.strategy_id}`)} onClick={() => { setOpen(false); setQ(""); }}>
-              <span>{h.name}</span> <Mono>{h.strategy_id}</Mono></a></li>))
+              <span>{strategyLabel(h.name)}</span> <span className="muted small">{familyLabel(h.family_id)}</span></a></li>))
             : <li className="muted">{rows ? "No matches" : "Searching…"}</li>}
           {q && <li><a href={href(`/explorer?q=${encodeURIComponent(q)}`)} onClick={() => { setOpen(false); setQ(""); }}>
-            <span>Search “{q}” in the Explorer</span><span className="muted small">all fields ›</span></a></li>}
+            <span>Search “{q}” in all strategies</span><span className="muted small">all fields ›</span></a></li>}
         </ul>)}
     </div>
   );
@@ -126,7 +127,7 @@ function ProtocolChip() {
   return (
     <a className="chip ok" href={href("/")} data-testid="protocol-chip"
       title={`ACTIVE research protocol ${p.protocol_id} (${p.name}), v${p.protocol_version ?? "?"}: locked holdout, trial budget`}>
-      <span className="dot" />{p.protocol_id}<span className="muted">v{p.protocol_version ?? "?"}</span></a>
+      <span className="dot" />Research protocol<span className="muted">version {p.protocol_version ?? "?"}</span></a>
   );
 }
 

@@ -3,6 +3,24 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Branch auto-updates, seven tabs, Backtest results views, evaluation simulator, plain English (ADR-72, ADR-73)
+
+| Item | Status |
+|---|---|
+| Updater follows the build's own branch: release manifest schema 2 (channel, build number, commit), pre-releases of the same channel, newer = higher build number; checks at start and every 30 minutes; one-click banner "Restart and update" (verify, swap, restart, rollback unchanged) | IMPLEMENTED, TESTED (fixtures; Linux) |
+| GitHub Actions workflow: every push builds `EdgeLab.exe` on Windows, smoke-tests it, publishes a pre-release `build-<branch>-<n>`, keeps 5 per branch | IMPLEMENTED (runs on GitHub Actions) |
+| App event times (updates, runs, searches, campaigns, builds) in the computer's local time zone; market/trade/period times unchanged | IMPLEMENTED |
+| Research runs page: estimated time remaining removed (counts and elapsed time kept) | IMPLEMENTED |
+| Seven tabs with sub-views (Strategies, Run backtest, Backtest results, Settings merge the old pages); old routes still work; AI Discovery off the menu, route kept | IMPLEMENTED, TESTED (browser e2e) |
+| Backtest results → Overview: the field (win rate vs reward to risk, net/gross, survivors, random controls, break-even curves), facts, breakdowns by target/entry/trailing/stop/direction/session, signal-exit vs fixed-target comparison, evaluation summary | IMPLEMENTED, TESTED |
+| Strategy panel (drawer summary): KPIs incl. dollars at risk, last 12 months, out-of-sample strip, rank, prop results per account with the evaluation simulator, rules in plain English, technical details | IMPLEMENTED, TESTED |
+| Evaluation simulator: seeded block bootstrap of trading days through the existing prop lifecycle, profile / end-of-day trailing / static drawdown; intraday trailing refused by name; cached, background, labelled simulated | IMPLEMENTED, TESTED (known answers, determinism) |
+| Random controls stored as control records (never runs or trials) | IMPLEMENTED, TESTED |
+| Risk per trade ($) setting (default 250), display only, outside the config hash | IMPLEMENTED, TESTED |
+| Plain-English labels across the interface; ids and raw keys only under "Technical details" | IMPLEMENTED |
+| Survivor flag, explorer filters (survivors only, trailing stop, signal exit) and columns (reward to risk, prop) | IMPLEMENTED, TESTED |
+| Backtest engine, research config, protocol, ledger, prop lifecycle | UNCHANGED |
+
 ## Fix: `storage.backend: auto` stays on SQLite; unreadable build-info no longer breaks /api/status (ADR-71)
 
 | Item | Status |

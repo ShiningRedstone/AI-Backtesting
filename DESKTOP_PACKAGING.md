@@ -268,23 +268,29 @@ It refuses a build made from uncommitted tracked changes unless `--allow-dirty` 
 - a normal (not draft, not pre-release) release whose tag is exactly `v<version>`;
 - the assets `edgelab-release.json` and the zip named in it (asset size must equal the manifest's);
 - publish with the printed `gh release create v<version> ... --repo ShiningRedstone/AI-Backtesting` command.
-The updater reads `/releases/latest` only; it never follows a branch and never runs source code.
+These versioned releases (schema `edgelab-release/1`) are still understood. Since ADR-72 the normal path is
+**branch builds**: `.github/workflows/windows-build.yml` builds every push on Windows and publishes a pre-release
+`build-<branch>-<n>` with an `edgelab-release/2` manifest (`channel`, `build_number`, `commit`) and the artifact
+`EdgeLab-<version>-b<n>-windows-x64.zip`; the newest 5 builds per branch are kept. The updater never runs source code.
+
+**Requirements:** the repository must be public (releases are read without credentials; a private repository answers
+404). An EdgeLab built before ADR-72 only reads `/releases/latest`: install the first Actions build once by hand
+(download the zip from the repository's Releases page, unzip, start `EdgeLab\EdgeLab.exe`).
 
 ## Updates
 
 ### What the user sees
 
-1. EdgeLab starts normally. The packaged app checks `https://api.github.com/repos/ShiningRedstone/AI-Backtesting/releases/latest`
-   in the background (never delaying start-up; at most once per start; can be switched off in
-   **Settings → Updates**). Development runs never check automatically; **Check for updates** works everywhere.
-2. No newer release, offline, GitHub unavailable, rate-limited or malformed metadata: nothing is shown;
+1. EdgeLab starts normally. The packaged app lists the repository's releases
+   (`https://api.github.com/repos/ShiningRedstone/AI-Backtesting/releases?per_page=100`) in the background at start
+   and every 30 minutes (never delaying start-up; can be switched off in **Settings → Updates**), keeping only builds
+   of the branch it was built from. Development runs never check automatically; **Check for updates** works everywhere.
+2. No newer build, offline, GitHub unavailable, rate-limited or malformed metadata: nothing is shown;
    Settings → Updates states the result (`OFFLINE`, `RATE_LIMITED`, `MALFORMED_METADATA`, `NO_RELEASE`, ...).
-3. A newer release: the dialog **"A new EdgeLab version is available"** shows the current and new version,
-   release date, notes and download size, with **Update now**, **Skip this version**, **Later**.
-   - *Later* asks again at the next start. *Skip this version* is stored in `%APPDATA%\EdgeLab\update_state.json`
-     and not offered again (a newer version is); it can be undone in Settings.
-   - *Update now* downloads with progress, verifies, then offers **Restart and update**.
-4. Older or equal published versions are never offered (downgrades are refused), nor releases for another platform.
+3. A newer build of the same branch: a banner **"Update available: build N of <branch>"** with **Restart and update**
+   and **Later**. *Restart and update* downloads, verifies, applies and restarts into the new build in one step;
+   *Later* hides the banner until the next start. *Skip* remains available in Settings.
+4. Older or equal builds are never offered (downgrades are refused), nor builds of another branch or platform.
 
 ### How an update is applied (EdgeLab.exe cannot replace itself while running)
 

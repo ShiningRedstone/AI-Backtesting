@@ -80,13 +80,25 @@ never counted or aggregated as an ordinary OOS test. Win rate is shown but never
 ## Page map
 
 ```
-Overview    Home (#/) · Research dashboard (#/dashboard)
-Strategies  Explorer (#/explorer, drawer ?open=STR_..) · Strategy library (#/strategies[/id]) · Builder · Families · Variations
-Research    Experiments (#/research[/SRCH_..]) · Results (#/results[/RUN_..]) · Compare · Controls (#/controls)
-            · Candidate pipeline (#/pipeline) · AI Discovery
-Simulation  Prop simulator (#/prop) · Paper trading (#/paper, planned: not implemented)
-System      Data (#/datasets) · Settings & about (#/settings)
+Home               Home (#/)
+Strategies         Library (#/strategies[/id]) · Families (#/families) · Builder (#/builder) · Variations (#/variations)
+Run backtest       Single backtest (#/run) · Research runs (#/runs) · Experiments (#/research[/SRCH_..])
+Backtest results   Overview (#/dashboard) · Strategies (#/explorer, drawer ?open=STR_..) · All runs (#/results[/RUN_..])
+                   · Compare · Random controls (#/controls) · Candidate pipeline (#/pipeline)
+Prop firm simulator (#/prop) · Paper trading (#/paper, planned: not implemented)
+Settings           Settings (#/settings, incl. risk per trade and updates) · Data (#/datasets)
+(no menu entry)    AI Discovery (#/discovery)
 ```
+
+Every old address still opens its page inside the right tab. On-screen text is plain English (`web/src/app/labels.ts`):
+ids, hashes and raw keys appear only under a collapsed **Technical details**. App event times (created, started,
+checked, built) are shown in the computer's local time; market, bar, trade and period times keep the dataset's
+convention.
+
+Backtest results views (ADR-73, read-only, `research/results_view.py`): `/api/results-view/overview`
+(`basis=net|gross`, `controls=0|1`), `/api/results-view/strategies/<id>`, `/api/results-view/controls/<CTRL_..>`;
+the evaluation simulator `POST /api/prop/bootstrap` (`run_id`, `profile_id`, `n`, `mode`; returns the cached result
+or the background job's progress); `GET|POST /api/preferences/risk-per-trade` (display only, outside the config hash).
 
 Read models behind the new pages (all read-only, `research/overview.py`; they never evaluate, record a trial,
 touch a ledger or change a protocol): `/api/overview`, `/api/explorer/strategies` (server-side filter / sort /
