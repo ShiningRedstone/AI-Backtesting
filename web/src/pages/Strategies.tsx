@@ -51,8 +51,7 @@ export function SystemPanel() {
             <a href={href("/results")}><b>{s.runs}</b><span>recorded runs</span></a>
           </div>
           <KeyValues rows={[["Last run", s.last_run ? <a href={href(`/results/${s.last_run.run_id}`)} title={String(s.last_run.run_id)}>
-            Open the last run{s.last_run.created_at ? ` (${shortTime(String(s.last_run.created_at))})` : ""}</a> : "none yet"],
-            ["Research searches", <a href={href("/research")}>Experiments</a>]]} />
+            Open the last run{s.last_run.created_at ? ` (${shortTime(String(s.last_run.created_at))})` : ""}</a> : "none yet"]]} />
         </Card>
         <Card title="Quick actions">
           <div className="quick">
@@ -122,7 +121,7 @@ export function LibraryPage() {
                 <td>{r.parent_strategy_id ? <a href={href(`/strategies/${r.parent_strategy_id}`)} title={r.parent_strategy_id}>
                   {strategyLabel((data ?? []).find((x) => x.strategy_id === r.parent_strategy_id)?.name ?? "Parent version")}</a> : <span className="muted">—</span>}</td>
                 <td>{r.n_parameters}</td>
-                <td>{r.archived ? <Badge tone="warn">archived</Badge> : <Badge tone="ok">valid</Badge>} <Badge>{methodLabel(r.generation_method)}</Badge></td>
+                <td><span className="badges-inline">{r.archived ? <Badge tone="warn">archived</Badge> : <Badge tone="ok">valid</Badge>}<Badge>{methodLabel(r.generation_method)}</Badge></span></td>
                 <td className="row-actions">
                   <a href={href(`/strategies/${r.strategy_id}`)}>Open</a>
                   {!r.archived && <>

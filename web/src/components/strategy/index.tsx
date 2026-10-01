@@ -10,7 +10,7 @@ import { Badge, Banner, Button, Checkbox, ErrorPanel, Field, IssueList, KeyValue
 export const SYNTHETIC_NOTICE = "Synthetic demonstration — not evidence of trading performance.";
 export const METHOD_LABEL: Record<string, string> = {
   user: "Written by you", manual_edit: "Edited", duplicate: "Duplicate", mode_a_variation: "Variation", mode_b_proposal: "AI proposal",
-  child: "Derived version",
+  child: "Derived version", factory_variant: "Factory variant",
 };
 export const methodLabel = (m: string | null | undefined) => (m ? METHOD_LABEL[m] ?? humanize(m) : "—");
 /** A stored scalar as words (objects stay as compact text). */

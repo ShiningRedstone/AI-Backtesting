@@ -52,6 +52,12 @@ jobs:
       - name: Packaged smoke test (headless, scratch demo workspace)
         run: python packaging/smoke_packaged.py --exe dist/EdgeLab/EdgeLab.exe
 
+      - name: Start-up splash ends on its own (no parent process)
+        run: |
+          $p = Start-Process dist/EdgeLab/EdgeLabConsole.exe -ArgumentList "--splash", "--parent", "999999" -PassThru
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); throw "the splash did not close by itself" }
+          if ($p.ExitCode -ne 0) { throw "the splash exited with $($p.ExitCode)" }
+
       - name: Packaged updater smoke (local release fixtures; app started from its own folder like a shortcut)
         run: python packaging/smoke_update.py --dist dist/EdgeLab --results-json "$env:RUNNER_TEMP/smoke_update.json"
 

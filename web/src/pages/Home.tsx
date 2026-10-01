@@ -81,17 +81,6 @@ export function HomePage() {
       </Card>
 
       <div className="grid-cards">
-        <Card title="Recent experiments" actions={<a className="small" href={href("/research")}>Experiments ›</a>} testId="home-searches">
-          {o.recent_searches.length ? <TableWrap><table className="dense">
-            <thead><tr><th>Experiment</th><th>Status</th><th className="r">Trials</th><th className="r">Evaluated</th><th className="r">Failed</th><th>Protocol</th></tr></thead>
-            <tbody>{o.recent_searches.map((s) => (
-              <tr key={s.search_id}><td><a href={href(`/research/${s.search_id}`)}>Open experiment</a><div className="small muted">{shortTime(s.created_at)}</div></td>
-                <td><Badge tone={s.status === "completed" ? "ok" : s.status === "failed" ? "error" : "neutral"}>{statusLabel(s.status)}</Badge></td>
-                <td className="r num">{s.n_trials}</td><td className="r num">{s.n_evaluated}</td><td className="r num">{s.n_failed}</td>
-                <td className="small">{s.protocol_id ? "Research protocol" : <span className="muted">none</span>}</td></tr>))}</tbody></table></TableWrap>
-            : <Empty>No research searches yet.</Empty>}
-          {o.recent_searches.length > 0 && <IdTable head={["Experiment", "Protocol"]} rows={o.recent_searches.map((s) => [s.search_id, s.protocol_id])} />}
-        </Card>
         <Card title="Candidates (shortlist tags and holdout ledger)" actions={<a className="small" href={href("/pipeline")}>Pipeline ›</a>} testId="home-candidates">
           {o.candidates.length ? <TableWrap><table className="dense">
             <thead><tr><th>Strategy</th><th>State</th><th>Protocol</th><th>Outcome</th></tr></thead>

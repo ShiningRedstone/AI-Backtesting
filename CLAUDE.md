@@ -84,6 +84,9 @@ ADR-77: speed without result changes: `Services._cell_dataset` (validated once p
 ADR-78: GET requests run in `Services.read_context()` on pooled `ReadOnlySQLiteStore` connections WITHOUT the service lock (`Services.store`
 is a property; writer = `writer_store`); `db_token` = writer total_changes + file change counter (5 s reuse for pages during a job);
 research run reads (preflight, progress, stop) via `campaign.read_outside_lock`; planned cells in one transaction.
+ADR-79: Run backtest = Research runs | Single backtest (Experiments tab removed; `/research` -> `/runs`, job/id deep links kept); `results_view.session_group`
+(market-hours groups, `session_group` breakdown); deep-rose decorative gradient; desktop relaunch waits for a closing instance (`_hand_off` ->
+`HANDOFF_WAIT`, `_wait_for_previous`), runtime.json removed first on shutdown, splash `edgelab/desktop_splash.py` (`EdgeLab.exe --splash`).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

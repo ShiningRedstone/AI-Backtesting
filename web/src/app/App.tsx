@@ -31,7 +31,7 @@ interface NavItem { path: string; label: string; tid: string; icon: string; head
 const NAV: NavItem[] = [
   { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
   { path: "/strategies", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
-  { path: "/run", label: "Run backtest", tid: "run", icon: "flask", heads: ["run", "runs", "research"] },
+  { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research"] },
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "results", "compare", "controls", "pipeline"] },
   { path: "/prop", label: "Prop firm simulator", tid: "prop", icon: "shield", heads: ["prop"] },
@@ -43,8 +43,7 @@ const NAV: NavItem[] = [
 const SUBTABS: Record<string, { path: string; label: string; head: string }[]> = {
   strategies: [{ path: "/strategies", label: "Library", head: "strategies" }, { path: "/families", label: "Families", head: "families" },
     { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" }],
-  run: [{ path: "/run", label: "Single backtest", head: "run" }, { path: "/runs", label: "Research runs", head: "runs" },
-    { path: "/research", label: "Experiments", head: "research" }],
+  run: [{ path: "/runs", label: "Research runs", head: "runs" }, { path: "/run", label: "Single backtest", head: "run" }],
   results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
     { path: "/results", label: "All runs", head: "results" }, { path: "/compare", label: "Compare", head: "compare" },
     { path: "/controls", label: "Random controls", head: "controls" }, { path: "/pipeline", label: "Candidate pipeline", head: "pipeline" }],
@@ -115,7 +114,8 @@ function Page() {
     case "families": return <FamiliesPage />;
     case "variations": return <VariationsPage />;
     case "datasets": return <DatasetsPage />;
-    case "research": return <ResearchPage />;
+    case "research":                                       // no Experiments tab: only job / result deep links remain
+      return route.parts[1] || route.query.get("job") || route.query.get("setup") ? <ResearchPage /> : <RedirectTo path="/runs" />;
     case "run": return <RunBacktestPage />;
     case "runs": return <RunsPage />;
     case "results": return <ResultsPage />;
@@ -128,6 +128,11 @@ function Page() {
     case "settings": return <SettingsPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to Home</a></p></div>;
   }
+}
+
+function RedirectTo({ path }: { path: string }) {
+  useEffect(() => { window.location.replace(href(path)); }, [path]);
+  return null;
 }
 
 function Shell() {

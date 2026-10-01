@@ -78,7 +78,7 @@ export function DashboardPage() {
         {d.holdout_runs_excluded > 0 && <Banner tone="info">{d.holdout_runs_excluded} protocol holdout-evaluation run(s) are excluded from these
           aggregates (they are shown per candidate, labelled Holdout, never pooled with discovery or OOS research).</Banner>}
         {d.synthetic_excluded > 0 &&<Banner tone="info">{d.synthetic_excluded} synthetic run(s) excluded (tick “include synthetic runs” to see them, labelled).</Banner>}
-        {!d.n_runs ? <Empty>No stored runs with trades in this scope. <a href={href("/research")}>Run an experiment</a> or change the scope.</Empty> : <>
+        {!d.n_runs ? <Empty>No stored runs with trades in this scope. <a href={href("/runs")}>Start a research run</a> or change the scope.</Empty> : <>
           <div className="kpis">
             <Kpi label="Runs" value={d.n_runs.toLocaleString()} sub={`${d.n_strategies} strategies`} />
             <Kpi label="Trades" value={d.n_trades.toLocaleString()} />

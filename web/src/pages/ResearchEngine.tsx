@@ -264,7 +264,7 @@ function SearchPage({ id }: { id: string }) {
   const detail = useApi<SearchDetail>(research.searchUrl(id), [id]);
   const nameOf = useStrategyNames();
   if (detail.error) return <div className="page"><ErrorPanel error={detail.error} title="Could not load search results" testId="rs-search-error" />
-    <p><a href={href("/research")}>Back to research</a></p></div>;
+    <p><a href={href("/research?setup=1")}>Back to research</a></p></div>;
   const d = detail.data;
   if (!d) return <Loading label="Loading search…" />;
   return (
@@ -272,7 +272,7 @@ function SearchPage({ id }: { id: string }) {
       <header className="page-head"><div><h1>Search of {shortTime(d.created_at)}</h1>
         <div className="head-meta"><StatusBadge s={d.status} /></div></div>
         <div className="actions"><a href={href(`/compare?source=search&id=${d.search_id}`)} data-testid="rs-compare">Compare runs</a>
-          {" · "}<a href={href("/research")}>All searches</a></div></header>
+          {" · "}<a href={href("/research?setup=1")}>All searches</a></div></header>
       <Banner tone="info" testId="rs-search-in-sample"><b>{IN_SAMPLE}.</b> {plainText(d.note)}</Banner>
       {d.protocol_id ? <ProtocolBudget pid={d.protocol_id} search={d} />
         : <Banner tone="warn">This search is not attributed to a research protocol (it ran without an active protocol): its trials are counted

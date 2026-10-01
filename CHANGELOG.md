@@ -3,6 +3,15 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Tabs, session groups, pink cards, reliable relaunch (ADR-79)
+
+| Item | Status |
+|---|---|
+| Run backtest: Research runs first (and the tab's default), Single backtest second; Experiments tab and its links removed (batch progress pages still reachable from the strategy page) | IMPLEMENTED, TESTED (browser) |
+| By session: grouped by market hours (Asia, London, London–NY overlap, NY AM, NY PM, NY full day, Any time), medians recomputed per group; "Show all windows"; one line per row | IMPLEMENTED, TESTED (known answers; group median = direct median) |
+| Scatter dots without outlines (controls filled grey); Strategies list badges side by side; decorative cards/glows deep rose (losses/errors stay red) | IMPLEMENTED |
+| Reopening while the previous instance is closing: waits for it, then starts; never a "can't reach this page" window; runtime file removed first on shutdown; native start-up splash (packaged Windows) | IMPLEMENTED, TESTED (stale/dead instance, live instance focus, shutdown order; CI splash check) |
+
 ## Pages load while a research run is going (ADR-78)
 
 | Item | Status |

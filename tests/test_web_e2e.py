@@ -470,7 +470,7 @@ class TestBrowserFlow(unittest.TestCase):
 
     def _setup_search(self, pg, names=("ema_crossover", "rsi_threshold"), instruments=("NQ", "NAS100_CFD")):
         strategies, datasets = self._research_ids()
-        pg.goto(self.base + "/#/research")
+        pg.goto(self.base + "/#/research?setup=1")                          # no Experiments tab (ADR-79): direct address
         self.tid(pg, "search-setup").wait_for()
         for n in names:
             self.tid(pg, f"rs-ids-{strategies[n]}").check()
@@ -485,8 +485,9 @@ class TestBrowserFlow(unittest.TestCase):
     def test_6_research_setup_check_plan_and_refusals(self):
         pg = self.page()
         self._setup_search(pg)
-        self.assertNotIn("planned", self.tid(pg, "nav-run").inner_text())         # Experiments live in Run backtest
-        self.assertIn("active", self.tid(pg, "subnav-research").get_attribute("class"))
+        self.assertNotIn("planned", self.tid(pg, "nav-run").inner_text())         # searches live in Run backtest
+        self.assertIn("active", self.tid(pg, "nav-run").get_attribute("class"))
+        self.assertEqual(self.tid(pg, "subnav-research").count(), 0)              # ADR-79: no Experiments sub-tab
         self.assertIn("NOT VALIDATED", self.tid(pg, "research-in-sample").inner_text())
         self.tid(pg, "rs-validate").click()
         self.assertIn("well formed", self.tid(pg, "rs-validation").inner_text())

@@ -73,6 +73,7 @@ class WindowController:
         self.url, self.storage_path = url, storage_path
         self.window = None
         self.state = {"created": False, "loaded": 0, "closed": False, "last_url": None}
+        self.on_first_load = None                 # called once when the app first loaded (closes the splash, ADR-79)
 
     def run(self, stop: threading.Event | None = None) -> None:
         """Blocks on the GUI loop (must be the main thread) until the window closes."""
@@ -98,6 +99,12 @@ class WindowController:
 
     def _loaded(self, *_):
         self.state["loaded"] += 1
+        cb, self.on_first_load = self.on_first_load, None
+        if cb is not None:
+            try:
+                cb()
+            except Exception:                                   # noqa: BLE001 - cosmetic
+                pass
 
     def _closed(self, *_):
         self.state["closed"] = True

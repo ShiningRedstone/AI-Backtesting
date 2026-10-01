@@ -1938,3 +1938,36 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   - The facets disk-cache temp file name is unique.
 - **GPU: not used.** Page loading was lock-bound, not compute-bound. GPU float arithmetic can change result hashes
   (reproducibility), and CUDA is NVIDIA-only with a large runtime.
+
+### ADR-79 Run backtest tab order, session groups, chart/badge/colour polish, reliable desktop relaunch
+- **Tabs.**
+  - "Run backtest" opens Research runs (`/runs`); the sub-tab order is Research runs, then Single backtest.
+  - The Experiments sub-tab and its Home and Backtest-results links are removed.
+  - `/research` with no id or job redirects to `/runs`. `/research?job=` and `/research/<id>` (used by the
+    strategy page's batch card) and `/research?setup=1` still work.
+- **Session groups.** `results_view.session_group` classifies each strategy's entry window from its own definition
+  (generated `FX*_<CITY>_HHMM_HHMM_*` ids, configured sessions, factory presets) into:
+  - Asia (incl. New York evening windows)
+  - London
+  - London–NY overlap (New York, before 09:30)
+  - NY AM (09:30–11:59)
+  - NY PM (12:00+)
+  - NY full day (a New York window of 5 h or more)
+  - Any time / Other
+  The `session_group` breakdown recomputes the median and survivor rate over each group's strategies. "By session"
+  shows the groups; "Show all windows" shows the per-window rows. `HBars` rows take one line each.
+- **Polish.**
+  - Scatter dots have no outline; random controls are filled grey.
+  - Strategy-list badges sit side by side (`.badges-inline`), and "Factory variant" has a label.
+  - Decorative surfaces (`--warm-gradient`, `.featured`, glows) are deep rose → plum. Losses and errors stay red.
+- **Desktop relaunch.**
+  - Shutdown removes `runtime.json` first, then stops the server, closes the workspace and releases the lock.
+  - `_hand_off` only uses an instance that answers `/api/health`. Otherwise (still closing, or a stale file) it
+    returns `HANDOFF_WAIT`, and `_wait_for_previous` waits up to 120 s for the lock, then starts normally (or shows
+    "still closing"). It never opens a window on an address that does not answer.
+  - The viewer window uses the app-level WebView2 profile.
+  - Splash: the packaged Windows window mode starts `EdgeLab.exe --splash --parent <pid>`
+    (`edgelab/desktop_splash.py`: a small frameless pywebview window with a private profile). It is closed on the
+    main window's first load or on exit, and closes itself if the parent dies or after 180 s. A failure only means
+    no splash.
+  - CI checks that the splash ends on its own.

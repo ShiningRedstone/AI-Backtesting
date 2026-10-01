@@ -42,6 +42,7 @@ const BREAKDOWNS: [string, string][] = [["target_type", "By target"], ["entry_ty
 export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid: string) => void; onOpenControl: (cid: string) => void }) {
   const [basis, setBasis] = useState<"net" | "gross">("net");
   const [controls, setControls] = useState(true);
+  const [allWindows, setAllWindows] = useState(false);
   const route = useRoute();
   const [run, setRun] = useState(route.query.get("run") ?? "");
   const crit = useCriteriaName();
@@ -60,7 +61,7 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
     { id: "survivors", label: "Survivors", color: "var(--c1)", size: 5, ring: true,
       points: o.points.filter((p) => p.survivor && p.win_rate != null && p.avg_rr != null).map((p) => ({ id: p.strategy_id, x: p.win_rate!, y: p.avg_rr!,
         label: p.display_name ?? humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
-    ...(controls ? [{ id: "controls", label: "Random controls", color: "var(--c-neutral)", hollow: true, size: 3.5,
+    ...(controls ? [{ id: "controls", label: "Random controls", color: "var(--c-neutral)", size: 3.5,
       points: o.controls.filter((c) => c.win_rate != null && c.avg_rr != null).map((c) => ({ id: c.control_id, x: c.win_rate!, y: c.avg_rr!,
         label: "Random control", detail: `${c.trades} trades · ${r(c.expectancy_r)} per trade · not a strategy` })) }] : []),
   ];
@@ -100,9 +101,14 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
       <h3>What the tested strategies have in common</h3>
       <div className="panel-grid">
         {BREAKDOWNS.map(([k, title]) => {
-          const rows = o.breakdowns[k] ?? [];
-          return <Card key={k} title={<>{title} {tags}</>} testId={`results-by-${k.replace(/_/g, "-")}`}>
-            {!rows.length ? <Empty>No tested strategies.</Empty> : <HBars rows={rows.map((g) => ({ label: facetLabel(k, g.group), value: g.median_expectancy_r,
+          // ADR-79: sessions are grouped by market hours (Asia, London, NY AM, ...); every window behind a toggle
+          const dim = k === "session" && !allWindows && o.breakdowns.session_group ? "session_group" : k;
+          const rows = o.breakdowns[dim] ?? [];
+          return <Card key={k} title={<>{title} {tags}</>} testId={`results-by-${k.replace(/_/g, "-")}`}
+            actions={k === "session" && o.breakdowns.session_group ? <Button small onClick={() => setAllWindows(!allWindows)} testId="session-toggle">
+              {allWindows ? "Group by market hours" : "Show all windows"}</Button> : undefined}>
+            {!rows.length ? <Empty>No tested strategies.</Empty> : <HBars rows={rows.map((g) => ({
+              label: dim === "session_group" ? g.group : facetLabel(k, g.group), value: g.median_expectancy_r,
               note: `${g.strategies} strateg${g.strategies === 1 ? "y" : "ies"} · ${pct(g.survivor_rate, 0)} survivors` }))}
               unit={`median ${basis === "net" ? "net" : "gross"} R per trade`} />}
           </Card>;

@@ -219,16 +219,31 @@ def run(argv=None) -> int:
         show_error(f"Cannot create the folder {logs}: {exc}")
         return 1
     _redirect_missing_streams(logs)                   # windowed exe: no console, keep output in a log
+    splash = _start_splash(ui)
+    try:
+        return _run_started(args, ui, root, source, explicit, notice, logs, argv, splash)
+    finally:
+        _stop_splash(splash)
+
+
+def _run_started(args, ui, root, source, explicit, notice, logs, argv, splash) -> int:
+    from edgelab import runtime
     lock = None
     if root is not None:
         lock = InstanceLock(logs / LOCK_FILE)
         if not lock.acquire():
-            return _hand_off(root, logs, ui)
+            r = _hand_off(root, logs, ui)
+            if r != HANDOFF_WAIT:
+                return r
+            r = _wait_for_previous(lock, root, logs, ui)
+            if r is not None:
+                return r
     if ui == "window":
         from edgelab.desktop_window import window_runtime_problem
         problem = window_runtime_problem()            # before anything starts: never a silent fallback
         if problem:
             _log(logs, problem)
+            _stop_splash(splash)
             show_error(problem)
             if lock is not None:
                 lock.release()
@@ -314,6 +329,7 @@ def run(argv=None) -> int:
                  "Keep this window open while you use Munyun Lab; close it (or press Ctrl+C) to stop."), flush=True)
         _stop_on_signals(stop)
         if ui == "window":
+            controller.on_first_load = lambda: _stop_splash(splash)    # the real window is showing the app
             controller.run(stop)                      # blocks until the window is closed
         else:
             if ui == "browser":
@@ -324,36 +340,54 @@ def run(argv=None) -> int:
         return 0
     except StartupError as exc:
         _log(logs, str(exc))
+        _stop_splash(splash)
         show_error(str(exc))
         return 1
     except Exception as exc:                          # noqa: BLE001 - shown to the user, full trace in the log
         _log(logs, traceback.format_exc())
+        _stop_splash(splash)
         show_error(f"{type(exc).__name__}: {exc}\n\nDetails: {logs / 'desktop.log'}")
         return 1
     finally:
-        if server is not None:
-            server.shutdown()
-            server.server_close()
+        _stop_splash(splash)
         current = host.root if host is not None else root
-        if host is not None:
-            host.close()
-        if lock is not None:
-            lock.release()
+        # ADR-79: stop advertising this instance FIRST, so a relaunch during the shutdown below waits for it instead
+        # of opening a window on an address that is about to stop answering
         for d in {logs, (current / "logs") if current is not None else logs}:
             try:
                 (d / RUNTIME_FILE).unlink(missing_ok=True)
             except OSError:
                 pass
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if host is not None:
+            host.close()
+        if lock is not None:
+            lock.release()
 
 
-def _hand_off(root: Path, logs: Path, ui: str) -> int:
-    """Another instance already serves this workspace: bring its window to the front; if it has no
-    window, show its URL in a window (or browser) of this process. Never a second server."""
+HANDOFF_WAIT = "wait"                                  # the instance holding the lock is closing: wait for it
+CLOSING_WAIT_S = 120.0
+
+
+def _alive(url: str, timeout: float = 3.0) -> bool:
+    """Does a Munyun Lab backend answer at ``url``? (never through a proxy)"""
+    try:
+        with _LOOPBACK.open(url + "/api/health", timeout=timeout) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def _hand_off(root: Path, logs: Path, ui: str):
+    """Another process holds this workspace. If it ANSWERS, bring its window to the front (or, when it has no window,
+    show it in a window or browser of this process): never a second server. If it does not answer, it is still
+    closing (or its runtime file is stale): return HANDOFF_WAIT so the caller waits for it to finish and then starts
+    normally. Never opens a window on an address that does not answer (that showed "can't reach this page")."""
     info = _read_runtime(logs)
-    if not info:
-        show_error(f"Munyun Lab is already running for {root} (it is still starting, or a previous instance is "
-                   "shutting down). Try again in a moment.")
-        return 1
+    if not info or not info.get("url") or not _alive(info["url"]):
+        return HANDOFF_WAIT
     print(f"Munyun Lab is already running for {root} at {info['url']}")
     if ui == "none":
         return 0
@@ -370,13 +404,63 @@ def _hand_off(root: Path, logs: Path, ui: str) -> int:
     if ui == "browser":
         webbrowser.open(info["url"])
         return 0
+    from edgelab import runtime
     from edgelab.desktop_window import WindowController, window_runtime_problem
     problem = window_runtime_problem()
     if problem:
         show_error(problem)
         return 1
-    WindowController(info["url"], root / "webview").run()     # a viewer onto the running backend
+    if not _alive(info["url"]):                       # it stopped meanwhile: nothing to show
+        return HANDOFF_WAIT
+    WindowController(info["url"], runtime.settings_path().parent / "webview").run()   # viewer onto the live backend
     return 0
+
+
+def _wait_for_previous(lock: "InstanceLock", root: Path, logs: Path, ui: str, timeout: float = CLOSING_WAIT_S):
+    """The previous instance is closing: wait until it released the workspace (then this process starts normally:
+    returns None), or hand off to an instance that came alive meanwhile (returns its exit code)."""
+    _log(logs, "a previous Munyun Lab instance is still closing; waiting for it before starting")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if lock.acquire():
+            return None
+        r = _hand_off(root, logs, ui)
+        if r != HANDOFF_WAIT:
+            return r
+        time.sleep(0.5)
+    if lock.acquire():
+        return None
+    show_error("Munyun Lab is still closing the previous session. Wait a moment and open it again.")
+    return 1
+
+
+# ------------------------------------------------------------------------------------ splash (ADR-79)
+def _splash_wanted(ui: str) -> bool:
+    from edgelab import runtime
+    return (ui == "window" and sys.platform == "win32" and runtime.is_frozen()
+            and not os.environ.get("EDGELAB_NO_SPLASH"))
+
+
+def _start_splash(ui: str):
+    """A tiny native 'Starting Munyun Lab' window in a separate process (no server, its own private profile), shown
+    while the backend starts or a previous instance finishes closing. Best effort: any failure only means no splash."""
+    if not _splash_wanted(ui):
+        return None
+    try:
+        from edgelab.updater.apply import _spawn
+        return _spawn([sys.executable, "--splash", "--parent", str(os.getpid())])
+    except Exception:                                 # noqa: BLE001 - a splash is never required
+        return None
+
+
+def _stop_splash(proc) -> None:
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+    except Exception:                                 # noqa: BLE001
+        pass
 
 
 def _report_ready(info: dict) -> None:
@@ -423,6 +507,9 @@ def _log(logs: Path, text: str) -> None:
 def main(argv=None) -> int:
     multiprocessing.freeze_support()                  # MUST run first in a frozen executable
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["--splash"]:                       # the start-up splash window (ADR-79)
+        from edgelab.desktop_splash import main as splash_main
+        return splash_main(argv[1:])
     if argv[:1] == ["--apply-update"]:                 # the update helper (launched from a staged, verified build)
         from edgelab.updater.apply import main as apply_main
         return apply_main(argv[1:])

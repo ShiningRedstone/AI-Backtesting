@@ -210,6 +210,123 @@ class TestNativeWindowLifecycle(unittest.TestCase):
                 first.wait(30)
 
 
+class TestRelaunchWhileClosing(unittest.TestCase):
+    """ADR-79: reopening the app while the previous instance is still closing never opens a window on an address that
+    no longer answers ("127.0.0.1 refused to connect"): it waits for the old instance, then starts normally."""
+
+    def test_stale_runtime_file_waits_for_the_lock_then_starts(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "ws"
+            logs = root / "logs"
+            logs.mkdir(parents=True)
+            with socket.socket() as sk:                                       # a port nobody listens on
+                sk.bind(("127.0.0.1", 0))
+                dead = sk.getsockname()[1]
+            (logs / desktop.RUNTIME_FILE).write_text(json.dumps({"pid": 1, "url": f"http://127.0.0.1:{dead}",
+                                                                  "control_token": "x"}))
+            old = desktop.InstanceLock(logs / desktop.LOCK_FILE)              # the closing instance still holds it
+            self.assertTrue(old.acquire())
+            with mock.patch.object(dw, "WindowController", side_effect=AssertionError("window on a dead address")):
+                self.assertEqual(desktop._hand_off(root, logs, "window"), desktop.HANDOFF_WAIT)
+                threading.Timer(1.0, old.release).start()                     # ...and finishes closing a second later
+                mine = desktop.InstanceLock(logs / desktop.LOCK_FILE)
+                with mock.patch.object(desktop, "_log"):
+                    self.assertIsNone(desktop._wait_for_previous(mine, root, logs, "window", timeout=20))
+            self.assertIsNotNone(mine.fh)                                     # this process now owns the workspace
+            mine.release()
+
+    def test_wait_gives_up_with_a_message_and_never_a_dead_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "ws"
+            logs = root / "logs"
+            logs.mkdir(parents=True)
+            old = desktop.InstanceLock(logs / desktop.LOCK_FILE)
+            self.assertTrue(old.acquire())
+            try:
+                mine = desktop.InstanceLock(logs / desktop.LOCK_FILE)
+                with mock.patch.object(desktop, "show_error") as err, mock.patch.object(desktop, "_log"), \
+                        mock.patch.object(dw, "WindowController", side_effect=AssertionError("dead window")):
+                    self.assertEqual(desktop._wait_for_previous(mine, root, logs, "window", timeout=1.5), 1)
+                self.assertIn("still closing", err.call_args[0][0])
+            finally:
+                old.release()
+
+    def test_a_live_instance_is_focused(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        hits = []
+
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+
+            def do_POST(self):
+                hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"focused":true}')
+
+            def log_message(self, *a):
+                pass
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d) / "ws"
+                logs = root / "logs"
+                logs.mkdir(parents=True)
+                (logs / desktop.RUNTIME_FILE).write_text(json.dumps({"pid": 1, "url": f"http://127.0.0.1:{srv.server_port}",
+                                                                      "control_token": "t"}))
+                with redirect_stdout(io.StringIO()), \
+                        mock.patch.object(dw, "WindowController", side_effect=AssertionError("no second window")):
+                    self.assertEqual(desktop._hand_off(root, logs, "window"), 0)
+            self.assertEqual(hits, ["/api/health", "/api/desktop/focus"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_runtime_file_is_removed_before_the_server_stops(self):
+        from werkzeug.serving import BaseWSGIServer
+        seen = {}
+        real = BaseWSGIServer.shutdown
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "ws"
+
+            def shutdown(self):
+                seen["runtime_file_at_shutdown"] = (root / "logs" / desktop.RUNTIME_FILE).exists()
+                return real(self)
+            settings = Path(d) / "app" / "settings.json"
+            with use_webview(fake_webview()), mock.patch.dict("os.environ", {"EDGELAB_SETTINGS": str(settings)}), \
+                    mock.patch.object(dw, "window_runtime_problem", return_value=None), \
+                    mock.patch.object(BaseWSGIServer, "shutdown", shutdown), redirect_stdout(io.StringIO()):
+                self.assertEqual(desktop.run(["--data-root", str(root)]), 0)
+        self.assertIs(seen["runtime_file_at_shutdown"], False)
+
+    def test_splash_only_for_the_packaged_window_and_failures_are_harmless(self):
+        self.assertIsNone(desktop._start_splash("window"))                  # running from source: no splash
+        with mock.patch.object(desktop, "_splash_wanted", return_value=True), \
+                mock.patch("edgelab.updater.apply._spawn", side_effect=OSError("no exe")):
+            self.assertIsNone(desktop._start_splash("window"))
+        with mock.patch.object(desktop, "_splash_wanted", return_value=True), \
+                mock.patch("edgelab.updater.apply._spawn") as sp:
+            desktop._start_splash("window")
+        cmd = sp.call_args[0][0]
+        self.assertEqual(cmd[1:3], ["--splash", "--parent"])
+        desktop._stop_splash(None)
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        desktop._stop_splash(proc)
+        proc.terminate.assert_called_once()
+        w = dw.WindowController("http://x", Path("."))
+        calls = []
+        w.on_first_load = lambda: calls.append(1)
+        w._loaded()
+        w._loaded()
+        self.assertEqual(calls, [1])                                          # the splash closes once, on first load
+
+
 class TestControlChannelAndRuntime(unittest.TestCase):
     def test_control_routes_require_the_token_and_validate_input(self):
         from flask import Flask

@@ -205,21 +205,23 @@ export function HBars({ rows, unit = "R/trade", testId, digits = 3 }: {
   const m = Math.max(1e-9, ...vals.map(Math.abs));
   const anyNeg = vals.some((v) => v < 0);
   return (
-    <div className="hbars" data-testid={testId} style={{ display: "grid", gridTemplateColumns: "minmax(80px, 28%) 1fr 104px", gap: "4px 8px", alignItems: "center", fontSize: 12 }}>
+    <div className="hbars" data-testid={testId} style={{ display: "grid", gridTemplateColumns: "minmax(80px, 30%) minmax(60px, 1fr) max-content",
+      gap: "3px 10px", alignItems: "center", fontSize: 12 }}>
       {rows.map((r) => {
         const v = r.value;
         const w = v == null ? 0 : (Math.abs(v) / m) * (anyNeg ? 50 : 100);
         const left = anyNeg ? (v != null && v < 0 ? 50 - w : 50) : 0;
         return [
           <div key={r.label + "l"} title={r.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-2)" }}>{r.label}</div>,
-          <div key={r.label + "b"} style={{ position: "relative", height: 14, background: "var(--surface-inset)", borderRadius: 3, border: "1px solid var(--border)" }}
+          <div key={r.label + "b"} style={{ position: "relative", height: 11, background: "var(--surface-inset)", borderRadius: 3, border: "1px solid var(--border)" }}
             title={`${r.label}: ${v == null ? "—" : v.toFixed(digits)} ${unit}${r.note ? ` · ${r.note}` : ""}`}>
             {anyNeg && <span style={{ position: "absolute", left: "50%", top: -1, bottom: -1, width: 1, background: "var(--border-focus)" }} />}
             {v != null && <span style={{ position: "absolute", left: `${left}%`, width: `${w}%`, top: 2, bottom: 2, borderRadius: 2,
               background: v < 0 ? "var(--c-neg)" : "var(--c1)" }} />}
           </div>,
-          <div key={r.label + "v"} className={`num ${v != null && v < 0 ? "neg" : v != null && v > 0 ? "pos" : ""}`} style={{ textAlign: "right", fontSize: 11.5 }}>
-            {v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`}{r.note && <div className="faint" style={{ fontSize: 10 }}>{r.note}</div>}</div>,
+          <div key={r.label + "v"} style={{ textAlign: "right", fontSize: 11.5, whiteSpace: "nowrap" }}>
+            <span className={`num ${v != null && v < 0 ? "neg" : v != null && v > 0 ? "pos" : ""}`}>{v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`}</span>
+            {r.note && <span className="faint" style={{ fontSize: 10.5, marginLeft: 8 }}>{r.note}</span>}</div>,
         ];
       })}
       <div /><div className="faint" style={{ fontSize: 10.5, textAlign: "center" }}>{unit}</div><div />
@@ -387,8 +389,8 @@ export function ScatterChart({ groups, curves = [], height = 340, xUnit = "win r
           <g key={g.id}>{g.points.map((p, pi) => {
             const on = hover && hover.g === gi && hover.p === pi;
             const rad = (g.size ?? 4) + (on ? 2 : 0);
-            return <circle key={p.id + pi} cx={X(p.x)} cy={Y(p.y)} r={rad} fill={g.hollow ? "none" : g.color} stroke={g.ring || g.hollow ? g.color : "var(--surface)"}
-              strokeWidth={g.ring ? 2 : g.hollow ? 1.4 : 1} fillOpacity={g.hollow ? 0 : g.ring ? 0.9 : 0.7}
+            return <circle key={p.id + pi} cx={X(p.x)} cy={Y(p.y)} r={rad} fill={g.color} stroke="none"
+              fillOpacity={g.ring ? 0.95 : 0.75}
               style={{ cursor: onPick ? "pointer" : undefined }} data-point={p.id}
               onMouseEnter={() => setHover({ g: gi, p: pi })} onClick={() => onPick?.(p.id)} />;
           })}</g>))}

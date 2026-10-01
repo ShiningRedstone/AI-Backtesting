@@ -13,6 +13,8 @@ is a filter on in-sample measurements: not validated, not a forecast.
 """
 from __future__ import annotations
 
+import re
+
 import math
 from typing import Any, Mapping
 
@@ -128,6 +130,62 @@ def _control_points(svc) -> list[dict]:
     return pts
 
 
+# ------------------------------------------------------------------------------ session groups (ADR-79)
+SESSION_GROUPS = ("Asia", "London", "London–NY overlap", "NY AM", "NY PM", "NY full day", "Any time", "Other")
+_GEN_SESSION = re.compile(r"^[A-Z]+_([A-Z]+)_(\d{2})(\d{2})_(\d{2})(\d{2})_[A-Z]+$")
+_TZ_GROUP = {"Asia/Tokyo": "Asia", "Asia/Hong_Kong": "Asia", "Australia/Sydney": "Asia", "Europe/London": "London",
+             "Europe/Berlin": "London", "Europe/Frankfurt": "London"}
+
+
+def _session_window(name: str, sessions: Mapping | None) -> tuple[str, int, int] | None:
+    """(timezone, start minute, end minute) of a strategy's session: generated factory ids
+    (``FXE_NY_0930_1130_MF``), the workspace's configured sessions, or the factory presets."""
+    m = _GEN_SESSION.match(name)
+    if m:
+        from edgelab.strategy.factory_space import TZ_CODE
+        tz = {code: zone for zone, code in TZ_CODE.items()}.get(m.group(1))
+        if tz is None:
+            return None
+        return tz, int(m.group(2)) * 60 + int(m.group(3)), int(m.group(4)) * 60 + int(m.group(5))
+    w = (sessions or {}).get(name)
+    if w is not None and getattr(w, "timezone", None):
+        return w.timezone, w.start_min, w.end_min
+    from edgelab.strategy.factory_space import SESSION_PRESETS
+    p = SESSION_PRESETS.get(name)
+    if p is not None:
+        h1, m1 = map(int, p.entry_start.split(":"))
+        h2, m2 = map(int, p.entry_end.split(":"))
+        return p.tz, h1 * 60 + m1, h2 * 60 + m2
+    return None
+
+
+def session_group(name: Any, sessions: Mapping | None = None) -> str:
+    """The market-hours group of a strategy's entry window, from its definition (start time in the window's own
+    timezone): Asia (Tokyo / Asian hours, incl. New York evening windows starting 18:00-02:59), London, London–NY
+    overlap (New York, starting before 09:30), NY AM (09:30-11:59), NY PM (12:00 or later), NY full day (a New York
+    window of 5 hours or more); Any time = no session; Other = a window that cannot be resolved."""
+    if name in (None, ""):
+        return "Any time"
+    win = _session_window(str(name), sessions)
+    if win is None:
+        return "Other"
+    tz, start, end = win
+    if tz in _TZ_GROUP:
+        return _TZ_GROUP[tz]
+    if tz in ("America/New_York", "America/Chicago"):
+        if tz == "America/Chicago":                       # Chicago wall clock is one hour behind New York
+            start, end = start + 60, end + 60
+        duration = (end - start) % (24 * 60) or 24 * 60
+        if start >= 18 * 60 or start < 3 * 60:
+            return "Asia"
+        if duration >= 5 * 60:
+            return "NY full day"
+        if start < 9 * 60 + 30:
+            return "London–NY overlap"
+        return "NY AM" if start < 12 * 60 else "NY PM"
+    return "Other"
+
+
 # ------------------------------------------------------------------------------ results overview
 def results_overview(svc, params: Mapping[str, Any]) -> dict:
     scope = str(params.get("scope") or "in_sample")
@@ -154,12 +212,14 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
     med_cost = _median(costs)
     survivors = [x for x in tested if x["ref"]["survivor"]]
 
-    def group(dim: str) -> list[dict]:
+    def group(dim: str, key=None, order=None) -> list[dict]:
         gr: dict[str, list[dict]] = {}
         for x in tested:
-            gr.setdefault(str(x["facets"].get(dim) or "(not set)"), []).append(x)
+            k = key(x["facets"]) if key is not None else str(x["facets"].get(dim) or "(not set)")
+            gr.setdefault(k, []).append(x)
         out = []
-        for k, xs in sorted(gr.items()):
+        items = sorted(gr.items(), key=(lambda kv: order.index(kv[0])) if order else None)
+        for k, xs in items:
             vals = [(x["ref"]["gross_r_per_trade"] if basis == "gross" else x["ref"]["expectancy_r"]) for x in xs]
             out.append({"group": k, "strategies": len(xs), "median_expectancy_r": _median(vals),
                         "survivor_rate": sum(1 for x in xs if x["ref"]["survivor"]) / len(xs)})
@@ -184,7 +244,10 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
                       "median_cost_r_per_trade": med_cost},
             "points": points, "controls": controls,
             "breakeven": breakeven_curves(med_cost if basis == "gross" else None),
-            "breakdowns": {d: group(d) for d in FIELD_DIMS},
+            "breakdowns": {**{d: group(d) for d in FIELD_DIMS},
+                           "session_group": group("session_group", key=lambda f: session_group(f.get("session"),
+                                                                                                getattr(svc, "sessions", None)),
+                                                  order=SESSION_GROUPS)},
             "exit_comparison": {"signal_exit": {"strategies": len(sig), "median_expectancy_r": a},
                                 "fixed_target": {"strategies": len(fixed), "median_expectancy_r": b,
                                                  "multiples": multiples},
