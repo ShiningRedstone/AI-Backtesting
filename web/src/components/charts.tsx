@@ -341,3 +341,65 @@ export function PathsChart({ paths, highlight, height = 220, unit = "R", testId,
     </div>
   );
 }
+
+// ------------------------------------------------------------------------------------------ scatter (x = share, y = value)
+export interface ScatterPoint { id: string; x: number; y: number; label: string; detail?: string }
+export interface ScatterGroup { id: string; label: string; color: string; points: ScatterPoint[]; hollow?: boolean; size?: number; ring?: boolean }
+export interface ScatterCurve { id: string; label: string; points: { x: number; y: number }[]; tone?: "warn" | "neutral" }
+/** Points on a percentage x-axis (0-100 %) against a value y-axis; reference curves are drawn dashed and labelled in the
+   legend. Values above `yMax` are pinned to the top edge and say so in the tooltip (never silently dropped). */
+export function ScatterChart({ groups, curves = [], height = 340, xUnit = "win rate", yUnit, yMax, testId, onPick }: {
+  groups: ScatterGroup[]; curves?: ScatterCurve[]; height?: number; xUnit?: string; yUnit: string; yMax?: number; testId?: string;
+  onPick?: (id: string) => void;
+}) {
+  const [ref, width] = useWidth();
+  const [hover, setHover] = useState<{ g: number; p: number } | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const all = groups.filter((g) => !hidden.has(g.id)).flatMap((g) => g.points);
+  if (!groups.some((g) => g.points.length)) return <div className="empty small">No points.</div>;
+  let hi = 0;
+  for (const p of all) if (Number.isFinite(p.y)) hi = Math.max(hi, p.y);
+  hi = Math.min(yMax ?? Infinity, Math.max(1, hi * 1.08));
+  const ticks = niceTicks(0, hi);
+  const t1 = Math.max(hi, ticks[ticks.length - 1]);
+  const iw = width - PAD.l - PAD.r, ih = height - PAD.t - PAD.b;
+  const X = (v: number) => PAD.l + Math.max(0, Math.min(1, v)) * iw;
+  const Y = (v: number) => PAD.t + ih - (Math.max(0, Math.min(t1, v)) / (t1 || 1)) * ih;
+  const xt = [0, 0.2, 0.4, 0.6, 0.8, 1];
+  const curveD = (c: ScatterCurve) => c.points.filter((p) => p.y <= t1).map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join("");
+  const items: LegendItem[] = [...groups.map((g) => ({ id: g.id, label: `${g.label} (${g.points.length})`, color: g.color })),
+    ...curves.map((c) => ({ id: `curve:${c.id}`, label: c.label, color: c.tone === "warn" ? "var(--warn)" : "var(--c-neutral)" }))];
+  const hp = hover ? groups[hover.g]?.points[hover.p] : null;
+  return (
+    <div className="chart" ref={ref} data-testid={testId}>
+      <Legend items={items} hidden={hidden}
+        onToggle={(id) => setHidden((h) => { const n = new Set(h); if (n.has(id)) n.delete(id); else n.add(id); return n; })} />
+      <svg width={width} height={height} role="img" aria-label={`${groups.map((g) => g.label).join(", ")}: ${xUnit} against ${yUnit}`}
+        onMouseLeave={() => setHover(null)}>
+        <YAxis ticks={ticks} y={Y} width={width} unit={yUnit} zero={false} />
+        <line className="axis-line" x1={PAD.l} x2={width - PAD.r} y1={PAD.t + ih} y2={PAD.t + ih} />
+        {xt.map((v) => <text key={v} x={X(v)} y={height - 8} textAnchor={v === 0 ? "start" : v === 1 ? "end" : "middle"}>{Math.round(v * 100)}%</text>)}
+        <text x={width - PAD.r} y={height - 20} textAnchor="end" className="faint">{xUnit} →</text>
+        {curves.map((c) => hidden.has(`curve:${c.id}`) ? null :
+          <path key={c.id} d={curveD(c)} fill="none" stroke={c.tone === "warn" ? "var(--warn)" : "var(--c-neutral)"} strokeWidth={1.4}
+            strokeDasharray="6 4" />)}
+        {groups.map((g, gi) => hidden.has(g.id) ? null : (
+          <g key={g.id}>{g.points.map((p, pi) => {
+            const on = hover && hover.g === gi && hover.p === pi;
+            const rad = (g.size ?? 4) + (on ? 2 : 0);
+            return <circle key={p.id + pi} cx={X(p.x)} cy={Y(p.y)} r={rad} fill={g.hollow ? "none" : g.color} stroke={g.ring || g.hollow ? g.color : "var(--surface)"}
+              strokeWidth={g.ring ? 2 : g.hollow ? 1.4 : 1} fillOpacity={g.hollow ? 0 : g.ring ? 0.9 : 0.7}
+              style={{ cursor: onPick ? "pointer" : undefined }} data-point={p.id}
+              onMouseEnter={() => setHover({ g: gi, p: pi })} onClick={() => onPick?.(p.id)} />;
+          })}</g>))}
+      </svg>
+      {hp && hover && (
+        <Tip x={Math.min(Math.max(X(hp.x), 90), width - 90)} y={Math.max(PAD.t, Y(hp.y) - 64)}>
+          <div className="t">{hp.label}</div>
+          <div><span className="sw" style={{ background: groups[hover.g].color }} />{groups[hover.g].label}</div>
+          <div>{xUnit}: <b>{(hp.x * 100).toFixed(1)}%</b> · {yUnit}: <b>{hp.y.toFixed(2)}{hp.y > t1 ? " (above the chart, pinned to the top)" : ""}</b></div>
+          {hp.detail && <div className="faint">{hp.detail}</div>}
+        </Tip>)}
+    </div>
+  );
+}

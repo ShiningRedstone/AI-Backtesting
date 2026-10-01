@@ -150,3 +150,47 @@ def summarize(candidate: Mapping, controls: list[Mapping], percentiles=(5, 25, 5
                    "with a strictly larger value; a descriptive rank within the conditional null, "
                    "not a p-value. For max_drawdown_r larger is worse.")
     return out
+
+
+# ------------------------------------------------------------------------------ stored control records (ADR-73)
+CONTROLS_DIR = "controls"
+
+
+def controls_dir(data_root) -> "Path":
+    from pathlib import Path
+    return Path(data_root) / CONTROLS_DIR
+
+
+def save_control_record(data_root, result: Mapping) -> str:
+    """Keep a finished random-entry control as a CONTROL record (``<data>/controls/<validation id>.json``) so it can be
+    shown next to strategies. It is never a run record, a strategy or a trial, and nothing reads it for research
+    decisions; re-running the same control (same validation id) replaces the file with identical content."""
+    import json
+    from datetime import datetime, timezone
+    vid = str(result["validation_id"])
+    d = controls_dir(data_root)
+    d.mkdir(parents=True, exist_ok=True)
+    body = {"record": "random_entry_control", "validation_id": vid,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            **{k: result.get(k) for k in ("candidate", "dataset", "cost_profile", "cost_status", "sample_status",
+                                          "control_config", "labels", "realizations")},
+            "note": "control results: entry timing randomized; not strategies, not trials, never ranked as strategies"}
+    tmp = d / f".{vid}.tmp"
+    tmp.write_text(json.dumps(body, default=str), encoding="utf-8")
+    tmp.replace(d / f"{vid}.json")
+    return f"{vid}.json"
+
+
+def load_control_records(data_root) -> list[dict]:
+    import json
+    d = controls_dir(data_root)
+    out = []
+    if d.is_dir():
+        for p in sorted(d.glob("*.json")):
+            try:
+                rec = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if rec.get("record") == "random_entry_control":
+                out.append(rec)
+    return out

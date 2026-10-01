@@ -214,6 +214,39 @@ export function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
   );
 }
 
+/** Collapsed "Technical details": the only place machine identifiers (ids, hashes, raw keys, raw JSON) are shown. */
+export function TechDetails({ rows, children, testId, summary = "Technical details" }: {
+  rows?: [string, ReactNode][]; children?: ReactNode; testId?: string; summary?: string;
+}) {
+  return (
+    <details className="tech" data-testid={testId}><summary>{summary}</summary>
+      {rows && <KeyValues rows={rows.filter(([, v]) => v !== null && v !== undefined && v !== "")} />}{children}</details>
+  );
+}
+
+/** A stored object (settings, assumptions, metrics) as labelled rows: keys and enum values in words, nested objects
+    indented. Raw JSON, if wanted, belongs in TechDetails. */
+export function ObjectView({ value, label = humanizeKey, depth = 0 }: { value: unknown; label?: (k: string) => string; depth?: number }) {
+  if (value === null || value === undefined) return <span className="muted">—</span>;
+  if (typeof value !== "object" || Array.isArray(value) && value.every((x) => typeof x !== "object" || x === null))
+    return <>{displayValue(value)}</>;
+  const entries = Array.isArray(value) ? value.map((x, i) => [String(i + 1), x] as [string, unknown]) : Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return <span className="muted">none</span>;
+  return <dl className="kv" style={depth ? { margin: "2px 0 0 0" } : undefined}>
+    {entries.map(([k, v]) => <div key={k} className="kv-row"><dt>{label(k)}</dt><dd><ObjectView value={v} label={label} depth={depth + 1} /></dd></div>)}
+  </dl>;
+}
+const humanizeKey = (k: string) => k.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[_\-\s]+/).filter(Boolean)
+  .map((w, i) => (/^(atr|ema|sma|rsi|usd|cfd|nq|es|mnq|oos|r|id|ui|ai|ny|utc|dsl)$/i.test(w) ? w.toUpperCase() : i ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())).join(" ");
+function displayValue(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (typeof v === "number") return Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (Array.isArray(v)) return v.map(displayValue).join(", ") || "none";
+  const s = String(v);
+  return /^[A-Za-z0-9]+(_[A-Za-z0-9]+)+$/.test(s) && !/^(STR|RUN|CTRL|VAL|RP|CMP|FM|AIP|PB|SB)_/.test(s) ? humanizeKey(s) : s;
+}
+
 export function fmt(v: unknown): string {
   if (v === null || v === undefined) return "—";
   if (typeof v === "number") return Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 });

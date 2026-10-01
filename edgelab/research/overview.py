@@ -35,7 +35,7 @@ DESCRIPTIVE = ("Descriptive statistics of stored backtests under the stated assu
                "and are not independent.")
 SORT_KEYS = ("strategy_id", "name", "family_id", "timeframe", "trade_count", "trades_per_week", "win_rate",
              "expectancy_r", "gross_r_per_trade", "net_r", "profit_factor", "max_drawdown_r", "cost_r_per_trade",
-             "created_at", "n_runs")
+             "created_at", "n_runs", "avg_rr")
 
 
 def _f(x) -> float | None:
@@ -65,6 +65,23 @@ def _operand_kind(side: Any) -> str | None:
     return None
 
 
+def trailing_kind(ex: Mapping) -> str:
+    """How a strategy trails its stop: none, breakeven, level:<feature> (e.g. an EMA or swing level), distance:<kind>."""
+    tr = ex.get("trailing")
+    if not isinstance(tr, Mapping):
+        return "none"
+    mode = str(tr.get("mode") or "")
+    if mode == "breakeven":
+        return "breakeven"
+    if mode == "level":
+        lv = tr.get("level") or {}
+        return f"level:{lv.get('feature') or _operand_kind(lv) or 'level'}" if isinstance(lv, Mapping) else "level"
+    if mode == "distance":
+        d = tr.get("distance") or {}
+        return f"distance:{_operand_kind(d) or 'points'}" if isinstance(d, Mapping) else "distance"
+    return mode or "none"
+
+
 def strategy_facets(doc: Mapping) -> dict:
     """Filterable descriptors of one stored strategy, straight from its definition."""
     d = doc.get("definition") or {}
@@ -80,6 +97,8 @@ def strategy_facets(doc: Mapping) -> dict:
             "direction": entry.get("direction"),
             "entry_type": str((entry.get("order") or {}).get("type") or "market"),
             "stop_type": _operand_kind(ex.get("stop")), "target_type": _operand_kind(ex.get("target")) or "none",
+            "target_multiple": _f((ex.get("target") or {}).get("multiple")) if isinstance(ex.get("target"), Mapping) else None,
+            "trailing": trailing_kind(ex), "signal_exit": "yes" if ex.get("signal") else "no",
             "source": first.get("generation_method"), "proposal_id": gp.get("proposal_id"),
             "parent_strategy_id": first.get("parent_strategy_id"),
             "created_at": first.get("generation_timestamp"), "logic_hash": doc.get("logic_hash"),
@@ -128,6 +147,26 @@ def holdout_run_ids(svc) -> set[str]:
         return set()
 
 
+def prop_summary(rec: Mapping) -> list[dict]:
+    """The chronological prop audit stored with the run (ADR-64/65), one compact row per rule profile."""
+    out = []
+    for x in (rec.get("prop") or {}).get("profiles") or []:
+        prof, ev = x.get("profile") or {}, x.get("evaluation") or {}
+        evs = ev.get("status") or (x.get("summary") or {}).get("evaluation_status")
+        payouts = int((x.get("totals") or {}).get("n_payouts") or (x.get("summary") or {}).get("payout_count") or 0)
+        size = _f(prof.get("account_size"))
+        name = " ".join(str(v) for v in (prof.get("provider"), prof.get("product")) if v) or None
+        if name and size:
+            name += f" {size / 1000:g}K"
+        out.append({"profile_id": prof.get("profile_id"), "profile_name": name, "version": prof.get("version"),
+                    "status": x.get("status"),
+                    "evaluation": evs, "failure_reason": ev.get("failure_reason"), "payouts": payouts,
+                    "pass_days": (ev.get("pass") or {}).get("trading_days"),
+                    "passes_with_payout": evs == "PASS" and payouts >= 1,
+                    "rule_basis_state": x.get("rule_basis_state")})
+    return out
+
+
 def run_row(run_id: str, rec: Mapping) -> dict:
     d, a, s = rec.get("dataset") or {}, rec.get("assumptions") or {}, rec.get("strategy") or {}
     hm = rec.get("headline_metrics") or {}
@@ -135,6 +174,9 @@ def run_row(run_id: str, rec: Mapping) -> dict:
     gross, cost = _f(hm.get("gross_r")), _f(hm.get("cost_r"))
     status = rec.get("status") or "IN_SAMPLE"
     costs = a.get("costs") or {}
+    aw, al = _f(hm.get("avg_winner_r")), _f(hm.get("avg_loser_r"))
+    prop = prop_summary(rec)
+    pass_payout = any(p["passes_with_payout"] for p in prop)
     return {"run_id": run_id, "created_at": rec.get("created_at"), "status": status,
             "scope": SCOPE_LABEL.get(status, status), "strategy_id": s.get("strategy_id"),
             "strategy_name": (s.get("dsl") or {}).get("name"), "dataset_id": d.get("dataset_id"),
@@ -149,7 +191,13 @@ def run_row(run_id: str, rec: Mapping) -> dict:
             "gross_r_per_trade": gross / n if gross is not None and n else None,
             "cost_r_per_trade": cost / n if cost is not None and n else None,
             "profit_factor": _f(hm.get("profit_factor")), "max_drawdown_r": _f(hm.get("max_drawdown_r")),
-            "sample_label": hm.get("sample_label")}
+            "sample_label": hm.get("sample_label"),
+            "avg_winner_r": aw, "avg_loser_r": al, "avg_rr": aw / abs(al) if aw is not None and al not in (None, 0.0) else None,
+            "max_loss_streak": hm.get("max_loss_streak"), "avg_hold_minutes": _f(hm.get("avg_hold_minutes")),
+            "prop": prop, "prop_pass_payout": pass_payout,
+            # survivor (ADR-73): positive net R per trade AND the recorded trade sequence passes an evaluation and
+            # reaches the first payout under at least one prop rule profile (in-sample unless the run says otherwise)
+            "survivor": bool(pass_payout and (_f(hm.get("expectancy_r")) or 0.0) > 0)}
 
 
 def protocol_facts(svc) -> dict:
@@ -324,15 +372,19 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
                      **{k: (ref or {}).get(k) for k in ("instrument", "trade_count", "trades_per_week", "win_rate",
                                                         "expectancy_r", "gross_r_per_trade", "net_r", "profit_factor",
                                                         "max_drawdown_r", "cost_r_per_trade", "sample_label",
-                                                        "synthetic")}})
+                                                        "synthetic", "avg_rr", "max_loss_streak", "avg_hold_minutes",
+                                                        "prop_pass_payout")},
+                     "survivor": bool(ref and ref.get("survivor"))})
 
     def keep(r: dict) -> bool:
         q = str(params.get("q") or "").strip().lower()
         if q and q not in " ".join(str(r.get(k) or "") for k in ("strategy_id", "name", "family_id", "family_name",
                                                                   "hypothesis", "category")).lower():
             return False
+        if params.get("survivors_only") in ("1", "true", True) and not r["survivor"]:
+            return False
         for key in ("family_id", "timeframe", "session", "direction", "entry_type", "stop_type", "target_type",
-                    "source", "instrument", "state"):
+                    "source", "instrument", "state", "trailing", "signal_exit"):
             v = params.get(key)
             if v not in (None, "") and str(r.get(key)) != str(v):
                 return False
@@ -358,7 +410,7 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
     total = len(ordered)
     facet_values = {k: sorted({str(r[k]) for r in rows if r.get(k) not in (None, "")})
                     for k in ("family_id", "timeframe", "session", "direction", "entry_type", "stop_type",
-                              "target_type", "source", "instrument", "state")}
+                              "target_type", "source", "instrument", "state", "trailing", "signal_exit")}
     return {"rows": ordered[(page - 1) * size: page * size], "total": total, "page": page, "page_size": size,
             "pages": max(1, math.ceil(total / size)), "scope": scope, "scope_label": {
                 "in_sample": "In-sample (exploratory)", "oos": "Out-of-sample", "walk_forward": "Walk-forward",

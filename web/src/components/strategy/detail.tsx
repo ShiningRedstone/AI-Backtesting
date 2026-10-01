@@ -7,11 +7,12 @@ import { href } from "../../app/router";
 import { useApi } from "../../app/context";
 import { CostPanel, EquityPanels, MonteCarloPanel, PerformanceKpis, PerformancePanels, TradePanels } from "../analytics";
 import { ControlPresentation, PipelineStrip, RulesTable } from "../research";
+import { StrategyPanel } from "../results";
 import { Badge, Banner, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, Scope, ScopeOf, TableWrap, Tabs, n, r, shortTime, signCls } from "../ui";
 
-type Tab = "overview" | "performance" | "equity" | "trades" | "robustness" | "pipeline";
+type Tab = "summary" | "overview" | "performance" | "equity" | "trades" | "robustness" | "pipeline";
 
-export function StrategyDetail({ id, tab: initial = "overview" }: { id: string; tab?: Tab }) {
+export function StrategyDetail({ id, tab: initial = "summary" }: { id: string; tab?: Tab }) {
   const [tab, setTab] = useState<Tab>(initial);
   const s = useApi<StoredStrategy>(`/api/strategies/${id}`, [id]);
   const ex = useApi<ExplainResult>(`/api/strategies/${id}/explain`, [id]);
@@ -24,7 +25,7 @@ export function StrategyDetail({ id, tab: initial = "overview" }: { id: string; 
   }, [sr.data]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [runId, setRunId] = useState<string | null>(null);
   useEffect(() => { setRunId(defaultRun); }, [defaultRun]);
-  const an = useApi<RunAnalytics>(runId && tab !== "overview" && tab !== "pipeline" ? `/api/results/${runId}/analytics` : null, [runId]);
+  const an = useApi<RunAnalytics>(runId && tab !== "summary" && tab !== "overview" && tab !== "pipeline" ? `/api/results/${runId}/analytics` : null, [runId]);
   if (s.error) return <ErrorPanel error={s.error} />;
   if (!s.data) return <Loading label="Loading strategy…" />;
   const d = s.data, first = d.lineage[0];
@@ -46,10 +47,11 @@ export function StrategyDetail({ id, tab: initial = "overview" }: { id: string; 
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }} data-testid="strategy-detail">
-      <Tabs<Tab> active={tab} onChange={setTab} tabs={[{ id: "overview", label: "Identity & rules" }, { id: "performance", label: "Performance" },
+      <Tabs<Tab> active={tab} onChange={setTab} tabs={[{ id: "summary", label: "Summary" }, { id: "overview", label: "Identity & rules" }, { id: "performance", label: "Performance" },
         { id: "equity", label: "Equity" }, { id: "trades", label: "Trade behaviour" }, { id: "robustness", label: "Robustness" },
         { id: "pipeline", label: "Pipeline" }]} />
-      {tab !== "overview" && tab !== "pipeline" && runPicker}
+      {tab !== "summary" && tab !== "overview" && tab !== "pipeline" && runPicker}
+      {tab === "summary" && <StrategyPanel id={id} />}
       {tab === "overview" && <>
         <Card title="Identity" testId="detail-identity">
           <KeyValues rows={[["Strategy ID", <Mono>{d.strategy_id}</Mono>], ["Name", d.name], ["Family", <Mono>{d.family_id}</Mono>],

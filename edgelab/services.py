@@ -193,6 +193,27 @@ class Services:
             save_prefs(self.data_root, prefs)
         return self.preferred_dataset()
 
+    # ------------------------------------------------------------ display preference: risk per trade (ADR-73)
+    DEFAULT_RISK_PER_TRADE_USD = 250.0
+
+    def risk_per_trade(self) -> dict:
+        """The dollar amount one R stands for in the results views (display only: R x amount). Stored in the workspace
+        preferences, outside the research config and its hash; it never changes a backtest, its sizing or any record."""
+        from edgelab.data.preferences import load_prefs
+        v = load_prefs(self.data_root).get("risk_per_trade_usd")
+        val = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else self.DEFAULT_RISK_PER_TRADE_USD
+        return {"risk_per_trade_usd": val, "default": val == self.DEFAULT_RISK_PER_TRADE_USD and v is None,
+                "note": "dollar figures in the results views are R multiplied by this amount; backtests are unchanged"}
+
+    def set_risk_per_trade(self, value: Any) -> dict:
+        from edgelab.data.preferences import load_prefs, save_prefs
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < float(value) <= 1_000_000:
+            raise ValueError("risk per trade must be a dollar amount between 0 and 1,000,000")
+        prefs = load_prefs(self.data_root)
+        prefs["risk_per_trade_usd"] = round(float(value), 2)
+        save_prefs(self.data_root, prefs)
+        return self.risk_per_trade()
+
     def inspect_file(self, options: Mapping) -> dict:
         return _jsonable(inspect_file(ImportOptions(**options), self.cfg))
 
@@ -1121,7 +1142,8 @@ class Services:
         runs once through the normal path; each seeded realization re-uses the candidate's compiled
         definition, costs, sizing and backtest config and randomizes only entry timing/direction
         among the candidate's own causal entry opportunities, matched on signal count and direction
-        mix. Control results are returned, never stored as run records."""
+        mix. Control results are returned and kept as CONTROL records (``<data>/controls``, ADR-73), never stored as
+        run records, strategies or trials."""
         from edgelab.analytics import research as ra
         from edgelab.analytics.metrics import compute_metrics
         from edgelab.engine.backtester import run_backtest
@@ -1178,7 +1200,7 @@ class Services:
                       "the candidate's own eligible bars, calibrated to its entries before cooldown and their "
                       "direction mix; the same cooldown then applies). It does not test exits, sizing, "
                       "cooldown or costs, which are identical on both sides.")
-        return _jsonable({
+        out = _jsonable({
             "validation": "random_entry_control",
             "validation_id": validation_id("random_entry_control", fh, d["dataset_id"], [config]),
             "candidate": {"strategy_id": cand.strategy_id, "definition_hash": fh, "trades_hash": res.trades_hash,
@@ -1191,6 +1213,8 @@ class Services:
             "realizations": reals,
             "stored_as_runs": False,
         })
+        out["stored_as_control_record"] = rc.save_control_record(self.data_root, out)
+        return out
 
     def list_import_files(self, import_dirs: list[str]) -> list[dict]:
         out = []
@@ -1666,6 +1690,25 @@ class Services:
     def research_overview(self) -> dict:
         from edgelab.research import overview as ov
         return _jsonable(ov.overview(self))
+
+    # ------------------------------------------------------------ backtest results views (ADR-73, read-only)
+    def results_overview(self, params: Mapping) -> dict:
+        from edgelab.research import results_view as rv
+        return _jsonable(rv.results_overview(self, params))
+
+    def strategy_panel(self, strategy_id: str, params: Mapping) -> dict:
+        from edgelab.research import results_view as rv
+        return _jsonable(rv.strategy_panel(self, strategy_id, params))
+
+    def control_panel(self, control_id: str) -> dict:
+        from edgelab.research import results_view as rv
+        return _jsonable(rv.control_panel(self, control_id))
+
+    def prop_bootstrap(self, run_id: str, profile_id: str, params: Mapping) -> dict:
+        """Bootstrapped evaluations of one stored run under one rule profile: cached result, or a background job's
+        progress (prop/bootstrap.py; simulated, downstream, changes nothing)."""
+        from edgelab.prop import bootstrap as bs
+        return _jsonable(bs.request(self, run_id, profile_id, params))
 
     def explore_strategies(self, params: Mapping) -> dict:
         from edgelab.research import overview as ov

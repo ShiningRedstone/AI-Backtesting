@@ -38,6 +38,7 @@ AI_PROP_ID = re.compile(r"^AIP_[0-9A-F]{12}$")
 PROTOCOL_ID = re.compile(r"^RP_[0-9A-F]{12}$")
 CAMPAIGN_ID = re.compile(r"^CMP_[0-9A-F]{12}$")
 RUN_RECORD_ID = re.compile(r"^CR_\d{8}_\d{6}_[0-9A-F]{6}$")
+CONTROL_ID = re.compile(r"^CTRL_[0-9A-F]{12}$")
 FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 
@@ -378,6 +379,14 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.get("/api/datasets")
     def datasets():
         return jsonify(call(svc.backtest_readiness)["datasets"])
+
+    @app.get("/api/preferences/risk-per-trade")
+    def risk_per_trade():
+        return jsonify(call(svc.risk_per_trade))
+
+    @app.post("/api/preferences/risk-per-trade")
+    def set_risk_per_trade():
+        return jsonify(call(svc.set_risk_per_trade, body().get("risk_per_trade_usd")))
 
     @app.get("/api/preferences/research-dataset")
     def preferred_dataset():
@@ -776,7 +785,27 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         return jsonify(call(svc.explore_strategies, _params((
             "q", "strategy_id", "family_id", "timeframe", "session", "direction", "entry_type", "stop_type",
             "target_type", "source", "instrument", "state", "protocol", "scope", "min_trades",
-            "max_trades_per_week", "tested_only", "sort", "order", "page", "page_size"))))
+            "max_trades_per_week", "tested_only", "sort", "order", "page", "page_size", "survivors_only", "trailing",
+            "signal_exit"))))
+
+    @app.get("/api/results-view/overview")
+    def results_view_overview():
+        return jsonify(call(svc.results_overview, _params(("scope", "basis", "controls"))))
+
+    @app.get("/api/results-view/strategies/<sid>")
+    def results_view_strategy(sid):
+        return jsonify(call(svc.strategy_panel, _id(sid, STRATEGY_ID, "strategy id"), _params(("scope",))))
+
+    @app.get("/api/results-view/controls/<cid>")
+    def results_view_control(cid):
+        return jsonify(call(svc.control_panel, _id(cid, CONTROL_ID, "control id")))
+
+    @app.post("/api/prop/bootstrap")
+    def prop_bootstrap():
+        b = body()
+        params = {k: b.get(k) for k in ("n", "block_days", "seed", "mode") if b.get(k) is not None}
+        return jsonify(call(svc.prop_bootstrap, _id(b.get("run_id"), RUN_ID, "run id"),
+                            _id(b.get("profile_id"), SAFE_ID, "profile id"), params))
 
     @app.get("/api/research/dashboard")
     def research_dashboard():

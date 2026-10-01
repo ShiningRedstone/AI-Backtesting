@@ -1,6 +1,6 @@
 {
- "source_sha256": "f8dac872981ba975af107bf96831065c17ba6cf515deddfb54134731453d9f29",
- "built_at": "2026-10-01T12:12:32.369Z",
+ "source_sha256": "c7d9193eaa1212bd7e18e5c72925d4a8d6d1094984ac8ae8a6e3f72e693cf4f3",
+ "built_at": "2026-10-01T12:39:33.438Z",
  "esbuild": "0.27.7",
  "react": "19.2.5",
  "app_version": "0.2.0"

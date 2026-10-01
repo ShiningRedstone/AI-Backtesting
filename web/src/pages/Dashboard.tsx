@@ -3,7 +3,10 @@ import type { GroupRow, ResearchDashboard } from "../api/types";
 import { href } from "../app/router";
 import { useApi } from "../app/context";
 import { BarChart, HBars, Histogram } from "../components/charts";
-import { Banner, Card, Empty, ErrorPanel, Kpi, Loading, Scope, TableWrap, n, pct } from "../components/ui";
+import { ControlPanelView, ResultsOverviewSection, StrategyPanel } from "../components/results";
+import { Banner, Button, Card, Drawer, Empty, ErrorPanel, Kpi, Loading, Scope, TableWrap, n, pct } from "../components/ui";
+import { go } from "../app/router";
+import { datasetLabel, facetLabel } from "../app/labels";
 import type { ScopeKind } from "../components/ui";
 
 const DIMS: [string, string][] = [["instrument", "Performance by market"], ["timeframe", "By timeframe"], ["session", "By session"],
@@ -16,6 +19,7 @@ export function DashboardPage() {
   const [inst, setInst] = useState(""), [ds, setDs] = useState(""), [fam, setFam] = useState("");
   const [synth, setSynth] = useState(false);
   const [table, setTable] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<{ kind: "strategy" | "control"; id: string } | null>(null);
   const qs = new URLSearchParams({ scope, ...(inst ? { instrument: inst } : {}), ...(ds ? { dataset_id: ds } : {}),
     ...(fam ? { family_id: fam } : {}), ...(synth ? { include_synthetic: "1" } : {}) }).toString();
   const { data: d, error, loading } = useApi<ResearchDashboard>(`/api/research/dashboard?${qs}`, [qs]);
@@ -27,10 +31,10 @@ export function DashboardPage() {
       {!rows.length ? <Empty>No runs in this scope.</Empty> : table[key] ? <TableWrap><table className="dense">
         <thead><tr><th>Group</th><th className="r">Runs</th><th className="r">Trades</th><th className="r">Net R/trade</th><th className="r">Gross R/trade</th>
           <th className="r">Median run exp.</th><th className="r">% runs &gt; 0</th></tr></thead>
-        <tbody>{rows.map((g) => <tr key={g.group}><td>{g.group}</td><td className="r num">{g.runs}</td><td className="r num">{g.trades}</td>
+        <tbody>{rows.map((g) => <tr key={g.group}><td>{facetLabel(key === "family" ? "family_id" : key, g.group)}</td><td className="r num">{g.runs}</td><td className="r num">{g.trades}</td>
           <td className="r num">{n(g.net_r_per_trade, 3)}</td><td className="r num">{n(g.gross_r_per_trade, 3)}</td>
           <td className="r num">{n(g.median_run_expectancy_r, 3)}</td><td className="r num">{pct(g.pct_runs_positive_net, 0)}</td></tr>)}</tbody></table></TableWrap>
-        : <HBars rows={rows.map((g) => ({ label: g.group, value: g.net_r_per_trade, note: `${g.runs} runs · ${g.trades} tr` }))} unit="net R per trade (trade-weighted)" />}
+        : <HBars rows={rows.map((g) => ({ label: facetLabel(key === "family" ? "family_id" : key, g.group), value: g.net_r_per_trade, note: `${g.runs} runs · ${g.trades} tr` }))} unit="net R per trade (trade-weighted)" />}
     </Card>);
   const cal = (key: "weekday" | "month" | "year", title: string) => {
     const rows = d?.calendar[key] ?? [];
@@ -43,12 +47,23 @@ export function DashboardPage() {
   return (
     <div className="page" data-testid="research-dashboard">
       <header className="page-head">
-        <div><div className="eyebrow">Research</div><h1>Research dashboard</h1>
-          <div className="subtitle small">Aggregates across stored runs. Descriptive only: related strategies share data, so runs are not
+        <div><div className="eyebrow">Backtest results</div><h1>Overview</h1>
+          <div className="subtitle small">Every tested strategy at a glance. Descriptive only: related strategies share data, so results are not
             independent, and a group that looks better here is a question for out-of-sample testing, not an answer.</div></div>
+      </header>
+      <ResultsOverviewSection onOpen={(id) => setOpen({ kind: "strategy", id })} onOpenControl={(id) => setOpen({ kind: "control", id })} />
+      <Drawer open={!!open} onClose={() => setOpen(null)} testId="results-drawer"
+        title={open?.kind === "control" ? "Random control" : "Strategy"}
+        subtitle={<>Historical results under stated assumptions; formal acceptance happens only in a protocol holdout evaluation.</>}
+        actions={open?.kind === "strategy" ? <Button small onClick={() => go(`/strategies/${open.id}`)}>Open strategy page</Button> : null}>
+        {open && (open.kind === "control" ? <ControlPanelView key={open.id} id={open.id} /> : <StrategyPanel key={open.id} id={open.id} />)}
+      </Drawer>
+      <header className="page-head" style={{ marginTop: 18 }}>
+        <div><h2 style={{ margin: 0 }}>All stored backtests</h2>
+          <div className="subtitle small">Pooled across every stored backtest in the chosen scope.</div></div>
         <div className="actions">
           <div className="segmented small" role="group" aria-label="scope">
-            {[["in_sample", "Discovery (IS)"], ["oos", "OOS"], ["walk_forward", "Walk-forward"], ["any", "All"]].map(([k, l]) =>
+            {[["in_sample", "In-sample"], ["oos", "Out-of-sample"], ["walk_forward", "Walk-forward"], ["any", "All"]].map(([k, l]) =>
               <button key={k} className={scope === k ? "on" : ""} onClick={() => setScope(k)}>{l}</button>)}
           </div>
         </div>
@@ -57,9 +72,9 @@ export function DashboardPage() {
         <select className={`input${inst ? " active" : ""}`} value={inst} onChange={(e: { target: HTMLSelectElement }) => setInst(e.target.value)} aria-label="market">
           <option value="">Market: all</option>{d?.filters.instruments.map((x) => <option key={x}>{x}</option>)}</select>
         <select className={`input${ds ? " active" : ""}`} value={ds} onChange={(e: { target: HTMLSelectElement }) => setDs(e.target.value)} aria-label="dataset" style={{ maxWidth: 280 }}>
-          <option value="">Dataset: all</option>{d?.filters.datasets.map((x) => <option key={x}>{x}</option>)}</select>
+          <option value="">Dataset: all</option>{d?.filters.datasets.map((x) => <option key={x} value={x}>{datasetLabel(x)}</option>)}</select>
         <select className={`input${fam ? " active" : ""}`} value={fam} onChange={(e: { target: HTMLSelectElement }) => setFam(e.target.value)} aria-label="family">
-          <option value="">Family: all</option>{d?.filters.families.map((x) => <option key={x}>{x}</option>)}</select>
+          <option value="">Family: all</option>{d?.filters.families.map((x) => <option key={x} value={x}>{facetLabel("family_id", x)}</option>)}</select>
         <label className="check small"><input type="checkbox" checked={synth} onChange={(e: { target: HTMLInputElement }) => setSynth(e.target.checked)} />include synthetic runs</label>
         {loading && <span className="spinner" />}
       </div>

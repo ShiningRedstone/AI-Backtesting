@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { DatasetRow, GapReport, InstrumentIdentity, PreferredDataset, WorkspaceState } from "../api/types";
+import type { DatasetRow, GapReport, InstrumentIdentity, PreferredDataset, RiskPreference, WorkspaceState } from "../api/types";
 import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
@@ -277,6 +277,36 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 }
 
 // =========================================================================== settings
+/** Risk per trade ($): the dollar amount one R stands for in the results views (display only; backtests unchanged). */
+function RiskPerTradeCard() {
+  const { toast } = useApp();
+  const { data, error, setData } = useApi<RiskPreference>("/api/preferences/risk-per-trade");
+  const [val, setVal] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const shown = val ?? (data ? String(data.risk_per_trade_usd) : "");
+  const save = () => {
+    const x = Number(shown);
+    setBusy(true);
+    api.post<RiskPreference>("/api/preferences/risk-per-trade", { risk_per_trade_usd: x })
+      .then((d) => { setData(d); setVal(null); toast("ok", `Risk per trade set to $${d.risk_per_trade_usd.toLocaleString()}`); })
+      .catch((e: Error) => toast("error", e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <Card title="Risk per trade" testId="settings-risk">
+      {error ? <ErrorPanel error={error} /> : !data ? <Loading label="Loading…" /> : <>
+        <div className="inline" style={{ gap: 8 }}>
+          <span className="muted">$</span>
+          <input className="input" style={{ width: 120 }} inputMode="decimal" aria-label="risk per trade in dollars" value={shown}
+            data-testid="risk-input" onChange={(e: { target: HTMLInputElement }) => setVal(e.target.value.replace(/[^0-9.]/g, ""))} />
+          <Button small kind="primary" onClick={save} busy={busy} disabled={!shown || Number(shown) <= 0 || shown === String(data.risk_per_trade_usd)}
+            testId="risk-save">Save</Button>
+        </div>
+        <p className="small muted">Dollar figures in Backtest results are results in R multiplied by this amount (default $250). It only changes
+          how results are displayed: backtests, position sizing and stored results stay exactly as they are.</p></>}
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   const { data: c, error } = useApi<ConfigView>("/api/config");
   const ws = useApi<WorkspaceState>("/api/workspace");
@@ -291,7 +321,7 @@ export function SettingsPage() {
       <header className="page-head"><div><div className="eyebrow">System</div><h1>Settings</h1>
         <div className="subtitle small">About this build, application updates, the research workspace and the (read-only) configuration.</div></div></header>
       <div className="grid-cards">{about}<UpdatePanel /></div>
-      {wsCard}
+      <div className="grid-cards"><RiskPerTradeCard />{wsCard}</div>
       <h3>System status</h3>
       <SystemPanel />
       <Banner tone="info">Read-only view. Configuration lives in <code>configs/*.yaml</code> (see CONFIG.md); edit the files and restart.

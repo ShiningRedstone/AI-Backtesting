@@ -372,6 +372,8 @@ export interface ExplorerRow {
   instrument: string | null; trade_count: number | null; trades_per_week: Num; win_rate: Num; expectancy_r: Num;
   gross_r_per_trade: Num; net_r: Num; profit_factor: Num; max_drawdown_r: Num; cost_r_per_trade: Num;
   sample_label: string | null; synthetic: boolean | null;
+  target_multiple?: number | null; trailing?: string | null; signal_exit?: string | null;
+  avg_rr?: Num; max_loss_streak?: number | null; avg_hold_minutes?: Num; prop_pass_payout?: boolean | null; survivor?: boolean;
 }
 export interface ExplorerResponse {
   rows: ExplorerRow[]; total: number; page: number; page_size: number; pages: number; scope: string; scope_label: string;
@@ -443,3 +445,57 @@ export interface UpdateStatus {
   last_update: Record<string, any> | null; applying?: boolean;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
+
+// ---------------------------------------------------------------- backtest results views (ADR-73, read-only)
+export interface FieldPoint { strategy_id: string; name: string | null; family_id: string | null; run_id: string; trades: number;
+  synthetic: boolean; survivor: boolean; win_rate: Num; avg_rr: Num; expectancy_r: Num }
+export interface ControlPoint { control_id: string; candidate_strategy_id: string | null; validation_id: string | null; realization: number;
+  seed: number | null; trades: number; win_rate: Num; avg_rr: Num; expectancy_r: Num; gross_r_per_trade: Num; net_r: Num;
+  max_drawdown_r: Num; max_loss_streak: number | null; dataset_id: string | null; synthetic: boolean; sample_status: string | null }
+export interface CurvePoint { win_rate: number; avg_rr: number }
+export interface BreakdownGroup { group: string; strategies: number; median_expectancy_r: Num; survivor_rate: number }
+export interface ResultsOverview {
+  scope: string; scope_label: string; basis: "net" | "gross"; basis_label: string;
+  facts: { strategies: number; tested: number; survivors: number; gross_positive: number; net_positive: number; synthetic_tested: number;
+    median_cost_r_per_trade: Num };
+  points: FieldPoint[]; controls: ControlPoint[];
+  breakeven: { zero: { label: string; points: CurvePoint[] }; after_cost?: { label: string; cost_r: number; points: CurvePoint[] }; note: string };
+  breakdowns: Record<string, BreakdownGroup[]>;
+  exit_comparison: { signal_exit: { strategies: number; median_expectancy_r: Num };
+    fixed_target: { strategies: number; median_expectancy_r: Num; multiples: number[] }; difference_r: Num; label: string };
+  eval_summary: { survivors: number; survivors_simulated: number; median_p_pass: Record<string, Num>; profile_names?: Record<string, string>;
+    defaults: { replays: number; block_days: number; seed: number }; label: string };
+  survivor_rule: string; note: string;
+}
+export interface PropSummaryRow { profile_id: string | null; profile_name: string | null; version: number | null; status: string | null;
+  evaluation: string | null; failure_reason: string | null; payouts: number; pass_days: number | null; passes_with_payout: boolean;
+  rule_basis_state: string | null;
+  bootstrap?: { p_pass: Num; p_first_payout: Num; p_evaluation_breach: Num; median_days_to_pass: Num; valid_replays: number } | null }
+export interface StrategyPanelData {
+  strategy_id: string; display_name: string; explanation: string; family_id: string | null; family_name: string | null;
+  facets: Record<string, unknown>; scope: string; risk_per_trade_usd: number; survivor_rule: string; tested: boolean;
+  technical: Record<string, string | null | undefined>; rules: { rule: string; text: string }[];
+  run_id?: string; synthetic?: boolean; status?: string; scope_label?: string; survivor?: boolean; cost_status?: string | null;
+  kpis?: { expectancy_r: Num; trades: number; trades_per_week: Num; win_rate: Num; avg_rr: Num; net_r: Num; net_usd_at_risk: Num;
+    max_drawdown_r: Num; max_drawdown_usd_at_risk: Num; max_loss_streak: number | null; cost_r_per_trade: Num; pct_weeks_with_trade: Num;
+    weeks_in_data: number | null; avg_hold_minutes: Num; gross_r_per_trade: Num; profit_factor: Num; sample_label: string | null;
+    net_usd_recorded: Num };
+  last_12_months?: { trades: number; expectancy_r: Num; net_r: Num; win_rate: Num; from: string; to: string; label: string };
+  out_of_sample?: { run_id: string; status: string; scope: string; trades: number; expectancy_r: Num; net_r: Num; start: string; end: string;
+    net_usd_at_risk: Num }[];
+  holdout?: { run_id: string; scope: string; trades: number; expectancy_r: Num; net_r: Num }[];
+  rank?: { position: number | null; of: number; by: string; label: string };
+  prop?: PropSummaryRow[];
+  dataset?: { instrument: string | null; provider: string | null; timeframe: string | null; start: string; end: string };
+}
+export interface ControlPanelData extends ControlPoint { kind: string; risk_per_trade_usd: number; net_usd_at_risk: Num; note: string }
+export interface BootstrapResult { replays: number; valid_replays: number; p_pass: Num; p_first_payout: Num; p_evaluation_breach: Num;
+  p_not_passed_by_end: Num; p_incompatible: Num; median_days_to_pass: Num; days_to_pass_p10_p90: [number, number] | null;
+  failure_reasons: Record<string, number>; computed_at?: string;
+  paths: { days?: number[]; percentiles?: Record<string, number[]>; samples?: number[][]; start_balance?: number | null;
+    target?: number | null; max_loss?: number | null; note?: string } }
+export interface BootstrapResponse { run_id: string; profile_id: string; profile_version: number | null; mode: string; mode_label: string;
+  n: number; block_days: number; seed: number; key: string; method: string; label: string; modes: Record<string, string>;
+  unsupported_modes: Record<string, string>; state: "running" | "done" | "error"; done?: number; total?: number; error?: string | null;
+  result?: BootstrapResult }
+export interface RiskPreference { risk_per_trade_usd: number; default: boolean; note: string }
