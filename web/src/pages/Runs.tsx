@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiError } from "../api/client";
 import { CAMPAIGN_JOB_FINAL, LIVE_POLL_MS, campaigns, fmtDuration } from "../api/campaigns";
-import type { CampaignDetail, CampaignJob, CampaignListRow, CampaignRunRecord, CampaignTree, CheckReport, Eta,
+import type { CampaignDetail, CampaignJob, CampaignListRow, CampaignRunRecord, CampaignTree, CheckReport,
   FamilyResults, ScopeProgress, StrategyResult, TreeFamily } from "../api/campaigns";
 import { useApi, useApp } from "../app/context";
 import { href, useRoute } from "../app/router";
@@ -44,19 +44,6 @@ function Governance({ c }: { c: CampaignDetail | CampaignListRow }) {
       ["Prop audit", <>{c.prop_simulation.profiles.map((p) => <span key={p.profile_id} className="chip" title={p.profile_hash}>{p.profile_id} v{p.version}</span>)}
         <span className="small muted"> downstream of the base result; never changes it</span></>],
     ]} />
-  );
-}
-
-function EtaText({ eta, preflight }: { eta: Eta | null | undefined; preflight?: number | null }) {
-  if (!eta) return <span>Estimating…</span>;
-  if (eta.remaining_strategies === 0) return <span data-testid="eta-done">nothing left to evaluate</span>;
-  if (eta.state !== "estimate" || eta.remaining_seconds == null) {
-    return <span data-testid="eta-estimating">Estimating… <span className="muted small">({eta.n_observations} of {eta.min_observations} timing observations needed)</span></span>;
-  }
-  return (
-    <span data-testid="eta-estimate">≈ {fmtDuration(eta.remaining_seconds)}
-      <span className="muted small"> estimate from {fmt(eta.n_observations)} observed durations (workers 1)
-        {preflight != null && ` · preflight took ${fmtDuration(preflight)}`}</span></span>
   );
 }
 
@@ -204,7 +191,6 @@ function CampaignPage({ cid }: { cid: string }) {
           <Kpi label="Remaining (campaign)" value={fmt(d.progress.remaining)} />
           <Kpi label="Run status" value={<Badge tone={statusTone(latest?.status ?? "none")}>{latest?.status ?? "no run yet"}</Badge>}
             sub={latest ? shortTime(latest.updated_at ?? latest.created_at) : undefined} />
-          <Kpi label="Estimated remaining (campaign)" value={<EtaText eta={d.eta} preflight={latest?.preflight_seconds} />} />
         </div>
         <div className="actions">
           <Button kind="primary" onClick={start} busy={starting} busyLabel="Starting…" testId="run-research"
@@ -295,8 +281,6 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
   const done = tot?.completed ?? 0;                             // from PERSISTED cells (survives restarts)
   const final = CAMPAIGN_JOB_FINAL.has(job.state);
   const el = elapsedS(job.started_at, job.finished_at);
-  const eta = L.eta ?? null;
-  const totalEst = eta?.state === "estimate" && eta.remaining_seconds != null && el != null ? el + eta.remaining_seconds : null;
   return (
     <Card testId="live-run"
       title={<>Research run <Mono>{job.job_id}</Mono> <Badge tone={statusTone(L.status)}>{L.status}</Badge></>}
@@ -313,8 +297,6 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
         <Kpi label="Remaining" value={fmt(Math.max(0, scopeN - done))} />
         <Kpi label="Errors" value={fmt(L.counts?.failed_this_run ?? 0)} tone={(L.counts?.failed_this_run ?? 0) ? "neg" : ""} sub="never counted as trials; retried on resume" />
         <Kpi label="Elapsed" value={fmtDuration(el)} sub={L.preflight_seconds != null ? `preflight ${fmtDuration(L.preflight_seconds)}` : L.status === "preflight" ? "preflight running…" : undefined} />
-        <Kpi label="Estimated remaining" value={<EtaText eta={eta} />} testId="live-eta"
-          sub={totalEst != null ? `estimated total ≈ ${fmtDuration(totalEst)}` : "estimate; not an exact completion time"} />
       </div>
       {L.current && !final && <p className="small" data-testid="live-current">Now evaluating <b>{L.current.display_name ?? L.current.strategy_id}</b>
         {" "}<Mono>{L.current.strategy_id}</Mono> · family <b>{L.current.family_id}</b> · {L.current.timeframe} on <Mono>{L.current.dataset_id}</Mono>

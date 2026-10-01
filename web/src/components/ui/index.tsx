@@ -222,7 +222,17 @@ export function fmt(v: unknown): string {
   return String(v);
 }
 
-export const shortTime = (iso: string | null | undefined) => (iso ? iso.replace("T", " ").slice(0, 16) : "—");
+/** App event timestamps (created / started / finished / checked / built) in this computer's local time zone.
+ *  Only strings with an explicit UTC offset are converted; anything else is shown as stored. Market, trade, session
+ *  and backtest-period times never go through this helper: they keep the dataset's own time convention. */
+const LOCAL_TIME = new Intl.DateTimeFormat(undefined, {
+  year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short",
+});
+export const shortTime = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const t = /(Z|[+-]\d{2}:?\d{2})$/.test(iso) ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? iso.replace("T", " ").slice(0, 16) : LOCAL_TIME.format(t);
+};
 
 // =========================================================================== research-terminal primitives
 /** Numbers: fixed decimals, "—" when missing/non-finite. */
