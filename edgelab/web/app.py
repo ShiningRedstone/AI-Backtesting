@@ -40,6 +40,7 @@ PROTOCOL_ID = re.compile(r"^RP_[0-9A-F]{12}$")
 CAMPAIGN_ID = re.compile(r"^CMP_[0-9A-F]{12}$")
 RUN_RECORD_ID = re.compile(r"^CR_\d{8}_\d{6}_[0-9A-F]{6}$")
 CONTROL_ID = re.compile(r"^CTRL_[0-9A-F]{12}$")
+BT_JOB_ID = re.compile(r"^BTJ_[0-9A-F]{12}$")
 FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 
@@ -498,6 +499,27 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                 raise _bad("period must be {start, end} ISO timestamps")
             period = (per["start"], per["end"])
         return jsonify(call(svc.backtest_strategy, strategy_source(b.get("strategy")), did, True, period))
+
+    def _backtest_args(b: Mapping) -> tuple:
+        did = _id(b.get("dataset_id"), SAFE_ID, "dataset id")
+        per = b.get("period")
+        period = None
+        if per is not None:
+            if not (isinstance(per, Mapping) and isinstance(per.get("start"), str) and isinstance(per.get("end"), str)):
+                raise _bad("period must be {start, end} ISO timestamps")
+            period = (per["start"], per["end"])
+        return strategy_source(b.get("strategy")), did, period
+
+    @app.post("/api/backtests/jobs")
+    def backtest_job_start():
+        """ADR-76: the same backtest in the background; returns at once (the service lock is never held while the
+        engine computes, so every other page keeps loading)."""
+        src, did, period = _backtest_args(body())
+        return jsonify(call(svc.start_backtest_job, src, did, period))
+
+    @app.get("/api/backtests/jobs/<jid>")
+    def backtest_job_status(jid):
+        return jsonify(svc.backtest_job(_id(jid, BT_JOB_ID, "backtest job id")))
 
     @app.get("/api/results")
     def results():

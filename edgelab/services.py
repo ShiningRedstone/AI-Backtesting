@@ -723,7 +723,8 @@ class Services:
         # ADR-56 research protocol: refuses holdout/overlap access and over-budget trials BEFORE anything
         # runs (worker processes have no gate; their search plan was checked by the parent)
         gate = getattr(self, "_protocol_gate", None)
-        pctx = gate(ds, strat, entry_point, holdout_access_id) if gate is not None else None
+        with guard:                                      # the gate reads the protocol ledger (store)
+            pctx = gate(ds, strat, entry_point, holdout_access_id) if gate is not None else None
         check_identity(ds.instrument)           # provisional source identity: economics not interpretable
         costs = cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
@@ -905,6 +906,10 @@ class Services:
         ACTIVE research protocol (ADR-56) the evaluated bars must lie inside its discovery window
         (pass `period`); the evaluation is attributed to the protocol's trial ledger."""
         cell = self._run_cell(src, dataset_id, record, period=period, entry_point="backtest_strategy")
+        return self._backtest_payload(cell, dataset_id)
+
+    def _backtest_payload(self, cell: Mapping, dataset_id: str) -> dict:
+        """The JSON result of one backtest cell (shared by the synchronous call and background backtest jobs)."""
         ds, res, met = cell["ds"], cell["result"], cell["metrics"]
         exits = res.trades["exit_reason"].value_counts().to_dict() if len(res.trades) else {}
         return _jsonable({"strategy_id": cell["strategy"].strategy_id, "dataset_id": dataset_id,
@@ -919,6 +924,37 @@ class Services:
                           "protocol": None if cell["protocol"] is None else
                           {k: cell["protocol"].get(k) for k in ("protocol_id", "stage", "trial_id", "counted")},
                           "note": "historical result under the stated assumptions; not a conclusion"})
+
+    # ------------------------------------------------------------ background single backtests (ADR-76)
+    def start_backtest_job(self, src: Any, dataset_id: str, period: tuple | None = None) -> dict:
+        """Run one recorded backtest in a background thread through the SAME path as `backtest_strategy`
+        (`_run_cell`), holding the service lock only around its store steps (dataset load, protocol gate, run record),
+        never during the computation, so other pages keep answering. Process-local registry, like search jobs."""
+        import uuid
+        from datetime import datetime, timezone
+        jobs = self.__dict__.setdefault("_bt_jobs", {})
+        job_id = "BTJ_" + uuid.uuid4().hex[:12].upper()
+        job = {"job_id": job_id, "state": "running", "dataset_id": dataset_id, "error": None, "result": None,
+               "created_at": datetime.now(timezone.utc).isoformat(), "finished_at": None}
+        jobs[job_id] = job
+
+        def work():
+            try:
+                cell = self._run_cell(src, dataset_id, True, period=period, lock=self.lock, entry_point="backtest_strategy")
+                job["result"] = self._backtest_payload(cell, dataset_id)
+                job["state"] = "completed"
+            except Exception as exc:                    # noqa: BLE001 - reported to the page like a refused request
+                job["error"] = {"kind": type(exc).__name__, "message": str(exc)}
+                job["state"] = "failed"
+            job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        threading.Thread(target=work, daemon=True, name=f"munyun-backtest-{job_id}").start()
+        return {k: v for k, v in job.items() if k != "result"}
+
+    def backtest_job(self, job_id: str) -> dict:
+        job = self.__dict__.get("_bt_jobs", {}).get(job_id)
+        if job is None:
+            raise KeyError(f"backtest job {job_id} is not known to this app session")
+        return dict(job)
 
     # ============================================================ WEB UI (Phase 3.5)
     @staticmethod

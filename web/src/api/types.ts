@@ -500,3 +500,5 @@ export interface BootstrapResponse { run_id: string; profile_id: string; profile
   unsupported_modes: Record<string, string>; state: "running" | "done" | "error"; done?: number; total?: number; error?: string | null;
   result?: BootstrapResult }
 export interface RiskPreference { risk_per_trade_usd: number; default: boolean; note: string }
+export interface BacktestJob { job_id: string; state: "running" | "completed" | "failed"; dataset_id: string; created_at: string;
+  finished_at: string | null; error: { kind: string; message: string } | null; result?: BacktestResult | null }

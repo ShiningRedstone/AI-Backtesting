@@ -45,6 +45,9 @@ pyz = PYZ(a.pure)
 # (console: logs visible, CLI pass-through, headless smoke tests). Same code, same manifest.
 version_file = os.environ.get("EDGELAB_VERSION_FILE")                  # Windows file properties (app version)
 version_kw = {"version": version_file} if version_file and Path(version_file).is_file() else {}
+icon = REPO / "packaging" / "munyun.ico"                               # ADR-76 app icon (packaging/icon.py)
+if icon.is_file():
+    version_kw["icon"] = str(icon)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="EdgeLab", console=False,
           debug=False, strip=False, upx=False, **version_kw)
 exe_console = EXE(pyz, a.scripts, [], exclude_binaries=True, name="EdgeLabConsole", console=True,

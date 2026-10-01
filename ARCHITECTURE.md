@@ -1826,3 +1826,29 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   Generated session ids (`FXE_NY_1200_1430_MF`) read "New York 12:00–14:30 · Mon–Fri", markets "NQ (Dukascopy)".
 - **Explorer layout.** Fits the screen: headers wrap; "Eval" and "Payout" (Passed / Failed under the Settings account)
   follow "Max drawdown"; Before costs, Cost per trade, Out-of-sample and State moved out of the table (strategy panel).
+
+### ADR-76 Windows installer; app icon; single backtests as background jobs
+- **Installer.** `packaging/installer.iss` (Inno Setup 6), built by `packaging/build_installer.py` from `dist/EdgeLab`
+  (version and build number from the build manifest). It installs per user (`PrivilegesRequired=lowest`, no admin)
+  into `%LOCALAPPDATA%\Programs\EdgeLab`, exactly the folder the updater swaps, so installed copies keep
+  auto-updating. The uninstaller lives in `EdgeLab-Uninstall` next to it (an update replaces the whole program folder
+  and must not take the uninstaller with it). Uninstall removes `{app}` plus the updater's `.old-*` / `.new-*` /
+  `.failed-*` leftovers, never a workspace, the data root, settings or logs. Start-menu and desktop shortcuts are two
+  optional tasks (both on by default). The file names (`EdgeLab.exe`, `edgelab_build.json`) are unchanged, so the
+  updater, the smoke test and the workspaces keep working. Unsigned (SmartScreen "More info → Run anyway").
+- **CI.** `.github/workflows/windows-build.yml` installs Inno Setup when missing, builds the installer, smoke-tests it
+  (silent install, `smoke_packaged.py` on the installed exe, shortcuts present, silent uninstall leaves no program or
+  shortcut), and attaches `MunyunLab-Setup-<version>-b<n>.exe` to each build release. On `main` it also replaces the
+  single asset `MunyunLab-Setup.exe` of the fixed pre-release `installer-main` (a permanent download link). The updater
+  reads only `build-<branch>-<n>` tags (tested), and the keep-5 cleanup deletes only those.
+- **Icon.** `packaging/icon.py` writes `packaging/munyun.ico` (PNG images 16–256 px, zlib/struct only, deterministic):
+  the top-bar chart mark on a dark rounded tile. `edgelab.spec` gives both executables this icon; the installer uses it too.
+- **Background single backtests.** `POST /api/backtests` held the one service lock (`call()`) for the whole backtest,
+  so leaving the page and coming back showed skeletons until it finished. `Services.start_backtest_job` runs the SAME
+  `_run_cell(..., record=True, lock=svc.lock, entry_point="backtest_strategy")` path research jobs use (the lock only
+  around store and protocol-gate steps, never while the engine computes) in a thread and keeps the same payload as
+  `backtest_strategy` (`_backtest_payload`). Routes: `POST /api/backtests/jobs`, `GET /api/backtests/jobs/<BTJ_…>`
+  (process-local registry, like search jobs). The strategy page's backtest panel polls the job and remembers it per
+  strategy for the browser session, so it resumes after a tab switch. `POST /api/backtests` (CLI, tests) is unchanged;
+  the protocol gate call in `_run_cell` now also runs under the guard (it reads and writes the store). Engine, compiler,
+  fills, sizing, costs and prop lifecycle are unchanged; the job result equals the synchronous one (tested).

@@ -3,6 +3,10 @@
 # GitHub pre-release tagged build-<branch>-<run number>. An installed EdgeLab checks the builds of the branch
 # it was built from and offers "Restart and update" when a newer one exists (edgelab/updater).
 # The repository must be public: the app reads releases without credentials.
+# Each build also ships MunyunLab-Setup-<version>-b<n>.exe (per-user installer, ADR-76); builds of main additionally
+# replace the single asset of the fixed release "installer-main", so
+# https://github.com/<owner>/<repo>/releases/download/installer-main/MunyunLab-Setup.exe always is the latest main
+# installer. The updater only reads build-<branch>-<n> tags, so that release never affects updates.
 name: Windows build
 
 on:
@@ -51,17 +55,69 @@ jobs:
       - name: Prepare the release files (zip, manifest, checksums)
         run: python packaging/release.py
 
+      - name: Install Inno Setup 6 when the runner lacks it
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "installing Inno Setup failed" }
+          }
+
+      - name: Build the installer (MunyunLab-Setup)
+        run: python packaging/build_installer.py
+
+      - name: Installer smoke test (silent per-user install, packaged smoke, silent uninstall)
+        run: |
+          $setup = (Get-ChildItem dist/release/MunyunLab-Setup-*.exe | Select-Object -First 1).FullName
+          $app = Join-Path $env:LOCALAPPDATA "Programs\EdgeLab"
+          $p = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=startmenuicon,desktopicon", "/LOG=$env:RUNNER_TEMP\setup.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup.log"; throw "setup exited with $($p.ExitCode)" }
+          if (-not (Test-Path "$app\EdgeLab.exe")) { throw "EdgeLab.exe was not installed to $app" }
+          $menu = Join-Path ([Environment]::GetFolderPath("Programs")) "Munyun Lab.lnk"
+          $desk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Munyun Lab.lnk"
+          if (-not (Test-Path $menu)) { throw "Start menu shortcut missing: $menu" }
+          if (-not (Test-Path $desk)) { throw "desktop shortcut missing: $desk" }
+          python packaging/smoke_packaged.py --exe "$app\EdgeLab.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the installed app failed the smoke test" }
+          $un = Join-Path $env:LOCALAPPDATA "Programs\EdgeLab-Uninstall\unins000.exe"
+          $p = Start-Process $un -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exited with $($p.ExitCode)" }
+          for ($i = 0; $i -lt 30 -and (Test-Path "$app\EdgeLab.exe"); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path "$app\EdgeLab.exe") { throw "uninstall left $app behind" }
+          if ((Test-Path $menu) -or (Test-Path $desk)) { throw "uninstall left a shortcut behind" }
+
       - name: Publish the branch build
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = (Get-Content dist/release/release-tag.txt).Trim()
           $zip = (Get-ChildItem dist/release/*.zip | Select-Object -First 1).FullName
-          gh release create $tag $zip dist/release/edgelab-release.json dist/release/SHA256SUMS.txt `
+          $setup = (Get-ChildItem dist/release/MunyunLab-Setup-*.exe | Select-Object -First 1).FullName
+          gh release create $tag $zip $setup dist/release/edgelab-release.json dist/release/SHA256SUMS.txt `
             --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --prerelease `
             --title "Munyun Lab build $env:BUILD_NUMBER ($env:CHANNEL)" `
             --notes "Automatic build $env:BUILD_NUMBER of branch $env:CHANNEL at commit $env:GITHUB_SHA."
           if ($LASTEXITCODE -ne 0) { throw "publishing failed" }
+
+      - name: Update the permanent installer link (main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = (Get-ChildItem dist/release/MunyunLab-Setup-*.exe | Select-Object -First 1).FullName
+          $fixed = Join-Path $env:RUNNER_TEMP "MunyunLab-Setup.exe"
+          Copy-Item $setup $fixed
+          $notes = "Always the newest Munyun Lab installer from main (now build $env:BUILD_NUMBER, commit $env:GITHUB_SHA). " +
+                   "Download MunyunLab-Setup.exe and run it: per-user install, no administrator rights; the app then updates itself."
+          gh release view installer-main --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create installer-main $fixed --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" `
+              --prerelease --title "Munyun Lab installer (latest main)" --notes $notes
+          } else {
+            gh release upload installer-main $fixed --repo "$env:GITHUB_REPOSITORY" --clobber
+            if ($LASTEXITCODE -eq 0) { gh release edit installer-main --repo "$env:GITHUB_REPOSITORY" --notes $notes }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "updating installer-main failed" }
 
       - name: Keep the newest 5 builds of this branch
         env:

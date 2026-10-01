@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
-import type { ProtocolRecordRow, BacktestResult, Change, DatasetRow, Readiness, VariantRow, VariationPreview, VariationResult } from "../../api/types";
+import type { ProtocolRecordRow, BacktestJob, BacktestResult, Change, DatasetRow, Readiness, VariantRow, VariationPreview, VariationResult } from "../../api/types";
 import { href } from "../../app/router";
 import { useApp } from "../../app/context";
 import type { ParamDecl, StrategyDoc } from "../../dsl/types";
@@ -136,6 +136,30 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [runErr, setRunErr] = useState<ApiError | null>(null);
   const [protocol, setProtocol] = useState<ProtocolRecordRow | null>(null);
+  // ADR-76: the backtest runs as a background job; the job id is remembered for this strategy so leaving the page and
+  // coming back picks the run (or its result) up again instead of losing it.
+  const jobKey = `munyun.backtest-job.${typeof strategy === "string" ? strategy : JSON.stringify(strategy).length + ":" + (strategy as StrategyDoc).name}`;
+  const [jobId, setJobId] = useState<string | null>(() => { try { return window.sessionStorage.getItem(jobKey); } catch { return null; } });
+  useEffect(() => {
+    if (!jobId) return;
+    let live = true, t = 0;
+    setRunning(true);
+    const poll = () => api.get<BacktestJob>(`/api/backtests/jobs/${jobId}`).then((j) => {
+      if (!live) return;
+      if (j.state === "running") { t = window.setTimeout(poll, 1000); return; }
+      setRunning(false);
+      if (j.state === "completed" && j.result) { setResult(j.result); setRunErr(null); }
+      else setRunErr(new ApiError(400, j.error?.kind ?? "failed", j.error?.message ?? "The backtest failed"));
+      try { window.sessionStorage.removeItem(jobKey); } catch { /* ignore */ }
+      setJobId(null);
+    }).catch(() => {                                   // unknown after an app restart: forget it
+      if (!live) return;
+      setRunning(false); setJobId(null);
+      try { window.sessionStorage.removeItem(jobKey); } catch { /* ignore */ }
+    });
+    poll();
+    return () => { live = false; window.clearTimeout(t); };
+  }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {                                   // ADR-70: the governed window comes from the protocol record (data)
     api.get<ProtocolRecordRow[]>("/api/protocols").then((rows) => setProtocol(rows.find((p) => p.status === "ACTIVE") ?? null))
       .catch(() => setProtocol(null));
@@ -155,10 +179,11 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
     setRunning(true); setRunErr(null); setResult(null);
     try {
       const period = protocol?.discovery_period;        // explicit discovery window under a protocol; never the holdout
-      setResult(await api.post<BacktestResult>("/api/backtests", { strategy, dataset_id: pick, ...(period ? { period } : {}) }));
+      const j = await api.post<BacktestJob>("/api/backtests/jobs", { strategy, dataset_id: pick, ...(period ? { period } : {}) });
+      try { window.sessionStorage.setItem(jobKey, j.job_id); } catch { /* per-tab convenience only */ }
+      setJobId(j.job_id);
     }
-    catch (e) { setRunErr(e as ApiError); }
-    finally { setRunning(false); }
+    catch (e) { setRunErr(e as ApiError); setRunning(false); }
   };
   return (
     <div className="backtest" data-testid="backtest-panel">
@@ -202,6 +227,7 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
           <DatasetSummary d={sel} />
           {sel.synthetic && <Banner tone="demo">{SYNTHETIC_NOTICE}</Banner>}
           <Button kind="primary" onClick={run} busy={running} busyLabel="Running backtest…" testId="run-backtest">Run Backtest</Button>
+          {running && <span className="small muted" data-testid="backtest-running">Runs in the background: you can use other pages and come back.</span>}
         </div>
       )}
       <ErrorPanel error={runErr} title="The backtest did not run" testId="backtest-error" />

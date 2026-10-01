@@ -75,6 +75,9 @@ runs (`runs/names.json`) pickable on Backtest results (`campaign_run` = that run
 `reset_workspace("DELETE")` keeps price data only (logged); no eyebrow/subtitle, no global search, skeleton loaders.
 ADR-75: read-view speed caches (library folder-stamp fingerprint, store `db_token`, `manifest_rows_view`, memoized campaign
 detail/tree, explorer rows, per-user (outside the workspace) facets cache, start-up warm-up); display/short strategy names without hash; explorer fits.
+ADR-76: Windows installer `packaging/installer.iss` + `build_installer.py` (per-user into `%LOCALAPPDATA%\Programs\EdgeLab`, the updater's folder;
+optional Start-menu/desktop shortcuts; CI fixed release `installer-main`), icon `packaging/icon.py` -> `munyun.ico`; single backtests as background
+jobs (`Services.start_backtest_job`, `/api/backtests/jobs`, lock free while computing).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
