@@ -3,6 +3,14 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Version 0.3.0
+
+| Item | Status |
+|---|---|
+| Version bumped to 0.3.0 (`edgelab.__version__`, web/package.json, package-lock, frontend bundle); save point of the last 0.2.0 state kept as branch `V0.2` | IMPLEMENTED, TESTED (version consistency test) |
+| CLAUDE.md updated with the app's current state, delivery flow, save points and user preferences | IMPLEMENTED |
+| Behaviour, results, research logic | UNCHANGED |
+
 ## Tabs, session groups, pink cards, reliable relaunch (ADR-79)
 
 | Item | Status |

@@ -33,7 +33,7 @@ the fill prices, no separate spread cost; commission/slippage are assumptions); 
 (`ASK_OHLC_REQUIRED`). Real ASK-OHLC datasets `NQ_DUKASCOPY_BIDASK_OHLC_2021_2026_*` live in the user's workspace; the frozen
 BID/BIDASK datasets and legacy single-series runs are kept as evidence (read-only check: `scripts/dukascopy_inspect.py`).
 Calendar `DUKASCOPY_USATECH_OBSERVED` (NY 18:00->16:15) comes from the real-file inspection; holidays unresolved.
-Version 0.2.0 (ADR-58/59): research-terminal UI (dark design system, Home, Research dashboard, Explorer + drawer,
+Version 0.2.0 introduced (ADR-58/59): research-terminal UI (dark design system, Home, Research dashboard, Explorer + drawer,
 Controls, Candidate pipeline, Settings & About) over READ-ONLY read models `research/overview.py` (holdout-evaluation
 runs are always labelled Holdout, never OOS), and a Windows updater `edgelab/updater/` (GitHub Releases manifest,
 SHA-256-verified staging, helper-process swap with rollback; `packaging/release.py` prepares but never publishes).
@@ -87,8 +87,57 @@ research run reads (preflight, progress, stop) via `campaign.read_outside_lock`;
 ADR-79: Run backtest = Research runs | Single backtest (Experiments tab removed; `/research` -> `/runs`, job/id deep links kept); `results_view.session_group`
 (market-hours groups, `session_group` breakdown); deep-rose decorative gradient; desktop relaunch waits for a closing instance (`_hand_off` ->
 `HANDOFF_WAIT`, `_wait_for_previous`), runtime.json removed first on shutdown, splash `edgelab/desktop_splash.py` (`EdgeLab.exe --splash`).
+Version 0.3.0 (after the V0.2 save point): version bump only, no behaviour change.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
+
+## The app today (version 0.3.0)
+
+- **Version:** `edgelab.__version__` = **0.3.0** (web/package.json and package-lock.json must match; the frontend build
+  records it in `edgelab/web/static/build-info.json`). Save points (never modify or delete them):
+  - branch `backup/main-2026-10-01` = 0d0baeb
+  - branch `V0.2` = 716da4d, the last 0.2.0 state
+- **How the user runs it:** an installed Windows desktop app.
+  - Installer: `MunyunLab-Setup.exe`. Permanent link for the latest main build:
+    https://github.com/ShiningRedstone/AI-Backtesting/releases/download/installer-main/MunyunLab-Setup.exe
+  - Per-user install into `%LOCALAPPDATA%\Programs\EdgeLab`; shortcuts start in the user's home folder. The
+    installer is unsigned, so SmartScreen asks "More info → Run anyway".
+  - It updates itself from GitHub builds of `main`: Settings → Updates → "Check for updates" → "Restart and update".
+  - The window is pywebview / WebView2 (a native window, not a browser).
+  - A relaunch while the old instance is closing waits for it. The packaged app shows a splash
+    (`EdgeLab.exe --splash`).
+- **CI:** `.github/workflows/windows-build.yml` runs on every push.
+  1. Builds `EdgeLab.exe`.
+  2. Runs the packaged smoke test, the splash self-close check and the packaged updater smoke (app started from its
+     own folder).
+  3. Builds the installer and smoke-tests it: silent install, smoke, silent uninstall.
+  4. Publishes the pre-release `build-<branch>-<n>`; on `main` it also updates `installer-main`.
+- **Tabs (UI, plain English):**
+  - Home
+  - Strategies: Library, Families, Builder, Variations
+  - Run backtest: **Research runs** (default), Single backtest. The Experiments tab was removed; `/research` →
+    `/runs`, and job/result deep links still work.
+  - Backtest results: Overview, Strategies explorer, All runs, Compare, Random controls, Candidate pipeline
+  - Prop firm simulator
+  - Paper trading (planned)
+  - Settings, including CPU cores for research runs, the pass-criteria prop account, display switches and
+    delete-all.
+- **Design decisions the user made:**
+  - Dark UI. Decorative surfaces use a deep-rose → plum gradient (`--warm-gradient`); red is ONLY for losses,
+    negative values and errors.
+  - Scatter dots have no outlines.
+  - "By session" is grouped by market hours (Asia, London, London–NY overlap, NY AM, NY PM, NY full day, Any time),
+    with "Show all windows".
+  - IDs are hidden unless "Show IDs" is on.
+  - The user rejected GPU acceleration: pages were lock-bound, and GPU math could change result hashes.
+- **Performance architecture:**
+  - ADR-75: read caches.
+  - ADR-76: background single backtests.
+  - ADR-77: datasets validated once per process; the causality-feature cache; multi-core research runs, default all
+    cores but one.
+  - ADR-78: page GETs on read-only SQLite connections outside the service lock; page numbers may lag up to 5 s
+    during a run.
+  - None of these change any result: every cache is content-keyed and tested against the fresh path.
 
 ## Non-negotiable research principles
 
@@ -192,35 +241,42 @@ events/regimes, instruments/datasets, strategy families and controlled variation
   `list_searches`, `get_search`, `rank_search`, `select_shortlist`, `start_search_job`,
   `job_status`, `cancel_job`; HTTP under `/api/research/*`; CLI `research ...`.
 
-## Known limitations (repository, as of Phase 4)
+## Known limitations (repository, current)
 
 - Research storage is SQLite-only; DuckDB refuses search operations, and with
   `storage.backend: auto` installing DuckDB makes research unavailable. The DuckDB backend is
-  otherwise untested.
+  otherwise untested. SQLite stays in rollback-journal mode (no WAL: read-only workspace tools open it `mode=ro`).
 - One process per data root: `next_run_id` is MAX+1 and restart reconciliation marks any `running`
   search `interrupted`, so concurrent CLI and web research on one root is not coordinated.
 - Trials: per search (`n_trials`) AND, under an ACTIVE research protocol (ADR-56), program-wide in the
   protocol trial ledger (dedup by logic/evaluated bars/config). Without a protocol only per-search counts
   exist. The seed still changes the search identity without changing deterministic DSL results.
-- Background jobs are sequential (`workers: 1`) and process-local (job ids do not survive a
-  restart); worker processes copy the datasets; the service lock covers each cell's dataset load.
-- Random-entry null controls exist only in `scripts/phase1_demo.py`, not as a service.
-- No real market data imported; all results so far are synthetic.
+- Background jobs are process-local (job ids do not survive a restart). Frozen-campaign research runs use several
+  CPU cores (ADR-77; the parent writes in plan order; on cancel, cells already running finish and are recorded).
+  The old "Research Engine" search jobs stay sequential. Worker processes copy the datasets.
+- Real Dukascopy BID/ASK datasets live only in the user's own workspace (not in this repository); repository tests
+  and demos use synthetic data, labelled everywhere.
 - No browser file upload (imports come from `web.import_dirs`); no auth (local, loopback only).
+- Windows-only behaviour (WebView2 window, splash, installer, updater swap) is verified by the Windows CI smoke tests;
+  the splash and window are not visually checked in CI.
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations (Phase 4)".
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..79.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..31, known
-  limitations), `CHANGELOG.md` (per-phase IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA),
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..79, known
+  limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
-  `STRATEGY_GENERATION.md`, `WEB_UI.md`.
-- Code: `edgelab/{core,data,engine,features,strategy,research,analytics,web}` (Phase 4 research:
-  `research/{search,batch,ranking,jobs}.py`, Research page `web/src/pages/ResearchEngine.tsx`); `services.py`,
-  `cli.py`. Empty placeholders for later phases: `prop/`, `reports/`, `journal/`,
+  `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
+  `PROP_SIMULATION.md`, `FACTORY_CAPABILITIES.md`.
+- Code: `edgelab/{core,data,engine,features,strategy,research,analytics,prop,ai,updater,web}`; `services.py` (the one
+  service layer; `read_context`, background backtest jobs, campaigns), `cli.py`, `desktop.py` / `desktop_window.py` /
+  `desktop_splash.py` / `workspace_host.py` / `runtime.py` (desktop app). Research runs: `research/campaign.py`,
+  `research/batch.py` (sequential + process-parallel runner), `research/jobs.py`. Read models: `research/overview.py`,
+  `research/results_view.py`. Packaging: `packaging/` (`edgelab.spec`, `build.py`, `release.py`, `installer.iss`,
+  `build_installer.py`, `icon.py`, smoke tests). Empty placeholders for later phases: `reports/`, `journal/`,
   `notifications/`, `execution/`.
 - Config: `configs/*.yaml` (research config is hashed; `web.yaml` and the example search spec
   `search.example.yaml` are deliberately outside the hash).
@@ -230,7 +286,8 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -t .        # full suite (~60 s); run only when asked
+python -m unittest discover -s tests -t .        # full suite (~1,000 tests, ~15 min here); only when asked
+python -m unittest tests.test_x tests.test_y     # targeted: what the user wants before a commit
 python scripts/run_tests.py                      # full suite + dashboard test status
 python -m edgelab.cli --help                     # data, features, strategy, research commands
 python -m edgelab.cli research plan|run|rank ... # Phase 4 batch search (see README)
@@ -238,17 +295,39 @@ python -m edgelab.web                            # web app at http://127.0.0.1:8
 python -m edgelab.web --demo                     # separate synthetic demo workspace
 python -m edgelab.desktop [--data-root DIR] [--ui window|browser|none]  # desktop launcher from source (own window by default)
 python packaging/build.py [--smoke]              # packaged folder build (Windows: build_windows.ps1)
+python packaging/build_installer.py              # Windows + Inno Setup 6: dist/release/MunyunLab-Setup-<ver>-b<n>.exe
+python packaging/icon.py                         # regenerate packaging/munyun.ico (deterministic)
+cd web && npm run typecheck && npm run build     # after ANY frontend change (the committed bundle is tested)
 python scripts/phase1_demo.py                    # end-to-end synthetic demo (must stay identical)
 python scripts/benchmark_search.py               # Phase 4 search throughput (informational)
 ```
 
 ## Working rules for Claude Code
 
-- Git: remote `origin` = `https://github.com/ShiningRedstone/AI-Backtesting.git`, branch `main`.
-  Do not commit or push unless explicitly asked.
-- The user's local machine is Windows, with the clone at `C:\Users\Ethan\Documents\AI-Backtesting`. Python there is
+- Git: remote `origin` = `https://github.com/ShiningRedstone/AI-Backtesting.git`, default branch `main`.
+  Do not commit or push unless the user asks for it in that task. ("push it once the tests pass" counts.)
+- Delivery flow used in this project:
+  1. Develop on branch `claude/zealous-heisenberg-7xwqax` (or the session's designated branch).
+  2. Commit only explicit paths (`git add -u` plus named new files; **never `git add .`**).
+  3. Push the branch and wait for the Windows CI build to go green.
+  4. Fast-forward `main` to it: `git push origin HEAD:main`, no force. Then wait for main's build, which is the
+     update the user's app installs.
+  5. Watch CI through the GitHub API or MCP tools.
+- Never stage or commit: `data/strategy_factory/` (large generated research data) or `histdata_4year_sets.patch`
+  (do not modify or delete it either). Preserve local modifications to `tests/test_directional_quotes.py`.
+- The user (Ethan) works on Windows, with the clone at `C:\Users\Ethan\Documents\AI-Backtesting`. Python there is
   `.\.venv\Scripts\python.exe`. PowerShell commands given to the user start with
-  `Set-Location 'C:\Users\Ethan\Documents\AI-Backtesting'`.
-- Stay within the requested phase and task; no unrelated refactors or doc fixes.
-- When a phase is complete, update `README.md` status, `CHANGELOG.md`, `ARCHITECTURE.md` (module
-  map, ADRs, known limitations) and this file's "Current state".
+  `Set-Location 'C:\Users\Ethan\Documents\AI-Backtesting'`. The user mostly uses the installed app, not the
+  source tree.
+- **User preferences (repeated throughout development):**
+  - Ask questions instead of assuming. Use multiple-choice questions with a recommended option, and give previews
+    for visual choices.
+  - Never change how backtests are executed or what they produce: no engine, fill, sizing, cost, compiler or
+    prop-rule changes unless explicitly requested. Speed work must give bit-identical results, proven by tests.
+  - Never fabricate data or results. Display-only conveniences (caches, groupings) must recompute from real data.
+  - Before committing: do a real test run (browser screenshots for UI work) and run only the affected test modules,
+    not the full suite, to save time. The Phase 1 demo must stay identical when research code is touched.
+  - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
+- Stay within the requested task; no unrelated refactors or doc fixes.
+- When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
+  "Current state" (ADR numbering continues after ADR-79). Update `README.md` status for phases.
