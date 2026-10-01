@@ -6,7 +6,7 @@ import type { CampaignDetail, CampaignJob, CampaignListRow, CampaignRunRecord, C
   FamilyResults, ScopeProgress, StrategyResult, TreeFamily } from "../api/campaigns";
 import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, metricLabel, profileLabel, statusLabel, valueLabel } from "../app/labels";
-import { href, useRoute } from "../app/router";
+import { go, href, useRoute } from "../app/router";
 import { plainText } from "../components/research";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, TableWrap, TechDetails, fmt, n, r,
   shortTime } from "../components/ui";
@@ -21,7 +21,7 @@ export function RunsPage() {
   if (cid && fid && sid) return <StrategyResultPage cid={cid} sid={sid} fid={fid} />;
   if (cid && fid) return <FamilyResultsPage cid={cid} fid={fid} />;
   if (cid) return <CampaignPage cid={cid} />;
-  return <CampaignList />;
+  return <RunsHome />;
 }
 
 const pctOf = (done: number, total: number) => (total ? `${((100 * done) / total).toFixed(1)}%` : "—");
@@ -59,40 +59,35 @@ function Governance({ c }: { c: CampaignDetail | CampaignListRow }) {
   );
 }
 
-function CampaignList() {
+const lastRunAt = (c: CampaignListRow) => c.latest_run?.created_at ?? "";
+/** The Research runs page: the research browser of the most recently run frozen campaign directly (no extra click);
+ *  a switcher appears only when the workspace holds more than one campaign (choice kept in the address). */
+function RunsHome() {
+  const route = useRoute();
   const list = useApi<CampaignListRow[]>(campaigns.listUrl);
-  return (
-    <div className="page" data-testid="runs-page">
-      <header className="page-head"><div><div className="eyebrow">Research</div><h1>Research runs</h1>
-        <p className="subtitle">Run frozen research campaigns from the desktop app. Runs continue in the background, are stored
-          permanently in this workspace and can be resumed after the app is closed.</p></div></header>
-      <ActiveJobBanner />
-      {list.error && <ErrorPanel error={list.error} title="Could not load campaigns" />}
-      {!list.data && !list.error && <Loading label="Loading campaigns…" />}
-      {list.data && !list.data.length && <Empty>No frozen campaign in this workspace yet. Freeze one from the command line with the
-        <Mono>research campaign-freeze</Mono> command (the strategy manifest and research protocol must exist first).</Empty>}
-      {list.data?.map((c) => c.error
-        ? <Card key={c.campaign_id} title="Research campaign"><Banner tone="error">{c.error.message}</Banner>
-          <TechDetails rows={[["Campaign id", <Mono>{c.campaign_id}</Mono>], ["Error code", <Mono>{c.error.code}</Mono>]]} /></Card>
-        : (
-          <Card key={c.campaign_id} testId={`campaign-${c.campaign_id}`}
-            title={<><span title={c.campaign_id}>Research campaign · {fmt(c.manifest.n_strategies)} strategies</span> <Badge tone={c.progress.remaining === 0 ? "ok" : "info"}>
-              {c.progress.remaining === 0 ? "complete" : `${pctOf(c.progress.completed, c.progress.strategies)} done`}</Badge></>}
-            actions={<a className="btn btn-primary" href={href(`/runs/${c.campaign_id}`)} data-testid={`open-${c.campaign_id}`}>Open research browser</a>}>
-            <div className="kpis">
-              <Kpi label="Strategies" value={fmt(c.progress.strategies)} />
-              <Kpi label="Completed" value={fmt(c.progress.completed)} meter={c.progress.fraction_done} />
-              <Kpi label="Remaining" value={fmt(c.progress.remaining)} />
-              <Kpi label="Failed (retried on resume)" value={fmt(c.progress.failed)} />
-              <Kpi label="Runs" value={fmt(c.n_runs)} sub={c.latest_run ? `last: ${statusLabel(c.latest_run.status).toLowerCase()} · ${shortTime(c.latest_run.created_at)}` : "none yet"} />
-            </div>
-            <Governance c={c} />
-          </Card>))}
-    </div>
-  );
+  const head = <header className="page-head"><div><div className="eyebrow">Research</div><h1>Research runs</h1>
+    <p className="subtitle">Run frozen research campaigns from the desktop app. Runs continue in the background, are stored
+      permanently in this workspace and can be resumed after the app is closed.</p></div></header>;
+  if (list.error) return <div className="page" data-testid="runs-page">{head}<ErrorPanel error={list.error} title="Could not load campaigns" /></div>;
+  if (!list.data) return <div className="page" data-testid="runs-page">{head}<Loading label="Loading campaigns…" /></div>;
+  const broken = list.data.filter((c) => c.error).map((c) => (
+    <Card key={c.campaign_id} title="Research campaign"><Banner tone="error">{c.error!.message}</Banner>
+      <TechDetails rows={[["Campaign id", <Mono>{c.campaign_id}</Mono>], ["Error code", <Mono>{c.error!.code}</Mono>]]} /></Card>));
+  const ok = [...list.data.filter((c) => !c.error)].sort((x, y) => lastRunAt(y).localeCompare(lastRunAt(x)));
+  if (!ok.length) return <div className="page" data-testid="runs-page">{head}<ActiveJobBanner />{broken}
+    <Empty>No frozen campaign in this workspace yet. Freeze one from the command line with the
+      <Mono>research campaign-freeze</Mono> command (the strategy manifest and research protocol must exist first).</Empty></div>;
+  const cur = ok.find((c) => c.campaign_id === route.query.get("campaign")) ?? ok[0];
+  const switcher = ok.length > 1 ? (
+    <select className="input" aria-label="research campaign" data-testid="campaign-switch" value={cur.campaign_id}
+      onChange={(e: { target: HTMLSelectElement }) => go(`/runs?campaign=${e.target.value}`)}>
+      {ok.map((c) => <option key={c.campaign_id} value={c.campaign_id}>Research campaign · {fmt(c.manifest.n_strategies)} strategies ·
+        {" "}{c.latest_run ? `last run ${shortTime(c.latest_run.created_at)}` : "no runs yet"}</option>)}
+    </select>) : null;
+  return <CampaignPage key={cur.campaign_id} cid={cur.campaign_id} home={{ switcher, extra: broken }} />;
 }
 
-function ActiveJobBanner() {
+function ActiveJobBanner({ except }: { except?: string } = {}) {
   const [job, setJob] = useState<CampaignJob | null>(null);
   useEffect(() => {
     let live = true;
@@ -102,7 +97,7 @@ function ActiveJobBanner() {
     poll();
     return () => { live = false; window.clearTimeout(t); };
   }, []);
-  if (!job || job.kind !== "campaign" || CAMPAIGN_JOB_FINAL.has(job.state)) return null;
+  if (!job || job.kind !== "campaign" || CAMPAIGN_JOB_FINAL.has(job.state) || job.campaign_id === except) return null;
   return <Banner tone="info" testId="active-job">A research run is in progress — {plainText(job.live.phase)}.{" "}
     <a href={href(`/runs/${job.campaign_id}?job=${job.job_id}`)}>Show progress ›</a></Banner>;
 }
@@ -130,7 +125,7 @@ function TriCheckbox({ checked, indeterminate, onChange, label, testId }: {
     onChange={(e: { target: HTMLInputElement }) => onChange(e.target.checked)} />;
 }
 
-function CampaignPage({ cid }: { cid: string }) {
+function CampaignPage({ cid, home }: { cid: string; home?: { switcher: ReactNode; extra: ReactNode } }) {
   const route = useRoute();
   const { toast } = useApp();
   const det = useApi<CampaignDetail>(campaigns.detailUrl(cid));
@@ -187,9 +182,13 @@ function CampaignPage({ cid }: { cid: string }) {
   const latest = d.latest_run;
   return (
     <div className="page" data-testid="campaign-page">
-      <header className="page-head"><div><div className="eyebrow"><a href={href("/runs")}>Research runs</a></div>
-        <h1>Research browser</h1>
-        <p className="subtitle" title={d.campaign_id}>{plainText(d.data_line)}</p></div></header>
+      <header className="page-head"><div><div className="eyebrow">Research</div>
+        <h1>Research runs</h1>
+        <p className="subtitle" title={d.campaign_id}>Choose strategies below and run them; runs continue in the background, are stored
+          permanently in this workspace and can be resumed after the app is closed. {plainText(d.data_line)}</p></div>
+        {home?.switcher && <div className="actions">{home.switcher}</div>}</header>
+      <ActiveJobBanner except={cid} />
+      {home?.extra}
       {jobId && <LiveRun jobId={jobId} onFinished={reloadAll} onDismiss={() => setJobId(null)} />}
       {/* ---------------- All strategies view */}
       <Card title={<>All strategies ({fmt(tree.n_strategies)})</>} testId="all-strategies"
@@ -201,9 +200,10 @@ function CampaignPage({ cid }: { cid: string }) {
           <Kpi label="Total" value={fmt(tree.n_strategies)} />
           <Kpi label="Selected" value={fmt(sel.size)} sub={`${scope.families} of ${tree.families.length} families`} accent />
           <Kpi label="Completed (campaign)" value={fmt(d.progress.completed)} meter={d.progress.fraction_done} sub={pctOf(d.progress.completed, d.progress.strategies)} />
-          <Kpi label="Remaining (campaign)" value={fmt(d.progress.remaining)} />
+          <Kpi label="Remaining (campaign)" value={fmt(d.progress.remaining)}
+            sub={d.progress.failed ? `${fmt(d.progress.failed)} failed (retried on resume)` : "none failed"} />
           <Kpi label="Run status" value={<Badge tone={statusTone(latest?.status ?? "none")}>{latest?.status ? statusLabel(latest.status) : "no run yet"}</Badge>}
-            sub={latest ? shortTime(latest.updated_at ?? latest.created_at) : undefined} />
+            sub={latest ? `${fmt(d.runs.length)} run${d.runs.length === 1 ? "" : "s"} · last ${shortTime(latest.updated_at ?? latest.created_at)}` : undefined} />
         </div>
         <div className="actions">
           <Button kind="primary" onClick={start} busy={starting} busyLabel="Starting…" testId="run-research"
@@ -360,7 +360,7 @@ function FamilyResultsPage({ cid, fid }: { cid: string; fid: string }) {
   const d = res.data;
   return (
     <div className="page" data-testid="family-results">
-      <header className="page-head"><div><div className="eyebrow"><a href={href("/runs")}>Research runs</a> › <a href={href(`/runs/${cid}`)} title={cid}>Research browser</a></div>
+      <header className="page-head"><div><div className="eyebrow"><a href={href(`/runs?campaign=${cid}`)} title={cid}>Research runs</a></div>
         <h1>{d.name}</h1>
         <p className="subtitle">{d.hypothesis}</p></div></header>
       <div className="kpis">
@@ -398,7 +398,7 @@ function StrategyResultPage({ cid, fid, sid }: { cid: string; fid: string; sid: 
   const p = d.presentation;
   return (
     <div className="page" data-testid="strategy-result">
-      <header className="page-head"><div><div className="eyebrow"><a href={href(`/runs/${cid}`)} title={cid}>Research browser</a> › <a href={href(`/runs/${cid}/${fid}`)}>{d.family_name}</a></div>
+      <header className="page-head"><div><div className="eyebrow"><a href={href(`/runs?campaign=${cid}`)} title={cid}>Research runs</a> › <a href={href(`/runs/${cid}/${fid}`)}>{d.family_name}</a></div>
         <h1>{p.display_name} <Badge tone={statusTone(d.status)}>{statusLabel(d.status)}</Badge></h1>
         <p className="subtitle" data-testid="strategy-explanation">{p.explanation}</p></div>
         <div className="actions">{d.run_id && <a className="btn btn-primary" href={href(`/results/${d.run_id}`)}>Full run report</a>}

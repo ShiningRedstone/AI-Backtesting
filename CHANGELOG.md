@@ -11,6 +11,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | GitHub Actions workflow: every push builds `EdgeLab.exe` on Windows, smoke-tests it, publishes a pre-release `build-<branch>-<n>`, keeps 5 per branch | IMPLEMENTED (runs on GitHub Actions) |
 | App event times (updates, runs, searches, campaigns, builds) in the computer's local time zone; market/trade/period times unchanged | IMPLEMENTED |
 | Research runs page: estimated time remaining removed (counts and elapsed time kept) | IMPLEMENTED |
+| Research runs page shows the research browser directly (no "Open research browser" click); one merged view; a campaign switcher appears only with more than one campaign | IMPLEMENTED |
 | Seven tabs with sub-views (Strategies, Run backtest, Backtest results, Settings merge the old pages); old routes still work; AI Discovery off the menu, route kept | IMPLEMENTED, TESTED (browser e2e) |
 | Backtest results → Overview: the field (win rate vs reward to risk, net/gross, survivors, random controls, break-even curves), facts, breakdowns by target/entry/trailing/stop/direction/session, signal-exit vs fixed-target comparison, evaluation summary | IMPLEMENTED, TESTED |
 | Strategy panel (drawer summary): KPIs incl. dollars at risk, last 12 months, out-of-sample strip, rank, prop results per account with the evaluation simulator, rules in plain English, technical details | IMPLEMENTED, TESTED |
