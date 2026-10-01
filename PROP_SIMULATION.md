@@ -225,3 +225,17 @@ Schema 3 replaces the nested schema-2 blocks with a flat `rules:` map: every key
 status VERIFIED, ASSUMED_DEFAULT or CUSTOM and no null value. `edgelab.prop.profiles.customize(profile, {rule: value}, basis)`
 produces a CUSTOM new version; register it with `register_profile`. Every result reports the verified / assumed / custom
 counts and names the assumed rules; outcomes read "UNDER DEFAULT ASSUMED RULES" whenever an assumed rule is active.
+
+## Paper accounts (ADR-81)
+
+The same lifecycle (`simulate_lifecycle`, unchanged) also runs forward in **paper accounts** ("Prop & paper" tab). There,
+it is applied to the trades a strategy makes on new Dukascopy days, one attempt at a time:
+
+- An evaluation breach ends the attempt. The next attempt starts with the trades entered after the breach, and the reset
+  fee is charged (or the evaluation price, if no reset fee is entered).
+- A pass charges the activation fee and continues funded. Every payout is recorded.
+- A funded breach, the live-transition point or the payout limit ends the cycle, and a new evaluation is charged.
+- INCOMPATIBLE stops the account.
+
+Fees come from Settings → Prop account fees (workspace preferences, never guessed). Results stay labelled "under default
+assumed rules" and are never research results. See ARCHITECTURE.md ADR-81.

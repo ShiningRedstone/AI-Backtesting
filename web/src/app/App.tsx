@@ -34,8 +34,7 @@ const NAV: NavItem[] = [
   { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research"] },
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "results", "compare", "controls", "pipeline"] },
-  { path: "/prop", label: "Prop firm simulator", tid: "prop", icon: "shield", heads: ["prop"] },
-  { path: "/paper", label: "Paper trading", tid: "paper", icon: "pause", heads: ["paper"], planned: true },
+  { path: "/paper", label: "Prop & paper", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
@@ -47,20 +46,22 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
     { path: "/results", label: "All runs", head: "results" }, { path: "/compare", label: "Compare", head: "compare" },
     { path: "/controls", label: "Random controls", head: "controls" }, { path: "/pipeline", label: "Candidate pipeline", head: "pipeline" }],
+  paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
+    { path: "/prop", label: "Backtest prop check", head: "prop" }],
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
 };
 
 const tabOf = (head: string) => NAV.find((n) => n.heads.includes(head));
 
-function SubNav({ head }: { head: string }) {
+function SubNav({ head, sub }: { head: string; sub: string }) {
   const tab = tabOf(head);
   const subs = tab ? SUBTABS[tab.tid] : undefined;
   if (!subs) return null;
   return (
     <nav className="tabs subnav" aria-label={`${tab!.label} views`}>
       {subs.map((s) => (
-        <a key={s.path} href={href(s.path)} className={`tab${s.head === head ? " active" : ""}`} data-testid={`subnav-${s.head}`}
-          aria-current={s.head === head ? "page" : undefined}>{s.label}</a>))}
+        <a key={s.path} href={href(s.path)} className={`tab${s.head === sub ? " active" : ""}`} data-testid={`subnav-${s.head.replace("/", "-")}`}
+          aria-current={s.head === sub ? "page" : undefined}>{s.label}</a>))}
     </nav>
   );
 }
@@ -186,7 +187,7 @@ function ShellBody() {
           no broker connections</div>
       </nav>
       <div className="scrim" onClick={() => setMenu(false)} />
-      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} /><Page /></>}</main>
+      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} sub={active === "paper" && route.parts[1] === "new" ? "paper/new" : active} /><Page /></>}</main>
       <Toasts />
     </div>
   );

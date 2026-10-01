@@ -104,6 +104,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         svc.jobs                     # start the job manager: searches a dead process left `running` -> interrupted
     if warm:
         warm_caches(svc)
+        svc.paper.start()            # ADR-81: daily paper updates (launchers only, like the warm-up)
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = int(web.max_request_mb * 1024 * 1024)
     app.config["EDGELAB"] = {"root": root, "demo": demo, "services": svc, "web": web}
@@ -433,6 +434,46 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.post("/api/preferences/ui")
     def set_ui_preferences():
         return jsonify(call(svc.set_ui_preferences, body()))
+
+    # ------------------------------------------------------------------ paper trading (ADR-81)
+    PAPER_ID = re.compile(r"^PA_[0-9A-F]{12}$")
+    PROFILE_ID = re.compile(r"^[A-Z0-9_]{1,64}$")
+
+    @app.get("/api/paper/candidates")
+    def paper_candidates():
+        pid = _id(request.args.get("profile_id") or "", PROFILE_ID, "prop rule profile id")
+        return jsonify(call(svc.paper_candidates, pid, request.args.get("show_all") in ("1", "true")))
+
+    @app.get("/api/paper/accounts")
+    def paper_accounts():
+        return jsonify(call(svc.paper_accounts))
+
+    @app.get("/api/paper/accounts/<aid>")
+    def paper_account(aid):
+        return jsonify(call(svc.paper_account, _id(aid, PAPER_ID, "paper account id")))
+
+    @app.post("/api/paper/batches")
+    def paper_batch():
+        b = body()
+        sids = b.get("strategy_ids")
+        if not isinstance(sids, list) or not sids or not all(isinstance(x, str) and STRATEGY_ID.match(x) for x in sids):
+            raise _bad("strategy_ids must be a non-empty list of strategy ids")
+        pid = _id(b.get("profile_id") or "", PROFILE_ID, "prop rule profile id")
+        return jsonify(call(svc.paper_start, sids, pid)), 201
+
+    @app.post("/api/paper/accounts/<aid>/<action>")
+    def paper_action(aid, action):
+        if action not in ("stop", "resume", "delete"):
+            raise _bad("action must be stop, resume or delete")
+        return jsonify(call(svc.paper_set_status, _id(aid, PAPER_ID, "paper account id"), action))
+
+    @app.get("/api/paper/feed")
+    def paper_feed():                               # lock-free: files only
+        return jsonify(svc.paper_feed_status())
+
+    @app.post("/api/paper/feed/update")
+    def paper_feed_update():
+        return jsonify(svc.paper_update_now()), 202
 
     @app.get("/api/preferences/research-processes")
     def research_processes():                       # ADR-77: CPU cores research runs use (choice, default, max)

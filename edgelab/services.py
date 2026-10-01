@@ -70,6 +70,12 @@ def _jsonable(x: Any) -> Any:
 _READ_STORE: contextvars.ContextVar = contextvars.ContextVar("edgelab_read_store", default=None)
 
 
+def _paper_balance(st: Mapping) -> float | None:
+    """Current paper balance: the latest attempt's evaluation or funded balance (None before the first trade)."""
+    att = (st or {}).get("attempts") or []
+    return att[-1].get("balance") if att else None
+
+
 class Services:
     # ADR-78: inside `read_context()` (page requests) `store` is a pooled READ-ONLY connection, so reads never wait
     # for the service lock a research run holds; everywhere else it is the one writer connection. The writer lives in
@@ -266,7 +272,8 @@ class Services:
 
     # ------------------------------------------------------------ display preferences (ADR-74; outside the config hash)
     UI_PREF_DEFAULTS = {"favorites": [], "prop_criteria_profile": "LUCID_LUCIDFLEX_50K", "show_ids": False,
-                        "show_readonly": False, "research_processes": None}       # None = all cores but one (ADR-77)
+                        "show_readonly": False, "research_processes": None,       # None = all cores but one (ADR-77)
+                        "prop_fees": {}}                                          # ADR-81: per rule profile, USD
 
     def ui_preferences(self) -> dict:
         """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
@@ -275,6 +282,30 @@ class Services:
         raw = load_prefs(self.data_root).get("ui") or {}
         out = {k: raw.get(k, v) for k, v in self.UI_PREF_DEFAULTS.items()}
         out["favorites"] = [x for x in out["favorites"] if isinstance(x, str)]
+        return out
+
+    def _check_prop_fees(self, v) -> dict:
+        """{profile_id: {eval_price, reset_fee, activation_fee}}: non-negative USD amounts or null (ADR-81)."""
+        from edgelab.prop.service import default_profiles
+        if not isinstance(v, Mapping):
+            raise ValueError("prop_fees must be an object {profile_id: {eval_price, reset_fee, activation_fee}}")
+        known = {p["profile_id"] for p in default_profiles(self.root)}
+        out = {}
+        for pid, f in v.items():
+            if pid not in known:
+                raise ValueError(f"unknown prop rule profile {pid!r}")
+            if not isinstance(f, Mapping) or set(f) - {"eval_price", "reset_fee", "activation_fee"}:
+                raise ValueError("each fee entry may only have eval_price, reset_fee, activation_fee")
+            row = {}
+            for k in ("eval_price", "reset_fee", "activation_fee"):
+                x = f.get(k)
+                if x in (None, ""):
+                    row[k] = None
+                    continue
+                if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(float(x)) or x < 0:
+                    raise ValueError(f"{pid}.{k} must be a non-negative amount in USD or empty")
+                row[k] = float(x)
+            out[pid] = row
         return out
 
     def prop_profile_choices(self) -> list[dict]:
@@ -293,6 +324,8 @@ class Services:
             if k in ("show_ids", "show_readonly"):
                 if not isinstance(v, bool):
                     raise ValueError(f"{k} must be true or false")
+            elif k == "prop_fees":
+                v = self._check_prop_fees(v)
             elif k == "research_processes":
                 from edgelab.research.campaign import max_processes
                 if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= max_processes()):
@@ -394,6 +427,9 @@ class Services:
                 if d.is_dir():
                     shutil.rmtree(d)
                     removed.append(name)
+            from edgelab.paper import store as paper_store       # ADR-81: paper accounts are results; the feed is price data
+            if paper_store.delete_records(self.data_root):
+                removed.append("paper/accounts")
             prefs = load_prefs(self.data_root)
             if prefs.get("ui"):
                 prefs["ui"] = {**prefs["ui"], "favorites": []}
@@ -1055,6 +1091,146 @@ class Services:
         if job is None:
             raise KeyError(f"backtest job {job_id} is not known to this app session")
         return dict(job)
+
+    # ============================================================ PAPER TRADING (ADR-81)
+    @property
+    def paper(self):
+        """The background paper manager (downloads completed days, recomputes running accounts); started by the
+        launchers, created lazily everywhere else."""
+        m = self.__dict__.get("_paper")
+        if m is None:
+            from edgelab.paper.manager import PaperManager
+            m = self.__dict__["_paper"] = PaperManager(self)
+        return m
+
+    def paper_candidates(self, profile_id: str, show_all: bool = False) -> dict:
+        """Strategies to choose from: survivors under ``profile_id`` (latest in-sample run), or every tested strategy."""
+        from edgelab.prop.service import default_profiles
+        from edgelab.research import overview as ov
+        from edgelab.research.results_view import _latest_scoped
+        if profile_id not in {p["profile_id"] for p in default_profiles(self.root)}:
+            raise ValueError(f"unknown prop rule profile {profile_id!r}")
+        rows, _ = _latest_scoped(self, "in_sample", None)
+        running = {a["strategy_id"] for a in self._paper_store().list_accounts(self.data_root) if a.get("status") == "running"
+                   and a["profile_id"] == profile_id}
+        out = []
+        for x in rows:
+            ref = x["ref"]
+            if not ref or not ref.get("trade_count"):
+                continue
+            r = ov.apply_criteria(ref, profile_id)
+            if not show_all and not r["survivor"]:
+                continue
+            f = x["facets"]
+            out.append({"strategy_id": f["strategy_id"], "display_name": f.get("display_name") or f.get("name"),
+                        "family_id": f.get("family_id"), "timeframe": f.get("timeframe"), "survivor": r["survivor"],
+                        "expectancy_r": ref.get("expectancy_r"), "trades": ref.get("trade_count"),
+                        "run_id": ref.get("run_id"), "already_running": f["strategy_id"] in running})
+        return _jsonable({"profile_id": profile_id, "show_all": bool(show_all), "strategies": out,
+                          "n_survivors": sum(1 for o in out if o["survivor"])})
+
+    @staticmethod
+    def _paper_store():
+        from edgelab.paper import store
+        return store
+
+    def paper_start(self, strategy_ids: list, profile_id: str, now=None) -> dict:
+        """Start one paper account per strategy (shared settings): frozen strategy definitions, the profile's current
+        registered version, the fee snapshot from Settings, start = the next trading date that has not begun."""
+        from edgelab.paper import feed
+        from edgelab.prop.service import default_profiles
+        store = self._paper_store()
+        if not isinstance(strategy_ids, list) or not strategy_ids or not all(isinstance(x, str) for x in strategy_ids):
+            raise ValueError("choose at least one strategy")
+        if len(set(strategy_ids)) != len(strategy_ids):
+            raise ValueError("a strategy is listed twice")
+        prof = next((p for p in default_profiles(self.root) if p["profile_id"] == profile_id), None)
+        if prof is None:
+            raise ValueError(f"unknown prop rule profile {profile_id!r}")
+        fees = (self.ui_preferences().get("prop_fees") or {}).get(profile_id) or {}
+        if fees.get("eval_price") is None:
+            raise ValueError("enter the evaluation price for this prop account in Settings → Prop account fees first")
+        docs = [self.library.load(sid) for sid in strategy_ids]          # KeyError for an unknown strategy
+        unit = prof["rules"]["account.quantity_unit"]["value"] if "rules" in prof else None
+        wrong = [sid for sid, d in zip(strategy_ids, docs)
+                 if ((d.get("definition") or {}).get("sizing") or {}).get("contract") != unit]
+        if wrong:
+            raise ValueError(f"{len(wrong)} strateg{'y is' if len(wrong) == 1 else 'ies are'} not sized in {unit} "
+                             f"contracts, so the prop account cannot trade {'it' if len(wrong) == 1 else 'them'}")
+        start = feed.first_unstarted_date(self.cfg, now)
+        same = {a["strategy_id"] for a in store.list_accounts(self.data_root) if a.get("status") == "running"
+                and a["profile_id"] == profile_id and a["start_date"] == start.isoformat()}
+        if same & set(strategy_ids):                      # an exact copy would trade identically: refuse, never count twice
+            raise ValueError(f"{len(same & set(strategy_ids))} of these strategies already have a running paper account "
+                             "on this prop account starting the same day")
+        batch_id = store.new_id("PB")
+        created = []
+        for sid, doc in zip(strategy_ids, docs):
+            acct = {"account_id": store.new_id("PA"), "batch_id": batch_id, "created_at": store.now_iso(),
+                    "strategy_id": sid, "display_name": doc.get("display_name") or (doc.get("definition") or {}).get("name"),
+                    "definition": doc["definition"], "logic_hash": doc.get("logic_hash"),
+                    "definition_hash": doc.get("definition_hash"),
+                    "profile_id": profile_id, "profile_version": prof["version"],
+                    "fees": dict(fees), "start_date": start.isoformat(),
+                    "start_ts": feed.session_open_utc(self.cfg, start).isoformat(), "status": "running",
+                    "kind": "paper", "label": "simulated forward trading; never a research result or trial"}
+            store.save_account(self.data_root, acct)
+            created.append(acct["account_id"])
+        store.save_batch(self.data_root, {"batch_id": batch_id, "created_at": store.now_iso(), "profile_id": profile_id,
+                                          "profile_version": prof["version"], "strategy_ids": list(strategy_ids),
+                                          "accounts": created, "fees": dict(fees), "start_date": start.isoformat()})
+        self.paper.wake()
+        return _jsonable({"batch_id": batch_id, "accounts": created, "start_date": start.isoformat()})
+
+    def paper_accounts(self) -> list[dict]:
+        store = self._paper_store()
+        out = []
+        for a in store.list_accounts(self.data_root):
+            st = store.load_state(self.data_root, a["account_id"]) or {}
+            out.append({k: a.get(k) for k in ("account_id", "batch_id", "created_at", "strategy_id", "display_name",
+                                              "profile_id", "profile_version", "start_date", "status", "stop_reason")}
+                       | {"state": st.get("state") or ("waiting" if a.get("status") == "running" else "stopped"),
+                          "current_attempt": st.get("current_attempt", 0), "attempts": len(st.get("attempts") or []),
+                          "passes": st.get("passes", 0), "payouts": len(st.get("payouts") or []),
+                          "trader_payouts": st.get("trader_payouts", 0.0), "fees_total": st.get("fees_total", 0.0),
+                          "net": st.get("net", 0.0), "n_trades": st.get("n_trades", 0),
+                          "balance": _paper_balance(st), "last_day": (st.get("feed") or {}).get("last_day"),
+                          "computed_at": st.get("computed_at")})
+        return _jsonable(out)
+
+    def paper_account(self, account_id: str) -> dict:
+        store = self._paper_store()
+        a = store.load_account(self.data_root, account_id)
+        st = store.load_state(self.data_root, account_id)
+        return _jsonable({"account": {k: v for k, v in a.items() if k != "definition"}, "state": st})
+
+    def paper_set_status(self, account_id: str, action: str) -> dict:
+        store = self._paper_store()
+        a = store.load_account(self.data_root, account_id)
+        if action == "delete":
+            store.delete_account(self.data_root, account_id)
+            return {"deleted": account_id}
+        if action not in ("stop", "resume"):
+            raise ValueError("action must be stop, resume or delete")
+        a.update(status="stopped" if action == "stop" else "running", stop_reason="stopped by you" if action == "stop"
+                 else None, stopped_at=store.now_iso() if action == "stop" else None)
+        store.save_account(self.data_root, a)
+        if action == "resume":
+            self.paper.wake()
+        return _jsonable({k: v for k, v in a.items() if k != "definition"})
+
+    def paper_feed_status(self) -> dict:
+        from edgelab.paper import feed
+        return _jsonable({**feed.status(self.data_root), "next_start_date": feed.first_unstarted_date(self.cfg).isoformat(),
+                          "manager": {k: v for k, v in self.paper.status.items() if k != "trace"}})
+
+    def paper_update_now(self) -> dict:
+        m = self.paper
+        if m.thread is None:                              # not started by a launcher (tests, embedding): run here
+            threading.Thread(target=m.run_once, daemon=True, name="munyun-paper-once").start()
+        else:
+            m.wake()
+        return {"started": True}
 
     # ============================================================ WEB UI (Phase 3.5)
     @staticmethod

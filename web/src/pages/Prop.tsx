@@ -35,7 +35,7 @@ function PropHome() {
   const label = (x: ExplorerRow) => `${x.display_name ?? strategyLabel(x.name)}${x.synthetic ? " · synthetic" : ""}`;
   return (
     <div className="page" data-testid="prop-page">
-      <header className="page-head"><div><h1>Prop firm simulator</h1></div></header>
+      <header className="page-head"><div><h1>Backtest prop check</h1></div></header>
       <Card title="Strategy" testId="prop-strategy-card">
         <div className="inline">
           <input className="input" style={{ width: 240 }} placeholder="Search tested strategies…" value={q} aria-label="search tested strategies"

@@ -755,3 +755,4 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 
 /* ADR-79: badges that stay side by side on one line (Strategies list status column) */
 .badges-inline { display: inline-flex; flex-wrap: nowrap; gap: 4px; align-items: center; white-space: nowrap; }
+.nowrap { white-space: nowrap; }

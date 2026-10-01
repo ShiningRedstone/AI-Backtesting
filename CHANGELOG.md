@@ -3,6 +3,19 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Paper trading in simulated prop accounts (ADR-81)
+
+| Item | Status |
+|---|---|
+| "Prop & paper" tab: Paper accounts, Start paper trading (batch select survivors or any tested strategy, shared prop account and fees), Backtest prop check (the previous simulator, unchanged) | IMPLEMENTED, TESTED (API; browser test run) |
+| Daily forward data: completed Dukascopy USA 100 trading days (1-minute BID + ASK) downloaded with dukascopy-python at start-up, every 30 minutes and on "Update now"; stored per day with SHA-256; validated through the normal import gate; never a research dataset | IMPLEMENTED, TESTED (synthetic downloader: holidays skipped, a failed day never leaves a hole, tampered day refused, one-sided/crossed quotes refused) |
+| Live Dukascopy download from the user's PC | REQUIRES REAL DATA (the build environment cannot reach Dukascopy) |
+| Accounts start on the next trading day; evaluation failure → new attempt with the reset fee (or the evaluation price); pass → activation fee, funded trading with every payout; funded loss / live point / payout limit → new evaluation; net = payouts (your share) − fees | IMPLEMENTED, TESTED (known answers for the attempt and fee rules; forward-only; adding days never changes earlier trades) |
+| Settings → Prop account fees (evaluation price, reset fee, activation fee per account); nothing starts without an evaluation price | IMPLEMENTED, TESTED |
+| Percentage-of-balance sizing uses the paper account's own balance (optional engine switch `equity_from_ts`, off for every backtest) | IMPLEMENTED, TESTED (backtests byte-identical without it) |
+| Paper results are never runs, trials, protocol looks or research results; workspace reset deletes paper accounts and keeps the downloaded data | IMPLEMENTED, TESTED |
+| Backtests, research runs, prop rules, trial counting | UNCHANGED |
+
 ## Research runs no longer stop on "Access is denied" (ADR-80)
 
 | Item | Status |

@@ -23,7 +23,7 @@ result under stated assumptions*, not a forecast.
 | 6 Anti-overfitting | train/validation/OOS, walk-forward, Monte Carlo, sensitivity, random-control suites | planned |
 | 7 Prop simulator | evaluation, funded, payout, multi-account | **prop-account simulation layer done** (requested as "Phase 6"): versioned rule sets, evaluation rules, multi-account, lineage, web page (PROP_SIMULATION.md); funded/payout phases not built |
 | 8 Reports | HTML dashboard, PDF | planned |
-| 9–11 | paper trading, notifications, human discretion, isolated live adapter (default off) | planned (the separately requested "Phase 9" built the Dukascopy research source + AI discovery instead; paper trading not started) |
+| 9–11 | paper trading, notifications, human discretion, isolated live adapter (default off) | planned (the separately requested "Phase 9" built the Dukascopy research source + AI discovery instead; paper trading in simulated prop accounts added later as ADR-81; notifications, discretion and live not started) |
 
 ## Quickstart
 

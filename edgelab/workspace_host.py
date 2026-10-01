@@ -33,6 +33,9 @@ def close_app(app) -> None:
     if app is None:
         return
     svc = app.config["EDGELAB"]["services"]
+    pm = svc.__dict__.get("_paper")                 # ADR-81: stop this workspace's paper updates
+    if pm is not None:
+        pm.stop()
     try:
         jm = svc._jobs
         if jm is not None:

@@ -90,6 +90,10 @@ ADR-79: Run backtest = Research runs | Single backtest (Experiments tab removed;
 Version 0.3.0 (after the V0.2 save point): version bump only, no behaviour change.
 ADR-80: `core/fsutil.atomic_write_text` (unique temp + `replace_with_retry` on Windows sharing violations) for run records,
 scopes and run names; a research run no longer dies with WinError 5 while a page reads its run record.
+ADR-81: paper trading in simulated prop accounts (`edgelab/paper/`: `feed.py` daily Dukascopy download via dukascopy-python, in-memory
+validated feed, never a research dataset; `engine.py` attempts/fees around the unchanged lifecycle; `store.py` JSON under `<data>/paper/`;
+`manager.py` 30-min thread, launchers only); tab "Prop & paper" (Paper accounts, Start paper trading, Backtest prop check); fees in
+`ui.prop_fees`; engine option `account.equity_from_ts` (absent = byte-identical backtests). Paper results are never runs or trials.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -120,10 +124,9 @@ remains. Do not rely on this file alone.
   - Run backtest: **Research runs** (default), Single backtest. The Experiments tab was removed; `/research` →
     `/runs`, and job/result deep links still work.
   - Backtest results: Overview, Strategies explorer, All runs, Compare, Random controls, Candidate pipeline
-  - Prop firm simulator
-  - Paper trading (planned)
-  - Settings, including CPU cores for research runs, the pass-criteria prop account, display switches and
-    delete-all.
+  - Prop & paper: Paper accounts, Start paper trading (batch), Backtest prop check (the old simulator)
+  - Settings, including CPU cores for research runs, the pass-criteria prop account, prop account fees, display
+    switches and delete-all.
 - **Design decisions the user made:**
   - Dark UI. Decorative surfaces use a deep-rose → plum gradient (`--warm-gradient`); red is ONLY for losses,
     negative values and errors.
@@ -264,11 +267,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..80.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..81.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..80, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..81, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -332,4 +335,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-80). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-81). Update `README.md` status for phases.

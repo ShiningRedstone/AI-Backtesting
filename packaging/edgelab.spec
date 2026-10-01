@@ -28,7 +28,9 @@ import importlib.util
 if importlib.util.find_spec("webview") is None:
     raise SystemExit("pywebview is not installed in the build environment: pip install -r packaging/requirements-build.txt")
 datas += collect_data_files("webview")
-hidden = collect_submodules("edgelab") + collect_submodules("webview")
+hidden = collect_submodules("edgelab") + collect_submodules("webview") + collect_submodules("dukascopy_python")
+if importlib.util.find_spec("dukascopy_python") is None:          # paper-trading feed (ADR-81)
+    raise SystemExit("dukascopy-python is not installed in the build environment: pip install -r packaging/requirements-build.txt")
 if sys.platform == "win32":
     hidden += ["clr", "clr_loader"]                                     # pythonnet (WinForms + WebView2 host)
 

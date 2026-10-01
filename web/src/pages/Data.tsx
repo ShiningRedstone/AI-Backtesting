@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../api/client";
-import type { DatasetRow, GapReport, InstrumentIdentity, PreferredDataset, RiskPreference, WorkspaceState } from "../api/types";
+import type { DatasetRow, GapReport, InstrumentIdentity, PaperFees, PreferredDataset, RiskPreference, WorkspaceState } from "../api/types";
 import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
@@ -353,6 +353,7 @@ export function SettingsPage() {
       <div className="grid-cards">{wsCard}<RiskPerTradeCard /></div>
       <div className="grid-cards"><PropCriteriaCard /><DisplayCard /></div>
       <div className="grid-cards"><ResearchCoresCard /></div>
+      <PropFeesCard />
       <ResetCard />
       <ReadOnly>
       <h3>System status</h3>
@@ -449,6 +450,43 @@ function ResearchCoresCard() {
   );
 }
 
+/** ADR-81: what each prop account costs (paper trading charges these). Nothing is assumed: empty = not entered. */
+function PropFeesCard() {
+  const { prefs, setPref, toast } = useApp();
+  const KEYS = ["eval_price", "reset_fee", "activation_fee"] as const;
+  const saved = prefs.prop_fees ?? {};
+  const [draft, setDraft] = useState<Record<string, Record<string, string>>>({});
+  const [busy, setBusy] = useState(false);
+  const shown = (pid: string, k: string) => draft[pid]?.[k] ?? (saved[pid]?.[k as keyof PaperFees] != null ? String(saved[pid][k as keyof PaperFees]) : "");
+  const set = (pid: string, k: string, v: string) => setDraft((d) => ({ ...d, [pid]: { ...(d[pid] ?? {}), [k]: v.replace(/[^0-9.]/g, "") } }));
+  const save = () => {
+    const out: Record<string, PaperFees> = {};
+    for (const p of prefs.profile_choices ?? []) {
+      const row = Object.fromEntries(KEYS.map((k) => [k, shown(p.profile_id, k) === "" ? null : Number(shown(p.profile_id, k))])) as unknown as PaperFees;
+      if (KEYS.some((k) => row[k] != null)) out[p.profile_id] = row;
+    }
+    setBusy(true);
+    setPref({ prop_fees: out }).then(() => { setDraft({}); toast("ok", "Prop account fees saved"); })
+      .catch((e: Error) => toast("error", e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <Card title="Prop account fees" testId="settings-prop-fees">
+      <TableWrap><table className="dense">
+        <thead><tr><th>Prop account</th><th>Evaluation price ($)</th><th>Reset fee ($)</th><th>Activation fee ($)</th></tr></thead>
+        <tbody>{(prefs.profile_choices ?? []).map((p) => (
+          <tr key={p.profile_id}><td>{p.name}</td>{KEYS.map((k) => (
+            <td key={k}><input className="input" style={{ width: 110 }} inputMode="decimal" value={shown(p.profile_id, k)} placeholder="—"
+              aria-label={`${p.name} ${k.replace("_", " ")}`} data-testid={`fee-${p.profile_id}-${k}`}
+              onChange={(e: { target: HTMLInputElement }) => set(p.profile_id, k, e.target.value)} /></td>))}</tr>))}
+        </tbody></table></TableWrap>
+      <div className="actions"><Button small kind="primary" onClick={save} busy={busy} disabled={!Object.keys(draft).length} testId="fees-save">Save fees</Button></div>
+      <p className="small muted">Paper trading charges these: the evaluation price for every new evaluation, the reset fee after a failed evaluation (the
+        evaluation price again if no reset fee is entered) and the activation fee after a pass. Enter the prices you actually pay; Munyun Lab never
+        guesses them, and paper trading on an account needs at least its evaluation price. Backtests are not affected.</p>
+    </Card>
+  );
+}
+
 /** Delete every strategy and result, keeping the price data. Irreversible: the user types DELETE. */
 function ResetCard() {
   const { toast, reloadPrefs } = useApp();
@@ -464,8 +502,8 @@ function ResetCard() {
   return (
     <Card title="Delete all strategies and results" testId="settings-reset">
       <p className="small">Deletes every strategy, backtest and its trades, research run and campaign (with its frozen strategy list), experiment,
-        random control, prop simulation, AI proposal, research protocol with its trial count, favorites and run names. <b>Keeps</b> the imported
-        price data, its import files, the settings above and the configuration. This cannot be undone.</p>
+        random control, prop simulation, paper account, AI proposal, research protocol with its trial count, favorites and run names. <b>Keeps</b> the
+        imported price data, its import files, the downloaded paper-trading market data, the settings above and the configuration. This cannot be undone.</p>
       <div className="inline">
         <input className="input" style={{ width: 200 }} placeholder='Type DELETE to confirm' value={text} aria-label="type DELETE to confirm"
           data-testid="reset-confirm" onChange={(e: { target: HTMLInputElement }) => setText(e.target.value)} />

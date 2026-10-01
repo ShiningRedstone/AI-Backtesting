@@ -213,6 +213,14 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
     if not (acct.get("starting_equity", 0) > 0):
         raise BacktestError("account.starting_equity must be > 0")
     equity = float(acct["starting_equity"]) if sizing.get("mode") == "equity_risk" else None
+    # ADR-81 (paper accounts only): equity starts counting at this time; trades entered earlier never change it.
+    # Absent (every research backtest) -> exactly the previous behaviour.
+    eq_from = acct.get("equity_from_ts")
+    if eq_from is None:
+        eq_from_ns = None
+    else:
+        _t = pd.Timestamp(eq_from)
+        eq_from_ns = int((_t.tz_convert("UTC") if _t.tzinfo else _t.tz_localize("UTC")).value)
     last_exit_bar, blocked_days = -10**12, set()
     STOP_REASONS, TARGET_REASONS = ("STOP", "STOP_GAP", "TRAIL_STOP", "TRAIL_STOP_GAP"), ("TARGET", "TARGET_GAP")
     ts_ns, tf_ns = bars.ts_ns, np.int64(bars.tf_minutes) * NS_PER_MIN
@@ -327,7 +335,7 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
         cost_usd = base_total * m
         risk_usd = risk_pts * pv * n_c
         k = x["exit_bar"]
-        if equity is not None:
+        if equity is not None and (eq_from_ns is None or int(ts_ns[e.bar]) >= eq_from_ns):
             equity += gross_usd - cost_usd          # realised net P&L: known to every LATER signal, never to this one
         rows.append({
             "signal_bar": i, "signal_ts": pd.Timestamp(int(ts_ns[i] + tf_ns), tz="UTC"),
@@ -420,6 +428,8 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
             "account": acct.get("name", "run parameter"), "starting_equity": acct["starting_equity"],
             "final_equity": equity,
             "path_dependent": "sizes depend on earlier trades of THIS run (a different window or start changes them)"}
+        if eq_from_ns is not None:                  # ADR-81 paper accounts only
+            assumptions["equity_sizing"]["equity_from_ts"] = pd.Timestamp(eq_from_ns, tz="UTC").isoformat()
     if sig.max_trades_per_day or sig.exit_cooldown_bars or sig.block_after:
         assumptions["strategy_trade_management"] = {
             "max_trades_per_day": sig.max_trades_per_day, "exit_cooldown_bars": sig.exit_cooldown_bars,

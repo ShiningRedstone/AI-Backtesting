@@ -1983,3 +1983,62 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - A progress update (status preflight/running) that still cannot be written after every retry is skipped; the next
   update rewrites the whole record. A final status (completed, failed, cancelled, ...) is never skipped.
 - No change to what a research run computes or stores in the database.
+
+### ADR-81 Paper trading in simulated prop accounts ("Prop & paper" tab)
+- **What it is.** Chosen strategies (survivors by default, any tested strategy behind "Show all") trade NEW market days
+  forward, each in its own simulated prop account (`edgelab/paper/`). Batch start: one account per strategy, with shared
+  settings (prop account, fee snapshot). The account starts on the next trading date whose session has not begun
+  (`feed.first_unstarted_date`), so it never sees a bar that existed when it was started.
+- **Separate from research (principle 12).** Paper accounts are JSON records under `<data>/paper/` (`accounts/<PA_id>/`
+  `account.json` + `state.json`, `batches/<PB_id>.json`). They are never runs, trials, protocol looks or research
+  datasets, so the protocol gate never sees them. A workspace reset deletes the paper accounts and keeps the feed (price
+  data).
+- **Feed (`paper/feed.py`).**
+  - Completed Dukascopy trading days (`DUKASCOPY_USATECH_OBSERVED`, after the 16:15 NY close plus 45 min), downloaded
+    with `dukascopy-python` (MIT): `E_NQ-100`, 1-minute, BID and ASK, epoch ms → UTC bar open. This is the same call
+    and convention as the research file.
+  - `combine_day` refuses a one-sided timestamp inside the day or a negative spread. A day with no bars is skipped
+    (holiday) and logged. One CSV per day with a SHA-256 manifest; a stored day is never overwritten.
+  - `update` works in date order and stops at the first failed or refused day, so the stored days never have a hole.
+  - `build_feed` re-checks every day's hash and runs the production `import_dataset` (`dukascopy_utc_csv`, BID price
+    basis, ASK OHLC, derived 5/15/30/60m) into an in-memory store. It uses the same validation limits as research
+    data, and starts 40 trading days before the earliest account start (indicator warm-up).
+  - `verify_against` compares a downloaded day with a research dataset bar by bar (BID and ASK OHLC).
+- **Engine (`paper/engine.py`).**
+  - Each account's frozen strategy definition is compiled and run on the feed through the unchanged
+    `run_backtest`: same compiler, causal features, directional BID/ASK cost scenario and MNQ contract spec. Only
+    trades entered at or after the account start count.
+  - `run_attempts` wraps the unchanged `simulate_lifecycle` per attempt:
+    - Evaluation breach: the attempt failed; charge the reset fee, else the evaluation price; the next attempt takes
+      trades entered after the breach.
+    - Not passed by the end of the data: in progress.
+    - Pass: charge the activation fee (if entered) and record every payout.
+    - Funded breach, live-transition point or payout limit: the cycle ends and a new evaluation starts (evaluation
+      price).
+    - INCOMPATIBLE (e.g. more than the account's micros): the account stops with the reason.
+  - Each finished attempt keeps only the trades entered up to its end.
+  - Net = trader payout share − all fees.
+- **Equity sizing.** One additive engine option, `account["equity_from_ts"]` (default absent, so backtests are
+  byte-identical; tested by `trades_hash`): equity starts counting at that time, so `equity_risk` strategies size from
+  the attempt's own balance, which restarts at each attempt. Payout withdrawals do not lower that sizing balance inside
+  a funded cycle; the UI states this.
+- **Fees.** Workspace preference `ui.prop_fees` (`{profile_id: {eval_price, reset_fee, activation_fee}}`, USD,
+  non-negative or null; outside the config hash), edited in Settings → Prop account fees. A start is refused without
+  an evaluation price, and for strategies not sized in the profile's quantity unit (MNQ). An exact duplicate (same
+  strategy, profile and start date) is refused.
+- **Updates (`paper/manager.py`).** A daemon thread, started by the launchers (`create_app(warm=True)`), runs at start
+  and every 30 min: download missing completed days, rebuild the feed, recompute every running account (deterministic,
+  full recompute; adding a day never changes earlier trades). It never takes the service lock. "Update now" wakes it.
+  Stopped accounts are not updated; a resumed account catches up. Errors are shown and retried at the next check.
+- **API.** `GET /api/paper/candidates`, `GET /api/paper/accounts[/<PA_id>]`, `POST /api/paper/batches`,
+  `POST /api/paper/accounts/<PA_id>/stop|resume|delete`, `GET /api/paper/feed`, `POST /api/paper/feed/update`.
+- **UI.** The tab "Prop & paper" replaces "Prop firm simulator" and "Paper trading". Its sub-tabs:
+  - Paper accounts (`/paper`): data status with "Update now", totals, account table, and a detail drawer with
+    attempts, a cumulative P&L chart, payouts, fees and trades.
+  - Start paper trading (`/paper/new`): prop account, fees, first trading day, candidate checkboxes with select all.
+  - Backtest prop check (`/prop`): the existing simulator, unchanged.
+- **Packaging.** `dukascopy-python` is in `requirements.txt`, `packaging/requirements-build.txt` and the PyInstaller hidden
+  imports (the build refuses without it). The packaged smoke test checks `downloader_available`.
+- **Not verified here.** The build environment cannot reach Dukascopy (proxy), so the live download is exercised only
+  through the injected synthetic fetcher (`tests/paper_fixture.py`). The first real download happens on the user's
+  machine.

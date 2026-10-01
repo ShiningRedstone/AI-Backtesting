@@ -208,6 +208,9 @@ def _main(argv=None) -> int:
     check(api(base_url, "/api/health").get("backend") == "ok", "the app keeps running after a failed check")
     for route in ("/api/overview", "/api/explorer/strategies?scope=any", "/api/research/dashboard?include_synthetic=1", "/api/pipeline"):
         check(isinstance(api(base_url, route), dict), f"{route} responds")
+    pf = api(base_url, "/api/paper/feed")
+    check(pf.get("downloader_available") is True, "paper trading: the Dukascopy downloader is bundled")
+    check(api(base_url, "/api/paper/accounts") == [], "paper trading: no accounts in a fresh workspace (nothing downloaded)")
     print("\n11. datasets and UI workflows (same API the UI calls)")
     ds = api(base_url, "/api/datasets")
     check(len(ds) >= 2, f"datasets listed ({len(ds)})")

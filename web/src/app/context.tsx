@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api, ApiError, viewCache } from "../api/client";
-import type { BuilderOptions } from "../api/types";
+import type { BuilderOptions, PaperFees } from "../api/types";
 
 interface Toast { id: number; kind: "ok" | "error" | "info"; text: string }
 /** Workspace display preferences (ADR-74): favorites, the prop account for pass criteria, and the two switches. */
 export interface UiPrefs { favorites: string[]; prop_criteria_profile: string; show_ids: boolean; show_readonly: boolean;
-  profile_choices?: { profile_id: string; name: string }[] }
+  profile_choices?: { profile_id: string; name: string }[]; prop_fees?: Record<string, PaperFees> }
 const PREF_DEFAULTS: UiPrefs = { favorites: [], prop_criteria_profile: "LUCID_LUCIDFLEX_50K", show_ids: false, show_readonly: false };
 interface AppState {
   options: BuilderOptions | null; optionsError: ApiError | null; demo: boolean;

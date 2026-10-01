@@ -450,6 +450,14 @@ Then Inspect file → Import. On the 5m row, choose "Set preferred".
 - It reports coverage per year and missing trading days.
 - Nothing is filled or excluded.
 
+## Paper-trading feed (ADR-81)
+
+Paper accounts use a separate daily feed: the same Dukascopy call as above (`E_NQ-100`, 1-minute, BID and ASK, via
+`dukascopy-python`), one completed trading day at a time. It is stored under `<data>/paper/feed/days/` with a SHA-256
+manifest. Each update builds it through the normal import pipeline and validation limits (profile `dukascopy_utc_csv`)
+into a temporary in-memory store. It is never stored as a research dataset, so it never mixes with research data or the
+protocol holdout.
+
 ## Audited source-quality exclusions (opt-in)
 
 For a known, documented source defect that lies entirely outside the session (not a way to make

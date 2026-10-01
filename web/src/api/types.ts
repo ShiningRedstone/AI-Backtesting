@@ -502,3 +502,48 @@ export interface BootstrapResponse { run_id: string; profile_id: string; profile
 export interface RiskPreference { risk_per_trade_usd: number; default: boolean; note: string }
 export interface BacktestJob { job_id: string; state: "running" | "completed" | "failed"; dataset_id: string; created_at: string;
   finished_at: string | null; error: { kind: string; message: string } | null; result?: BacktestResult | null }
+
+/* ---------------------------------------------------------------- paper trading (ADR-81) */
+export interface PaperFees { eval_price: number | null; reset_fee: number | null; activation_fee: number | null }
+export interface PaperFeedStatus {
+  n_days: number; first_day: string | null; newest_day: string | null; checked_at: string | null; last_completed_date: string | null;
+  errors: Record<string, string>; skipped: Record<string, string>; source: string; downloader_available: boolean; next_start_date: string;
+  manager: { state: string; last_run: string | null; last_error: string | null; next_check: string | null; started?: string;
+    last_result?: { accounts_updated: number } | null };
+}
+export interface PaperCandidate {
+  strategy_id: string; display_name: string | null; family_id: string | null; timeframe: string | null; survivor: boolean;
+  expectancy_r: number | null; trades: number; run_id: string | null; already_running: boolean;
+}
+export interface PaperCandidates { profile_id: string; show_all: boolean; strategies: PaperCandidate[]; n_survivors: number }
+export interface PaperAccountRow {
+  account_id: string; batch_id: string; created_at: string; strategy_id: string; display_name: string | null; profile_id: string;
+  profile_version: number; start_date: string; status: "running" | "stopped"; stop_reason: string | null;
+  state: "waiting" | "evaluation" | "funded" | "stopped"; current_attempt: number; attempts: number; passes: number; payouts: number;
+  trader_payouts: number; fees_total: number; net: number; n_trades: number; balance: number | null; last_day: string | null;
+  computed_at: string | null;
+}
+export interface PaperAttempt {
+  n: number; start: string; end: string | null; fee: number | null; n_trades: number; stage: "evaluation" | "funded";
+  status: "in_progress" | "failed" | "incompatible" | "funded" | "funded_lost" | "funded_completed";
+  reason: string | null; detail: string | null; eval_profit?: number; eval_trading_days?: number; balance?: number | null;
+  passed_at?: string | null; payouts?: number; trader_payout?: number;
+}
+export interface PaperTrade {
+  trade_no?: number; entry_ts: string; exit_ts: string; direction: number; contracts: number; entry_price_eff: number; exit_price_eff: number;
+  exit_reason: string; net_usd: number; net_r?: number; cost_usd?: number;
+}
+export interface PaperState {
+  state: PaperAccountRow["state"]; current_attempt: number; attempts: PaperAttempt[];
+  payouts: { attempt: number; n: number; date: string; gross: number; trader_share: number; firm_share: number; balance_after: number }[];
+  fees: { attempt: number; kind: "eval_price" | "reset_fee" | "activation_fee"; amount: number | null; at: string | null }[];
+  fees_total: number; fees_complete: boolean; trader_payouts: number; net: number; passes: number; stopped: string | null;
+  trades: PaperTrade[]; n_trades: number; feed: { first_day: string; last_day: string; content_hash: string }; label: string;
+  computed_at: string;
+}
+export interface PaperAccountDetail {
+  account: Omit<PaperAccountRow, "state" | "current_attempt" | "attempts" | "passes" | "payouts" | "trader_payouts" | "fees_total" | "net" |
+    "n_trades" | "balance" | "last_day" | "computed_at"> & { fees: PaperFees; start_ts: string; logic_hash?: string; definition_hash?: string;
+    stopped_at?: string | null; label: string };
+  state: PaperState | null;
+}
