@@ -78,6 +78,9 @@ detail/tree, explorer rows, per-user (outside the workspace) facets cache, start
 ADR-76: Windows installer `packaging/installer.iss` + `build_installer.py` (per-user into `%LOCALAPPDATA%\Programs\EdgeLab`, the updater's folder;
 optional Start-menu/desktop shortcuts; CI fixed release `installer-main`), icon `packaging/icon.py` -> `munyun.ico`; single backtests as background
 jobs (`Services.start_backtest_job`, `/api/backtests/jobs`, lock free while computing).
+ADR-77: speed without result changes: `Services._cell_dataset` (validated once per process), causality truncation feature cache
+(`strategy_api.truncation_cache`, content-addressed, memory-bounded), multi-core research runs (`run_scope(processes=)`, Settings
+`ui.research_processes`, default all cores but one; parent writes in plan order), trades/metrics/ledger indexes, incremental read views, browser view cache.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

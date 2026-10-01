@@ -415,7 +415,20 @@ class SQLiteStore(ResultStore):
         self._add_missing_columns("bars", {k: "REAL" for k in ASK_COLUMNS})   # ADR-55: NULL for older rows
         self._add_missing_columns("search_batches", {"protocol_id": "TEXT"})   # ADR-56: NULL = no protocol
         self._add_missing_columns("search_cells", {"started_at": "TEXT", "finished_at": "TEXT", "duration_s": "REAL"})  # ADR-70
+        self._ensure_indexes()
         self.con.commit()
+
+    # ADR-77 lookup indexes (speed only: same rows, same order of results; created when the table exists - the trades
+    # table is created by its first append)
+    _INDEXES = {"trades": "CREATE INDEX IF NOT EXISTS ix_trades_run ON trades(run_id)",
+                "metrics": "CREATE INDEX IF NOT EXISTS ix_metrics_run ON metrics(run_id)",
+                "protocol_trials": "CREATE INDEX IF NOT EXISTS ix_protocol_trials ON protocol_trials(protocol_id)",
+                "runs": "CREATE INDEX IF NOT EXISTS ix_runs_strategy ON runs(strategy_id)"}
+
+    def _ensure_indexes(self, only: str | None = None):
+        for table, sql in self._INDEXES.items():
+            if (only is None or only == table) and self._has_table(table):
+                self.con.execute(sql)
 
     def _columns(self, name):
         return [r[1] for r in self.con.execute(f"PRAGMA table_info({name})").fetchall()]
@@ -442,6 +455,8 @@ class SQLiteStore(ResultStore):
             self._add_missing_columns(name, {c: "REAL" if df[c].dtype.kind in "fiub" else "TEXT"
                                              for c in df.columns})
         df.to_sql(name, self.con, if_exists="append", index=False, chunksize=50_000)
+        if name in self._INDEXES:
+            self._ensure_indexes(name)
         self.con.commit()
 
     def _has_table(self, name):

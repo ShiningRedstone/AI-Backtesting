@@ -319,7 +319,8 @@ class TestWorkspaceBrowserFlow(Base):
                 pg.locator("[data-testid='nav-strategies']").click()
                 t(f"row-{self.a['strategy_id']}").wait_for()
                 pg.goto(info["url"] + "/#/prop")
-                t("prop-run").wait_for(state="attached")                      # under the collapsed Advanced section
+                pg.locator("[data-testid='prop-advanced'] > summary").click()   # the manual simulator loads when opened
+                t("prop-run").wait_for(state="attached")
                 self.assertIn(self.a["run_id"], t("prop-run").inner_html())           # option value; the label is in words
                 pg.goto(info["url"] + "/#/settings")
                 self.assertIn(str(self.ws_a.resolve()), t("ws-connected").inner_text())

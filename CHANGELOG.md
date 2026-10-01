@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Speed: faster backtests, multi-core research runs, instant tab switches (ADR-77)
+
+| Item | Status |
+|---|---|
+| Research runs use several CPU cores (Settings → "CPU cores for research runs"; default all but one); same cells, trades, run order and trial ledger as one core | IMPLEMENTED, TESTED (one core vs two cores; cancel + resume) |
+| Datasets loaded and validated once per app session for backtests and research cells (instead of every strategy); every backtest still re-hashes its bars | IMPLEMENTED, TESTED (cached = fresh) |
+| Causality check reuses the features of identical truncated histories (in-memory, content-addressed); all 20 cuts still run on every backtest; leaky features still caught | IMPLEMENTED, TESTED |
+| Vectorized DST check in validation (identical output) | IMPLEMENTED, TESTED |
+| Screens: database indexes, cheap favorites, run list without trade loads, incremental run records, library index in memory, browser shows last data instantly while refreshing, Prop advanced section loads on demand | IMPLEMENTED, TESTED (views equal their uncached versions) |
+| SQLite WAL mode | NOT IMPLEMENTED (read-only workspace tools; workspace files untouched on open) |
+| Backtest engine, fills, sizing, costs, compiler, prop rules, validation gate, causality comparison | UNCHANGED |
+
 ## Windows installer and background backtests (ADR-76)
 
 | Item | Status |

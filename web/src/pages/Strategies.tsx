@@ -18,7 +18,7 @@ export function SystemPanel() {
   const { data: s, error, loading } = useApi<SystemStatus>("/api/status");
   const { data: build } = useApi<{ source_sha256: string; built_at: string; react: string; esbuild: string }>("/build-info.json");
   if (error) return <ErrorPanel error={error} title="Backend status unavailable" />;
-  if (loading || !s) return <Loading label="Loading status…" />;
+  if (!s) return loading ? <Loading label="Loading status…" /> : null;
   const actions: { label: string; to: string; enabled: boolean; why?: string; testId: string }[] = [
     { label: "Create Strategy", to: "/builder?new=1", enabled: true, testId: "qa-create" },
     { label: "Open Strategy Library", to: "/strategies", enabled: true, testId: "qa-library" },

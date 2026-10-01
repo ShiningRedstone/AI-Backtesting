@@ -1852,3 +1852,58 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   strategy for the browser session, so it resumes after a tab switch. `POST /api/backtests` (CLI, tests) is unchanged;
   the protocol gate call in `_run_cell` now also runs under the guard (it reads and writes the store). Engine, compiler,
   fills, sizing, costs and prop lifecycle are unchanged; the job result equals the synchronous one (tested).
+
+### ADR-77 Speed: one-time dataset validation per process, causality feature cache, multi-core research runs, faster screens
+- **Why.** Backtests and research runs used one CPU core. Every cell re-read the whole dataset from SQLite, re-hashed it and
+  validated it twice, then cut and validated the discovery window twice more, mostly under the service lock (which
+  also stalled every page). The causality check recomputed every feature for its 20 truncated histories with no
+  cache (0.6–5.6 s per cell versus 20–100 ms for the backtest itself). Every tab switch refetched everything, the
+  favorites call parsed every run record's JSON, and `trades` had no index.
+- **Results are unchanged by construction and by test.** Engine, fills, sizing, costs, compiler, prop rules, the
+  causality comparison (all 20 cuts, every backtest) and the validation gate are the same code. Every cache is keyed
+  on content, and tests compare each cached path with the fresh computation (`tests/test_speed_caches.py`,
+  `tests/test_parallel_research_runs.py`). Six demo backtests: identical trades hashes, 9.6 s → 6.7 s on one core.
+- **Datasets for cells** (`Services._cell_dataset`).
+  - Each dataset is loaded through the full `load_validated` gate once per app process, and its discovery window is
+    cut and re-validated once.
+  - The key is (store object, stored manifest JSON, research config hash, window): a re-import, a different
+    workspace or a config change misses. `ValidatedDataset` arrays are read-only, and every backtest still
+    re-hashes the bars it receives (`run_backtest` → `verify_unchanged`).
+  - Trade-off, the same as the parallel search parent (ADR-40): stored bars changed behind the running app's back
+    are detected at the next app start, not on every cell.
+  - `Services.load_dataset` (protocol creation, preferred dataset, comparisons, gap reports) still loads fresh every
+    time.
+  - The validation DST check is vectorized, with identical offsets.
+- **Causality check features** (`features/strategy_api.truncation_cache`).
+  - The features of truncated histories are kept in a process-wide in-memory `MemoryFeatureCache`, bounded by
+    bytes (default 1 GB; `EDGELAB_CAUSALITY_CACHE_MB`, 0 = off; parallel workers split the budget).
+  - Its keys are the ordinary feature keys computed from the TRUNCATED bars' own content hash, so an entry is reused
+    only for byte-identical input and equals a fresh computation. A leaky feature is still caught warm (tested).
+- **Multi-core research runs.**
+  - `campaign.run_scope(processes=)` and `Services.start_campaign_job(processes=)` take the default from Settings:
+    "CPU cores for research runs", workspace preference `ui.research_processes`, `None` = all cores but one.
+    `POST /api/campaigns/<id>/jobs {processes}`, `GET /api/preferences/research-processes`, CLI
+    `research campaign-run --processes N`.
+  - These use the existing process pool (`batch._run_parallel`), now with scopes (`include`), the same `on_cell`
+    events in plan order, per-cell timing measured in the worker, and the prop audit computed in the worker (the same
+    pure function of the trades).
+  - Only the parent writes, in plan order: run ids, cells, trial ledger order, counted/failed status and resume are
+    identical to one core (tested).
+  - The frozen spec keeps `workers: 1`. `processes` is an execution setting, never part of the spec, the search id or
+    any identity.
+  - One behavioural difference: on cancel or stop-on-failure, the cells already computing on other cores finish and
+    are recorded (real trials, counted once).
+  - Desktop "Research Engine" search jobs stay sequential.
+- **Screens.**
+  - Indexes on `trades(run_id)`, `metrics(run_id)`, `protocol_trials(protocol_id)` and `runs(strategy_id)` (created
+    once on open).
+  - Favorites use the `runs.strategy_id` column.
+  - `list_runs` reads records without loading trades, and the dashboard calendar memoizes the stored trades per run.
+  - `run_records` is incremental (runs are insert-only; anything unexpected triggers a full re-read).
+  - The library index payload is held in memory, keyed on the folder fingerprint plus the index file's stamp.
+  - Browser: `useApi` shows the last answer for a URL instantly while re-fetching, and any POST empties that cache.
+    Preferences and favorites refresh at most every 30 s on page changes and directly after writes.
+  - The Prop simulator's Advanced section loads only when opened.
+- **Not done.** WAL journal mode, because read-only workspace tools open the store with `mode=ro` and opening a
+  workspace must not change its files beyond schema/index migration. Reading views during a research run still share
+  the one service lock, now held only briefly per cell.

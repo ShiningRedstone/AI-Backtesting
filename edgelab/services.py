@@ -217,7 +217,7 @@ class Services:
 
     # ------------------------------------------------------------ display preferences (ADR-74; outside the config hash)
     UI_PREF_DEFAULTS = {"favorites": [], "prop_criteria_profile": "LUCID_LUCIDFLEX_50K", "show_ids": False,
-                        "show_readonly": False}
+                        "show_readonly": False, "research_processes": None}       # None = all cores but one (ADR-77)
 
     def ui_preferences(self) -> dict:
         """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
@@ -244,6 +244,10 @@ class Services:
             if k in ("show_ids", "show_readonly"):
                 if not isinstance(v, bool):
                     raise ValueError(f"{k} must be true or false")
+            elif k == "research_processes":
+                from edgelab.research.campaign import max_processes
+                if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= max_processes()):
+                    raise ValueError(f"research_processes must be null (automatic) or 1..{max_processes()}")
             elif k == "prop_criteria_profile":
                 from edgelab.prop.service import default_profiles
                 if v not in {p["profile_id"] for p in default_profiles(self.root)}:
@@ -260,8 +264,8 @@ class Services:
         if not isinstance(on, bool):
             raise ValueError("favorite must be true or false")
         self.library.load(strategy_id)                       # KeyError for an unknown strategy
-        if on and not self.store._query("SELECT 1 FROM runs WHERE json_extract(record_json, '$.strategy.strategy_id') = ? "
-                                        "LIMIT 1", (strategy_id,)):
+        if on and not self.store._query("SELECT 1 FROM runs WHERE strategy_id = ? LIMIT 1",
+                                                      (strategy_id,)):
             raise ValueError("only tested strategies (with a stored backtest) can be favorites")
         cur = self.ui_preferences()
         fav = [x for x in cur["favorites"] if x != strategy_id] + ([strategy_id] if on else [])
@@ -272,7 +276,8 @@ class Services:
 
     def favorites_info(self) -> dict:
         """Favorites and the ids of every tested strategy (for the star buttons)."""
-        rows = self.store._query("SELECT DISTINCT json_extract(record_json, '$.strategy.strategy_id') FROM runs")
+        # the runs.strategy_id column is written from the record's strategy id (store.save_run): no JSON parsing
+        rows = self.store._query("SELECT DISTINCT strategy_id FROM runs")
         return {"favorites": self.ui_preferences()["favorites"], "tested": sorted(r[0] for r in rows if r[0])}
 
     def campaign_run_names(self, campaign_id: str) -> dict:
@@ -350,6 +355,7 @@ class Services:
             self.library = StrategyLibrary(self.data_root / "strategy_library")
             from edgelab.research import overview as ov, results_view as rv
             ov._FACET_CACHE.clear()
+            self.__dict__.pop("_calendar_trades", None)     # ADR-77: run ids restart after a reset
             rv._GROSS.clear()
             entry = {"at": datetime.now(timezone.utc).isoformat(), "deleted_rows": counts, "deleted_folders": removed,
                      "kept": "datasets, bars, dataset reports, import folder, feature cache, configs, settings"}
@@ -366,6 +372,39 @@ class Services:
 
     def load_dataset(self, dataset_id: str):
         return load_validated(self.store, self.cfg, dataset_id)
+
+    # ADR-77: datasets for backtest / research cells, loaded and validated ONCE per app process. Stored datasets are
+    # content-addressed and immutable, and a ValidatedDataset's arrays are read-only; the key is the stored manifest
+    # (re-import or replacement changes it), the store object (workspace switch) and the research config hash
+    # (instruments, calendars, validation thresholds). The first load of a process always goes through the full
+    # `load_validated` gate (stored bars re-hashed and re-validated), as the parallel search parent already does once
+    # per search (ADR-40); every backtest still re-hashes the bars it receives (`run_backtest` -> verify_unchanged).
+    _CELL_DATASETS_MAX = 3
+
+    def _cell_dataset(self, dataset_id: str, period: tuple | None = None, lock=None):
+        guard = lock if lock is not None else nullcontext()
+        with guard:                                                   # store reads only under the lock
+            rows = self.store._query("SELECT manifest_json FROM datasets WHERE dataset_id = ?", (dataset_id,))
+            if not rows:
+                return self.load_dataset(dataset_id)                  # the gate raises the usual error
+            key = (id(self.store), rows[0][0], self._config_hash(),
+                   None if period is None else (str(period[0]), str(period[1])))
+            memo = self.__dict__.setdefault("_cell_ds", {})
+            hit = memo.get(key)
+            if hit is not None and hit[0] is self.store:
+                memo[key] = memo.pop(key)                             # most recently used last
+                return hit[1]
+            if period is None:
+                ds = self.load_dataset(dataset_id)
+        if period is not None:                                        # the window is cut and re-validated outside
+            from edgelab.research.compare import restrict_to_period
+            ds = restrict_to_period(self._cell_dataset(dataset_id, None, lock), period[0], period[1],
+                                    self.cfg.get("validation"))
+        with guard:
+            memo[key] = (self.store, ds)
+            while len(memo) > 2 * self._CELL_DATASETS_MAX:           # full datasets plus their discovery windows
+                memo.pop(next(iter(memo)))
+        return ds
 
     def compare_feeds(self, a: str, b: str) -> dict:
         from edgelab.research.compare import compare_feeds
@@ -714,11 +753,7 @@ class Services:
         from edgelab.instruments import check_identity
         from edgelab.strategy.compiler import compile_strategy
         guard = lock if lock is not None else nullcontext()
-        with guard:
-            ds = self.load_dataset(dataset_id)
-        if period is not None:
-            from edgelab.research.compare import restrict_to_period
-            ds = restrict_to_period(ds, period[0], period[1], self.cfg.get("validation"))
+        ds = self._cell_dataset(dataset_id, period, lock)          # ADR-77: validated once per process, then reused
         strat = compile_strategy(self._definition(src), self.sessions, self._config_hash())
         # ADR-56 research protocol: refuses holdout/overlap access and over-budget trials BEFORE anything
         # runs (worker processes have no gate; their search plan was checked by the parent)
@@ -790,10 +825,11 @@ class Services:
         from edgelab.research import campaign
         return _jsonable(campaign.check(self, campaign_id))
 
-    def campaign_run(self, campaign_id: str, workers: int = 1, max_failures: int = 0) -> dict:
-        """Run a frozen campaign through the protocol-gated search (preflight first; resumable)."""
+    def campaign_run(self, campaign_id: str, workers: int = 1, max_failures: int = 0, processes: int = 1) -> dict:
+        """Run a frozen campaign through the protocol-gated search (preflight first; resumable). `processes` (ADR-77):
+        CPU cores computing cells at once (identical results)."""
         from edgelab.research import campaign
-        return _jsonable(campaign.run(self, campaign_id, workers=workers, max_failures=max_failures))
+        return _jsonable(campaign.run(self, campaign_id, workers=workers, max_failures=max_failures, processes=processes))
 
     def campaign_status(self, campaign_id: str) -> dict:
         from edgelab.research import campaign
@@ -824,10 +860,27 @@ class Services:
         return _jsonable(campaign.strategy_result(self, campaign_id, strategy_id))
 
     def start_campaign_job(self, campaign_id: str, families: list[str] | None = None, max_failures: int = 0,
-                           strategy_ids: list[str] | None = None) -> dict:
+                           strategy_ids: list[str] | None = None, processes: int | None = None) -> dict:
         """Run a frozen campaign (all / families / explicit frozen strategy ids) in the background; the same runner as
-        `campaign-run`. The scope never creates identities: ids must be the manifest's own."""
-        return _jsonable(self.jobs.start_campaign(campaign_id, families, int(max_failures), strategy_ids))
+        `campaign-run`. The scope never creates identities: ids must be the manifest's own. `processes` (ADR-77): CPU
+        cores computing cells at once; None = the Settings choice (default: all cores but one)."""
+        from edgelab.research import campaign
+        n = self.research_processes()["processes"] if processes is None else processes
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= campaign.max_processes():
+            raise ValueError(f"processes must be 1..{campaign.max_processes()} (CPU cores of this machine)")
+        return _jsonable(self.jobs.start_campaign(campaign_id, families, int(max_failures), strategy_ids, n))
+
+    def research_processes(self) -> dict:
+        """How many CPU cores research runs use (ADR-77): the Settings choice, else all cores but one. An execution
+        setting only: results, ids and trial counting do not depend on it."""
+        from edgelab.research import campaign
+        mx, dflt = campaign.max_processes(), campaign.default_processes()
+        try:
+            chosen = self.ui_preferences().get("research_processes")
+        except Exception:                                    # no workspace yet: defaults
+            chosen = None
+        n = chosen if isinstance(chosen, int) and not isinstance(chosen, bool) and 1 <= chosen <= mx else dflt
+        return {"processes": n, "chosen": chosen if n == chosen else None, "default": dflt, "max": mx}
 
     def campaign_tree(self, campaign_id: str) -> dict:
         """Research browser: all strategies -> families -> strategies, with display names and persisted status."""
@@ -1168,8 +1221,10 @@ class Services:
 
     def list_runs(self) -> list[dict]:
         rows = []
+        # ADR-77: the records come in one query (the trades of every run were loaded and thrown away before)
+        recs = {rid: json.loads(raw) for rid, raw in self.store._query("SELECT run_id, record_json FROM runs")}
         for r in self.store.list_runs().to_dict("records"):
-            rec, _ = self.store.load_run(r["run_id"])
+            rec = recs[r["run_id"]]
             ds = rec.get("dataset", {})
             rows.append({**r, "strategy_name": rec.get("strategy", {}).get("dsl", {}).get("name"),
                          "notes": rec.get("notes"), "synthetic": str(rec.get("notes", "")).startswith("SYNTHETIC"),

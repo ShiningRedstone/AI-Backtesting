@@ -352,6 +352,7 @@ export function SettingsPage() {
       <div className="grid-cards">{about}<UpdatePanel /></div>
       <div className="grid-cards">{wsCard}<RiskPerTradeCard /></div>
       <div className="grid-cards"><PropCriteriaCard /><DisplayCard /></div>
+      <div className="grid-cards"><ResearchCoresCard /></div>
       <ResetCard />
       <ReadOnly>
       <h3>System status</h3>
@@ -423,6 +424,27 @@ function DisplayCard() {
       <Switch on={prefs.show_ids} onChange={set("show_ids")} label="Show IDs (strategy, backtest and dataset IDs, hashes)" testId="switch-show-ids" />
       <Switch on={prefs.show_readonly} onChange={set("show_readonly")} label="Show read-only information (fixed research design, configuration, system status)"
         testId="switch-show-readonly" />
+    </Card>
+  );
+}
+
+/** ADR-77: how many CPU cores research runs use. An execution setting: results, ids and trial counts are identical. */
+function ResearchCoresCard() {
+  const { toast } = useApp();
+  const { data, error, reload } = useApi<{ processes: number; chosen: number | null; default: number; max: number }>("/api/preferences/research-processes");
+  const save = (v: string) => api.post("/api/preferences/ui", { research_processes: v === "auto" ? null : Number(v) })
+    .then(() => { reload(); toast("ok", "Saved: used by the next research run"); }).catch((e: Error) => toast("error", e.message));
+  return (
+    <Card title="Speed: CPU cores for research runs" testId="settings-cores">
+      {error ? <ErrorPanel error={error} /> : !data ? <Loading label="Loading…" /> : <>
+        <Field label="CPU cores used at the same time">
+          <Select<string> value={data.chosen === null ? "auto" : String(data.chosen)} onChange={save} testId="cores-select" ariaLabel="CPU cores"
+            options={[{ value: "auto", label: `Automatic: ${data.default} of ${data.max} (all but one)` },
+              ...Array.from({ length: data.max }, (_, i) => ({ value: String(i + 1), label: `${i + 1} core${i ? "s" : ""}` }))]} />
+        </Field>
+        <p className="small muted">Research runs test several strategies at once, one per core. Results are exactly the same as with one core
+          (same trades, same order, same trial count); only the time changes. More cores use more memory. Cancelling stops new strategies
+          from starting; the ones already running on other cores finish and are saved.</p></>}
     </Card>
   );
 }

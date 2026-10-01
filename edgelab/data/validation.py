@@ -265,7 +265,9 @@ def validate_bars(df: pd.DataFrame, instrument: Instrument, calendar: SessionCal
 
     # --- DST transitions (informational context) ----------------------------------
     loc = idx.tz_convert(calendar.timezone)
-    offs = np.array([t.utcoffset().total_seconds() for t in loc[:: max(1, len(loc) // 20000)]]) \
+    # UTC offset of each sampled bar = local wall clock minus UTC (vectorized; same values as t.utcoffset(), ADR-77)
+    step = max(1, len(loc) // 20000)
+    offs = np.asarray((loc[::step].tz_localize(None) - idx[::step].tz_convert(None)).total_seconds(), dtype=float) \
         if len(loc) else np.array([])
     n_offsets = len(np.unique(offs))
     add(Check("dst_transitions", "INFO" if n_offsets > 1 else "PASS", max(n_offsets - 1, 0),

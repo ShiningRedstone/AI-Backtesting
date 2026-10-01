@@ -62,12 +62,13 @@ class CampaignJob(Job):
                  strategy_ids: list[str] | None = None):
         super().__init__(job_id, search_id, {})
         self.kind, self.campaign_id, self.families, self.strategy_ids = "campaign", campaign_id, families, strategy_ids
+        self.processes = 1                    # ADR-77: CPU cores computing cells at once (execution only)
         self.live: dict = {"status": "queued", "phase": "queued - starting the background worker"}
 
     def snapshot(self) -> dict:
         return {**super().snapshot(), "kind": "campaign", "campaign_id": self.campaign_id,
                 "families": self.families, "n_strategy_ids": None if self.strategy_ids is None else len(self.strategy_ids),
-                "live": dict(self.live)}
+                "processes": self.processes, "live": dict(self.live)}
 
 
 class JobManager:
@@ -133,7 +134,7 @@ class JobManager:
 
     # ------------------------------------------------------------------ campaign jobs (ADR-69)
     def start_campaign(self, campaign_id: str, families: list[str] | None, max_failures: int = 0,
-                       strategy_ids: list[str] | None = None) -> dict:
+                       strategy_ids: list[str] | None = None, processes: int = 1) -> dict:
         """Run a frozen campaign (or a family scope of it) in the background; the same one-job-at-a-time rule."""
         from edgelab.research import campaign as C
         spec = C.load(self.services, campaign_id)               # refuses unknown / tampered campaigns up front
@@ -148,6 +149,7 @@ class JobManager:
                               None if strategy_ids is None else list(strategy_ids))
             self._jobs[job.job_id] = job
             self._active = job
+            job.processes = processes
             self._thread = threading.Thread(target=self._work_campaign, args=(job, max_failures),
                                             name=f"edgelab-{job.job_id}", daemon=True)
             self._thread.start()
@@ -166,7 +168,7 @@ class JobManager:
             out = C.run_scope(self.services, job.campaign_id, families=job.families, strategy_ids=job.strategy_ids,
                               max_failures=max_failures,
                               lock=self.lock, cancel=job.cancel_requested.is_set, on_progress=on_progress,
-                              source="desktop")
+                              source="desktop", processes=getattr(job, "processes", 1))
             final = "cancelled" if out["run_status"] == "cancelled" else "completed"
         except BaseException as exc:                         # recorded, never swallowed silently
             job.error = f"{type(exc).__name__}: {exc}"

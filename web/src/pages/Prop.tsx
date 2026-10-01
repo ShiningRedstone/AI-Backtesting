@@ -25,6 +25,7 @@ function PropHome() {
   const [q, setQ] = useState("");
   const dq = useDebounced(q, 300);
   const [sid, setSid] = useState(route.query.get("strategy") ?? "");
+  const [advanced, setAdvanced] = useState(!!route.query.get("run"));
   const favs = useApi<ExplorerResponse>("/api/explorer/strategies?favorites_only=1&tested_only=1&page_size=200&sort=name&order=asc");
   const tested = useApi<ExplorerResponse>(`/api/explorer/strategies?tested_only=1&page_size=200&sort=name&order=asc${dq ? `&q=${encodeURIComponent(dq)}` : ""}`, [dq]);
   const panel = useApi<StrategyPanelData>(sid ? `/api/results-view/strategies/${sid}` : null, [sid]);
@@ -57,9 +58,10 @@ function PropHome() {
             testId="prop-strategy-result-card" actions={<FavStar id={sid} />}>
             {panel.data.prop?.length ? <PropRows rows={panel.data.prop} runId={panel.data.run_id} /> : <Empty>No prop audit stored with this backtest.</Empty>}
           </Card>)))}
-      <details className="advanced" data-testid="prop-advanced" open={!!route.query.get("run")}>
+      <details className="advanced" data-testid="prop-advanced" open={advanced}
+        onToggle={(e: { currentTarget: HTMLDetailsElement }) => setAdvanced(e.currentTarget.open)}>
         <summary>Advanced: manual simulation (custom rule sets, several accounts, start dates)</summary>
-        <PropWorkspace />
+        {advanced && <PropWorkspace />}{/* ADR-77: its run list loads only when opened */}
       </details>
     </div>
   );

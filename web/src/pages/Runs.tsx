@@ -294,10 +294,10 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
     <Card testId="live-run"
       title={<>Research run <Badge tone={statusTone(L.status)}>{statusLabel(L.status)}</Badge></>}
       actions={final ? <Button small onClick={onDismiss}>Close</Button>
-        : <Button small kind="danger" busy={cancelling} busyLabel="Stopping after the current strategy…" testId="cancel-run"
+        : <Button small kind="danger" busy={cancelling} busyLabel="Stopping after the strategies being tested…" testId="cancel-run"
             onClick={async () => { setCancelling(true); try { setJob(await campaigns.cancel(jobId)); } finally { setCancelling(false); } }}>
             Cancel (keeps all completed results)</Button>}>
-      <p data-testid="live-phase"><b>{plainText(L.phase)}</b>{job.cancel_requested && !final && " · cancel requested: the current strategy finishes, then the run stops"}</p>
+      <p data-testid="live-phase"><b>{plainText(L.phase)}</b>{job.cancel_requested && !final && " · cancel requested: the strategies being tested finish, then the run stops"}</p>
       <div className="progress" aria-label="research progress"><span style={{ width: `${scopeN ? (100 * done) / scopeN : 0}%` }} /></div>
       <div className="kpis">
         <Kpi label="Progress" value={pctOf(done, scopeN)} accent />
@@ -310,7 +310,9 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
       {L.current && !final && <p className="small" data-testid="live-current">Now evaluating <b title={L.current.strategy_id}>{L.current.display_name ?? "a strategy"}</b>
         {" "}· family <b>{familyLabel(L.current.family_id)}</b> · {facetLabel("timeframe", L.current.timeframe)} on {datasetLabel(L.current.dataset_id)}
         {" "}({fmt(L.current.index)} of {fmt(L.current.of)} in this scope)</p>}
-      <p className="small muted">{L.protocol_version != null ? `Research protocol version ${L.protocol_version} · ` : ""}workers 1 · holdout locked · results are stored as they finish.</p>
+      <p className="small muted" data-testid="live-cores">{L.protocol_version != null ? `Research protocol version ${L.protocol_version} · ` : ""}
+        {(job.processes ?? 1) > 1 ? `${job.processes} CPU cores at once (same results as one core; change in Settings)` : "1 CPU core (change in Settings)"}
+        {" "}· holdout locked · results are stored in plan order as they finish.</p>
       <TechDetails rows={[["Job id", <Mono>{job.job_id}</Mono>], ["Campaign id", <Mono>{job.campaign_id}</Mono>], ["Search id", <Mono>{job.search_id}</Mono>],
         ["Protocol id", L.protocol_id ? <Mono>{L.protocol_id}</Mono> : null],
         ["Current strategy id", L.current && !final ? <Mono>{L.current.strategy_id}</Mono> : null], ["Current dataset id", L.current && !final ? <Mono>{L.current.dataset_id}</Mono> : null]]} />

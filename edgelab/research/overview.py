@@ -186,18 +186,35 @@ def library_facets(svc) -> list[dict]:
 def run_records(svc) -> list[dict]:
     """Every stored run record (no trades), oldest first; cached on (count, last run id)."""
     from edgelab.research.campaign import db_token
-    key = db_token(svc)                                       # any store write invalidates (records are immutable)
+    key = db_token(svc)                                       # any store write is noticed
     hit = _FACET_CACHE.get("runs")
     if hit and hit[0] == key:
         out = hit[1]
     else:
-        rows = svc.store._query("SELECT run_id, record_json FROM runs ORDER BY run_id")
-        out = [run_row(rid, _loads(raw) or {}) for rid, raw in rows]
-        _FACET_CACHE["runs"] = (key, out)
+        out = _run_rows_incremental(svc, hit)
+        _FACET_CACHE["runs"] = (key, out, svc.store)
     hr = holdout_run_ids(svc)
     crit = criteria_profile(svc)
     return [{**apply_criteria(r, crit), "holdout": True, "scope": HOLDOUT_SCOPE} if r["run_id"] in hr
             else {**apply_criteria(r, crit), "holdout": False} for r in out]
+
+
+def _run_rows_incremental(svc, hit) -> list[dict]:
+    """ADR-77: run records are insert-only (never updated or deleted in place; a workspace reset replaces the store),
+    so after a write only the runs added since the last read are parsed. Anything unexpected (another store, fewer
+    runs, a gap) falls back to a full re-read."""
+    if hit and len(hit) > 2 and hit[2] is svc.store and hit[1]:
+        old = hit[1]
+        count, last = svc.store._query("SELECT COUNT(*), MAX(run_id) FROM runs")[0]
+        if count == len(old) and last == old[-1]["run_id"]:
+            return old
+        if count > len(old):
+            rows = svc.store._query("SELECT run_id, record_json FROM runs WHERE run_id > ? ORDER BY run_id",
+                                    (old[-1]["run_id"],))
+            if len(old) + len(rows) == count:
+                return old + [run_row(rid, _loads(raw) or {}) for rid, raw in rows]
+    rows = svc.store._query("SELECT run_id, record_json FROM runs ORDER BY run_id")
+    return [run_row(rid, _loads(raw) or {}) for rid, raw in rows]
 
 
 DEFAULT_CRITERIA_PROFILE = "LUCID_LUCIDFLEX_50K"
@@ -678,13 +695,24 @@ def _cost_share(runs: list[dict]) -> dict:
 
 def _pooled_calendar(svc, runs: list[dict]) -> dict:
     frames = []
+    memo = svc.__dict__.setdefault("_calendar_trades", {})   # ADR-77: stored trades never change (per store object)
+    if memo.get("_store") is not svc.store:
+        memo.clear()
+        memo["_store"] = svc.store
     for r in runs:
-        try:
-            _, t = svc.store.load_run(r["run_id"])
-        except KeyError:
-            continue
+        t = memo.get(r["run_id"])
+        if t is None:
+            try:
+                _, full = svc.store.load_run(r["run_id"])
+            except KeyError:
+                continue
+            t = full[["entry_ts", "net_r", "gross_r"]] if len(full) else full
+            if len(memo) > 2 * MAX_POOLED_RUNS:
+                memo.clear()
+                memo["_store"] = svc.store
+            memo[r["run_id"]] = t
         if len(t):
-            frames.append(t[["entry_ts", "net_r", "gross_r"]])
+            frames.append(t)
     if not frames:
         return {"weekday": [], "month": [], "year": [], "runs_pooled": 0}
     t = pd.concat(frames, ignore_index=True)

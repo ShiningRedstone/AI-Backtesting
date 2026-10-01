@@ -143,11 +143,11 @@ const BrandMark = () => (
 );
 
 function ShellBody() {
-  const { demo, reloadPrefs } = useApp();
+  const { demo, refreshPrefs } = useApp();
   const route = useRoute();
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [route.parts.join("/")]);
-  useEffect(reloadPrefs, [route.parts[0]]);                // favorites / tested strategies stay current across pages
+  useEffect(refreshPrefs, [route.parts[0]]);               // favorites / tested strategies stay current (at most every 30 s)
   const active = route.parts[0] ?? "";
   const ws = useApi<WorkspaceState>("/api/workspace");
   const firstRun = !!ws.data && ws.data.switchable && !ws.data.current && active !== "settings";

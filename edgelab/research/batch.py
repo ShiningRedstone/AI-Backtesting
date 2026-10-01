@@ -82,15 +82,30 @@ class _CellContext:
     """Read-only stand-in for `Services` inside a worker process: exactly the attributes the pure
     part of `Services._run_cell` reads. There is deliberately no `store` (parent-only writes)."""
 
-    def __init__(self, cfg: Mapping, config_hash: str, datasets: Mapping, cache_args: Mapping):
+    def __init__(self, cfg: Mapping, config_hash: str, datasets: Mapping, cache_args: Mapping, root=None):
         from edgelab.features.cache import FeatureCache
         from edgelab.features.sessions import load_sessions
         self.cfg, self._cfg_hash, self._datasets = cfg, config_hash, dict(datasets)
         self.sessions = load_sessions(cfg)
         self.cache = FeatureCache(**cache_args)
+        if root is not None:                                # ADR-77: the prop audit (read-only profiles) runs here too
+            self.root = root
 
     def load_dataset(self, dataset_id: str):
         return self._datasets[dataset_id]                   # loaded and re-validated by the parent
+
+    def _cell_dataset(self, dataset_id: str, period=None, lock=None):
+        """`Services._cell_dataset` in a worker: the parent's dataset, its period window cut and re-validated once
+        per worker (ADR-77)."""
+        ds = self._datasets[dataset_id]
+        if period is None:
+            return ds
+        windows = self.__dict__.setdefault("_windows", {})
+        key = (dataset_id, str(period[0]), str(period[1]))
+        if key not in windows:
+            from edgelab.research.compare import restrict_to_period
+            windows[key] = restrict_to_period(ds, period[0], period[1], self.cfg.get("validation"))
+        return windows[key]
 
     def _definition(self, src: Mapping) -> dict:
         return dict(src)
@@ -107,18 +122,26 @@ class _CellContext:
 _WORKER: dict = {}
 
 
-def _worker_init(cfg: Mapping, config_hash: str, datasets: Mapping, cache_args: Mapping) -> None:
-    _WORKER["ctx"] = _CellContext(cfg, config_hash, datasets, cache_args)
+def _worker_init(cfg: Mapping, config_hash: str, datasets: Mapping, cache_args: Mapping, root=None,
+                 causality_cache_mb: int | None = None) -> None:
+    if causality_cache_mb is not None:                      # ADR-77: each worker's share of the memory budget
+        os.environ["EDGELAB_CAUSALITY_CACHE_MB"] = str(int(causality_cache_mb))
+    _WORKER["ctx"] = _CellContext(cfg, config_hash, datasets, cache_args, root)
 
 
 def _worker_cell(definition: Mapping, dataset_id: str, period) -> dict:
     """Pure cell computation in a worker: never records, never touches the store."""
     from edgelab.services import Services
+    t_start, t0 = _now(), time.perf_counter()
     try:
         out = Services._run_cell(_WORKER["ctx"], definition, dataset_id, record=False, period=period)
     except Exception as exc:                                # same failed-cell text as sequential mode
-        return {"error": f"{type(exc).__name__}: {exc}", "pid": os.getpid()}
-    return {"result": out["result"], "metrics": out["metrics"], "synthetic": out["synthetic"], "pid": os.getpid()}
+        return {"error": f"{type(exc).__name__}: {exc}", "pid": os.getpid(),
+                "_timing": {"started_at": t_start, "finished_at": _now(),
+                            "duration_s": round(time.perf_counter() - t0, 3)}}
+    return {"result": out["result"], "metrics": out["metrics"], "synthetic": out["synthetic"], "prop": out.get("prop"),
+            "pid": os.getpid(), "_timing": {"started_at": t_start, "finished_at": _now(),
+                                            "duration_s": round(time.perf_counter() - t0, 3)}}
 
 
 def resolve_workers(canon: Mapping, workers: int | None) -> int:
@@ -139,7 +162,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                backtest runs (`_run_cell` takes it around its own dataset load and run record).
       cancel - checked before each cell starts; once it returns True no new cell starts, the
                remaining pending cells become `cancelled` and the batch ends `cancelled`.
-      include - a run SCOPE (strategy ids, sequential only): only these eligible cells execute in this
+      include - a run SCOPE (strategy ids): only these eligible cells execute in this
                call; every other cell stays `pending` in the same search for a later call, and the batch
                ends `partial` if any remain. The plan, cell ids, budget accounting and resume are the
                search's own (a scope never creates another search or another trial key).
@@ -148,8 +171,6 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
     guard = lock if lock is not None else nullcontext()
     canon = canonical_search_spec(spec)                    # refuses an invalid spec before anything else
     n_workers = resolve_workers(canon, workers)
-    if include is not None and n_workers != 1:
-        raise SearchSpecError("a run scope (include) needs workers 1")
     scope = None if include is None else set(include)
     store = services.store
     store._require_search_storage()
@@ -218,7 +239,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
             run_id = outcome.get("run_id") or services._record_cell(
                 outcome["result"], outcome["metrics"], outcome["synthetic"],
                 notes=f"search {sid} cell {c['cell_id']}", parent_strategy_id=lineage[0], mutation=lineage[1],
-                lock=lock)
+                lock=lock, prop=outcome.get("prop"))
             met = outcome["metrics"]
             headline = {k: v for k, v in met.items() if not isinstance(v, (dict, tuple, list))}
             row = cell_row(c, status="completed", run_id=run_id, trades_hash=outcome["result"].trades_hash,
@@ -278,7 +299,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                                      "_error": out.get("error")}, k, len(eligible))
         else:
             status = _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prior, done,
-                                   sources, period, counts, record, cancel_rest, pids)
+                                   sources, period, counts, record, cancel_rest, pids, on_cell)
     except Exception:
         with guard:
             store.update_search_batch(sid, status="failed", finished_at=_now())
@@ -294,8 +315,9 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
 
 
 def _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prior, done, sources, period,
-                  counts, record, cancel_rest, pids) -> str:
-    """Workers compute; the parent consumes results in plan order and is the only writer."""
+                  counts, record, cancel_rest, pids, on_cell=None) -> str:
+    """Workers compute; the parent consumes results in plan order and is the only writer. `on_cell` sees the same
+    events as in sequential mode, in plan order ("start" when the parent starts waiting for that cell)."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
     from concurrent.futures.process import BrokenProcessPool
@@ -309,12 +331,16 @@ def _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prio
                 todo.append((c, services.library.load(c["strategy_id"])["definition"],
                              _lineage(services.library, c["strategy_id"], sources[c["strategy_id"]])))
         need = sorted({c["dataset_id"] for c, d, _ in todo if d is not None})
-        datasets = {did: services.load_dataset(did) for did in need}
+    load = getattr(services, "_cell_dataset", None)         # ADR-77: validated once per process (takes the lock)
+    datasets = {did: (load(did, None, lock) if load is not None else services.load_dataset(did)) for did in need}
     cache = services.cache
     cache_args = {"root": cache.root, "verify": cache.verify, "memory_entries": cache.memory_entries}
+    from edgelab.features.strategy_api import truncation_budget_mb
+    per_worker_mb = max(128, truncation_budget_mb() // n_workers)
     pool = ProcessPoolExecutor(max_workers=n_workers, mp_context=multiprocessing.get_context("spawn"),
                                initializer=_worker_init,
-                               initargs=(dict(services.cfg), plan.config_hash, datasets, cache_args))
+                               initargs=(dict(services.cfg), plan.config_hash, datasets, cache_args,
+                                         getattr(services, "root", None), per_worker_mb))
     inflight: deque = deque()                               # futures in plan order
     nxt = 0
     stop = False
@@ -341,7 +367,11 @@ def _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prio
                 counts["n_skipped_resume"] += 1
                 with guard:
                     store.update_search_batch(plan.search_id, n_skipped_resume=counts["n_skipped_resume"])
+                if on_cell is not None:
+                    on_cell("skip", c, k, len(todo))
                 continue
+            if on_cell is not None:
+                on_cell("start", c, k, len(todo))
             try:
                 if isinstance(fut, BaseException):
                     raise fut
@@ -352,6 +382,9 @@ def _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prio
             if pid is not None:
                 pids.add(pid)
             record(c, lin, outcome)
+            if on_cell is not None:
+                on_cell("done", {**c, "_status": "failed" if "error" in outcome else "completed",
+                                 "_error": outcome.get("error")}, k, len(todo))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
     return "completed"

@@ -423,6 +423,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def set_ui_preferences():
         return jsonify(call(svc.set_ui_preferences, body()))
 
+    @app.get("/api/preferences/research-processes")
+    def research_processes():                       # ADR-77: CPU cores research runs use (choice, default, max)
+        return jsonify(call(svc.research_processes))
+
     @app.get("/api/favorites")
     def favorites():
         return jsonify(call(svc.favorites_info))
@@ -780,7 +784,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         mf = b.get("max_failures", 0)
         if not isinstance(mf, int) or isinstance(mf, bool) or not 0 <= mf <= 1000:
             raise _bad("max_failures must be an integer 0..1000")
-        return jsonify(call(svc.start_campaign_job, _id(cid, CAMPAIGN_ID, "campaign id"), fams, mf, sids)), 202
+        procs = b.get("processes")                  # ADR-77: None = the Settings choice
+        if procs is not None and (not isinstance(procs, int) or isinstance(procs, bool) or procs < 1):
+            raise _bad("processes must be null or a positive integer")
+        return jsonify(call(svc.start_campaign_job, _id(cid, CAMPAIGN_ID, "campaign id"), fams, mf, sids, procs)), 202
 
     @app.get("/api/campaigns/<cid>/tree")
     def campaigns_tree(cid):

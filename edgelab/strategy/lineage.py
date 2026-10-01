@@ -234,6 +234,11 @@ class StrategyLibrary:
         """The index payload; rebuilt from `_scan` when missing, stale, corrupted or of another version."""
         from edgelab.core.identity import hash_obj
         fp = self._fingerprint()
+        key = (fp, self._index_file_stamp())
+        hit = self.__dict__.get("_index_mem")
+        if hit is not None and hit[0] == key:         # ADR-77: same library files and same index file -> same payload
+            self.last_index_event = "used"
+            return hit[1]
         try:
             doc = json.loads(self.index_path.read_text())
             if doc.get("index_version") != INDEX_VERSION:
@@ -244,6 +249,7 @@ class StrategyLibrary:
                 reason = "stale"
             else:
                 self.last_index_event = "used"
+                self._index_mem = (key, doc["payload"])
                 return doc["payload"]
         except FileNotFoundError:
             reason = "missing"
@@ -256,7 +262,15 @@ class StrategyLibrary:
         except OSError:
             pass                                # an unwritable index only costs speed
         self.last_index_event = f"rebuilt:{reason}"
+        self._index_mem = ((fp, self._index_file_stamp()), payload)
         return payload
+
+    def _index_file_stamp(self) -> tuple | None:
+        try:
+            st = os.stat(self.index_path)
+            return (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            return None
 
     def verify_index(self) -> dict:
         """Compare the index with the authoritative directory scan."""

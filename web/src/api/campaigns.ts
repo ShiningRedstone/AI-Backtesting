@@ -78,6 +78,7 @@ export interface CampaignJob {
   job_id: string; kind: "campaign"; campaign_id: string; search_id: string; families: string[] | null; n_strategy_ids: number | null;
   state: CampaignJobState; created_at: string; started_at: string | null; finished_at: string | null; error: string | null;
   cancel_requested: boolean; live: Partial<CampaignRunRecord> & { status: string; phase: string };
+  processes?: number;                         // ADR-77: CPU cores computing strategies at once
 }
 export interface CheckReport { campaign_id: string; ready: boolean; note: string; checks: { check: string; ok: boolean; detail: unknown }[] }
 

@@ -48,6 +48,9 @@ def build_workspace(budget_extra=0):
     p = svc.create_protocol(imp["derived"][0], DISC, HOLD, name="desktop", exposure_statement="none",
                             trial_budget=len(res.strategies) + budget_extra)
     cid = svc.campaign_freeze(res.manifest_id)["campaign_id"]
+    # these desktop tests exercise the one-core runner (they stub Services._run_cell, which only it calls); the
+    # multi-core path (ADR-77) is covered, against this same fixture, by tests/test_parallel_research_runs.py
+    svc.set_ui_preferences({"research_processes": 1})
     svc.store.close()
     return root, res, p["protocol_id"], cid
 

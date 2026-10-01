@@ -164,3 +164,31 @@ class FeatureCache:
             if target.exists():
                 shutil.rmtree(target)
             self.root.mkdir(parents=True, exist_ok=True)
+
+
+class MemoryFeatureCache(FeatureCache):
+    """In-memory only, bounded by BYTES (ADR-77): holds the features of the causality check's truncated histories.
+    Keys are the ordinary feature cache keys, which include the content hash of the (truncated) bars they were
+    computed from, so an entry is only ever reused for byte-identical input."""
+
+    def __init__(self, max_bytes: int):
+        super().__init__(None, verify=False, memory_entries=1 << 30)
+        self.max_bytes = int(max_bytes)
+        self._sizes: dict[str, int] = {}
+        self.bytes = 0
+
+    def _remember(self, key: str, arrays: dict) -> None:
+        size = int(sum(np.asarray(a).nbytes for a in arrays.values()))
+        with self._lock:
+            if key in self._mem:
+                self.bytes -= self._sizes.pop(key, 0)
+            if size > self.max_bytes:
+                self._mem.pop(key, None)
+                return
+            self._mem[key] = arrays
+            self._mem.move_to_end(key)
+            self._sizes[key] = size
+            self.bytes += size
+            while self.bytes > self.max_bytes and self._mem:
+                old, _ = self._mem.popitem(last=False)
+                self.bytes -= self._sizes.pop(old, 0)

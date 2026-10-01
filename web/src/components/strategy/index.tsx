@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError } from "../../api/client";
+import { api, ApiError, viewCache } from "../../api/client";
 import type { ProtocolRecordRow, BacktestJob, BacktestResult, Change, DatasetRow, Readiness, VariantRow, VariationPreview, VariationResult } from "../../api/types";
 import { href } from "../../app/router";
 import { useApp } from "../../app/context";
@@ -136,6 +136,7 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [runErr, setRunErr] = useState<ApiError | null>(null);
   const [protocol, setProtocol] = useState<ProtocolRecordRow | null>(null);
+  const { reloadPrefs } = useApp();
   // ADR-76: the backtest runs as a background job; the job id is remembered for this strategy so leaving the page and
   // coming back picks the run (or its result) up again instead of losing it.
   const jobKey = `munyun.backtest-job.${typeof strategy === "string" ? strategy : JSON.stringify(strategy).length + ":" + (strategy as StrategyDoc).name}`;
@@ -148,7 +149,7 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
       if (!live) return;
       if (j.state === "running") { t = window.setTimeout(poll, 1000); return; }
       setRunning(false);
-      if (j.state === "completed" && j.result) { setResult(j.result); setRunErr(null); }
+      if (j.state === "completed" && j.result) { setResult(j.result); setRunErr(null); viewCache.clear(); reloadPrefs(); }
       else setRunErr(new ApiError(400, j.error?.kind ?? "failed", j.error?.message ?? "The backtest failed"));
       try { window.sessionStorage.removeItem(jobKey); } catch { /* ignore */ }
       setJobId(null);

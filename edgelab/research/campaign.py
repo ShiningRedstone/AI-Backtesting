@@ -622,27 +622,47 @@ def check(svc, cid: str) -> dict:
 
 
 # ======================================================================================== run
-def run(svc, cid: str, *, workers: int = REQUIRED_WORKERS, max_failures: int = 0, _preflight: Mapping | None = None) -> dict:
+def run(svc, cid: str, *, workers: int = REQUIRED_WORKERS, max_failures: int = 0, _preflight: Mapping | None = None,
+        processes: int = 1) -> dict:
     """Preflight, then the protocol-gated search of the frozen spec (resumes; stops after ``max_failures`` failed cells).
     The whole campaign scope (CLI ``campaign-run``)."""
-    out = run_scope(svc, cid, workers=workers, max_failures=max_failures, _preflight=_preflight, source="cli")
+    out = run_scope(svc, cid, workers=workers, max_failures=max_failures, _preflight=_preflight, source="cli",
+                    processes=processes)
     return {k: out[k] for k in ("campaign_id", "search_id", "status", "ledger", "complete", "failed_cells",
                                 "n_failed_cells", "note", "run_record_id")}
+
+
+def max_processes() -> int:
+    """CPU cores research runs may use on this machine (ADR-77)."""
+    import os
+    return max(1, os.cpu_count() or 1)
+
+
+def default_processes() -> int:
+    """All cores but one (at least 1): the default for research runs (ADR-77)."""
+    return max(1, max_processes() - 1)
 
 
 def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids: list[str] | None = None,
               workers: int = REQUIRED_WORKERS, max_failures: int = 0,
               lock=None, cancel: Callable[[], bool] | None = None, on_progress: Callable[[dict], None] | None = None,
-              _preflight: Mapping | None = None, source: str = "cli") -> dict:
+              _preflight: Mapping | None = None, source: str = "cli", processes: int = 1) -> dict:
     """Run a family SCOPE (None = every family) of a frozen campaign: preflight, then the SAME frozen search with only the
     scope's cells executing (``batch.run_search(include=...)``). Out-of-scope cells stay pending for a later run; the
     search id, cell ids, trial keys and budget accounting are the campaign's own. A durable run record (history) is
-    written to <data>/campaigns/<CMP>/runs/ at every step; the authoritative results are the usual store rows."""
+    written to <data>/campaigns/<CMP>/runs/ at every step; the authoritative results are the usual store rows.
+    ``processes`` (ADR-77) is HOW MANY CPU cores compute cells at the same time: an execution setting, not part of the
+    frozen spec, the search id or any identity. Results are written by this process alone, in plan order, so the cells,
+    trades, run order and trial ledger are the same as with 1; a stop lets the cells already computing on other cores
+    finish (they are recorded like any cell)."""
     from contextlib import nullcontext
     from edgelab.research.batch import run_search
     guard = lock if lock is not None else nullcontext()
     if workers != REQUIRED_WORKERS:
         raise CampaignError("WORKERS_NOT_ALLOWED", f"this campaign runs with workers={REQUIRED_WORKERS} only", workers=workers)
+    if not isinstance(processes, int) or isinstance(processes, bool) or not 1 <= processes <= max_processes():
+        raise CampaignError("PROCESSES_INVALID", f"processes must be 1..{max_processes()} (CPU cores of this machine)",
+                            processes=processes)
     spec = load(svc, cid)                                       # CAMPAIGN_TAMPERED / NOT_FOUND before anything else
     _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
     ids, fams = scope_ids(header, rows, families, strategy_ids)
@@ -652,6 +672,7 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids:
     sid = spec["search"]["search_id"]
     rec = new_run_record(spec, fams, len(ids), source)
     rec["all_families"] = whole
+    rec["processes"] = processes
     rec["scope_kind"] = "all" if whole else "families" if strategy_ids is None else "strategies"
     save_scope(svc, cid, rec["run_record_id"], ids)                 # the selected scope, persisted once
     rec["scope_file"] = f"{rec['run_record_id']}.scope.json"
@@ -719,7 +740,7 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids:
                 b = svc.store.get_search_batch(sid) or {}
             return int(b.get("n_failed") or 0) > max_failures
 
-        out = run_search(svc, spec["search"]["spec"], REQUIRED_WORKERS, lock=lock, cancel=stop,
+        out = run_search(svc, spec["search"]["spec"], processes, lock=lock, cancel=stop,
                          include=None if whole else set(ids), on_cell=on_cell)
     except CampaignError:
         raise

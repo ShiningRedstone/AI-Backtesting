@@ -190,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-failures", type=int, default=0,
                    help="campaign-run: stop after this many failed cells (default 0 = stop at the first failure)")
     p.add_argument("--workers", type=int, help="run: worker processes (default: the spec's workers, 1)")
+    p.add_argument("--processes", type=int, default=1,
+                   help="campaign-run: CPU cores computing cells at once (default 1; results are identical)")
     p.add_argument("--metric", help="rank: expectancy_r | profit_factor | net_r (default: the search spec's)")
     p.add_argument("--min-sample-label", help="rank: LOW SAMPLE SIZE | MODERATE SAMPLE | ADEQUATE SAMPLE")
 
@@ -466,7 +468,8 @@ def _campaign(svc, a) -> int:
                 print(("READY" if r["ready"] else "NOT READY") + f" - {r['campaign_id']} ({r['note']})")
             return 0 if r["ready"] else 2
         if a.action == "campaign-run":
-            r = svc.campaign_run(a.target, workers=a.workers if a.workers is not None else 1, max_failures=a.max_failures)
+            r = svc.campaign_run(a.target, workers=a.workers if a.workers is not None else 1, max_failures=a.max_failures,
+                                 processes=a.processes)
             _print(r, a.json)
             return 0 if r["complete"] else 1
         _print(svc.campaign_status(a.target), a.json)
