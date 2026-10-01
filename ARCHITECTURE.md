@@ -1817,8 +1817,9 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   - Campaign `detail` / `tree` responses are memoized on (spec file, run record files, db token).
   - Library facets are also stored in a per-user cache folder OUTSIDE the workspace (`overview.facets_cache_path`;
     Windows `%LOCALAPPDATA%\EdgeLab-Cache`), keyed on the library fingerprint (rebuilt on change, safe to delete), so
-    opening a workspace still writes nothing into it; the app warms these caches in the background at start, one step
-    at a time under the lock.
+    opening a workspace still writes nothing into it. The launchers (desktop app, `python -m edgelab.web`) warm these
+    caches in the background at start (`create_app(warm=True)`), one step at a time under the service lock; their
+    shutdown closes the store under the same lock. Plain `create_app` callers (tests, embedding) do not warm.
   - Browser: the library pages its table; the single-backtest picker searches instead of listing 10,000 options.
 - **Names.** `overview.display_names` gives every strategy a `display_name` (family and distinguishing settings) and a
   `short_name` (settings only) from `strategy/presentation.py`; generated machine names' hash suffix never shows.

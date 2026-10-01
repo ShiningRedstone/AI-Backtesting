@@ -234,7 +234,7 @@ def run(argv=None) -> int:
         def app_factory(ws: Path):
             web = replace(load_web_config(ws) if (ws / "configs").is_dir() else WebConfig(), host=HOST,
                           port=args.port or 8765)
-            app = create_app(ws, demo=args.demo, web=web)
+            app = create_app(ws, demo=args.demo, web=web, warm=True)
             if app.config["EDGELAB"]["services"].store.backend != "sqlite":
                 raise StartupError("the desktop app requires the SQLite store; set storage.backend: sqlite "
                                    "in configs/storage.yaml")

@@ -68,10 +68,11 @@ def _id(x: Any, pattern: re.Pattern, what: str) -> str:
     return x
 
 
-def _warm_caches(svc) -> None:
-    """Fill the read-only view caches (strategy facets, run rows, prop profiles) in the background right after start,
-    so the first page does not pay for them. Under the service lock like every request; failures are ignored (the
-    pages simply compute the same values on first use)."""
+def warm_caches(svc) -> None:
+    """Fill the read-only view caches (strategy facets, run rows, prop profiles, campaign views) in the background right
+    after start, so the first page does not pay for them. Under the service lock like every request; failures are
+    ignored (the pages compute the same values on first use). Only the launchers turn it on (``create_app(warm=True)``):
+    their shutdown closes the store under the same lock, so the warm-up never races a closing database."""
     def work():
         from edgelab.prop.service import default_profiles
         from edgelab.research import campaign as C
@@ -90,7 +91,7 @@ def _warm_caches(svc) -> None:
     threading.Thread(target=work, daemon=True, name="munyun-cache-warmup").start()
 
 
-def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None = None) -> Flask:
+def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None = None, warm: bool = False) -> Flask:
     from edgelab.services import Services
 
     root = Path(root).resolve()
@@ -99,7 +100,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     lock = svc.lock                  # the one service lock (shared with the Phase 4 job manager)
     if svc.store.backend == "sqlite":
         svc.jobs                     # start the job manager: searches a dead process left `running` -> interrupted
-    _warm_caches(svc)
+    if warm:
+        warm_caches(svc)
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = int(web.max_request_mb * 1024 * 1024)
     app.config["EDGELAB"] = {"root": root, "demo": demo, "services": svc, "web": web}
