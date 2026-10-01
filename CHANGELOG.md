@@ -3,6 +3,14 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy panel: results by year and month, and an equity curve (ADR-82)
+
+| Item | Status |
+|---|---|
+| "Last 12 months of data" replaced by an equity curve (cumulative net R over time) and "Results by year" (trades, total net R and $, net R per trade, win rate); click a year to see its twelve months | IMPLEMENTED, TESTED (known answers; years, months and curve reconcile with the stored trades; browser test run) |
+| Years and months by each trade's exit date in New York time; only years with trades listed; partial first/last years marked | IMPLEMENTED, TESTED |
+| Backtests, results, research logic | UNCHANGED (display only, from stored trades; nothing re-run) |
+
 ## Paper trading in simulated prop accounts (ADR-81)
 
 | Item | Status |

@@ -391,8 +391,26 @@ def _window_stats(t: pd.DataFrame) -> dict:
             "win_rate": float((net > 0).mean()) if n else None}
 
 
+def calendar_years(t: pd.DataFrame, risk_usd: float) -> list[dict]:
+    """Per calendar year (only years with trades) and per month of each year (all twelve; months without trades say so):
+    trades, total net R, its $ value at the display risk per trade, net R per trade and win rate. A trade belongs to the
+    New York date of its EXIT, so a year's total equals the equity curve's rise over that year. Display only."""
+    if not len(t):
+        return []
+    local = pd.DatetimeIndex(pd.to_datetime(t["exit_ts"], utc=True)).tz_convert(ov.LOCAL_TZ)
+    years, months = local.year.to_numpy(), local.month.to_numpy()
+
+    def stats(mask) -> dict:
+        s = _window_stats(t[mask])
+        return {**s, "net_usd_at_risk": s["net_r"] * risk_usd if s["net_r"] is not None else None}
+    return [{"year": int(y), **stats(years == y),
+             "months": [{"month": ov.MONTHS[m - 1], **stats((years == y) & (months == m))} for m in range(1, 13)]}
+            for y in sorted(set(years.tolist()))]
+
+
 def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     from edgelab.prop import bootstrap as bs
+    from edgelab.research import lab
     from edgelab.strategy import presentation as pr
     scope = str(params.get("scope") or "in_sample")
     if scope not in ov.SCOPES:
@@ -419,7 +437,6 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     rec, trades = svc.store.load_run(ref["run_id"])
     t = trades.sort_values(["exit_ts", "entry_ts"], kind="mergesort").reset_index(drop=True)
     entry = pd.DatetimeIndex(pd.to_datetime(t["entry_ts"], utc=True)).tz_convert(ov.LOCAL_TZ)
-    exits = pd.DatetimeIndex(pd.to_datetime(t["exit_ts"], utc=True))
     d = rec.get("dataset") or {}
     try:
         start, end = pd.Timestamp(d.get("start")), pd.Timestamp(d.get("end"))
@@ -427,8 +444,6 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     except (TypeError, ValueError):
         n_weeks = None
     weeks_with = len({(x.isocalendar()[0], x.isocalendar()[1]) for x in entry})
-    last = exits.max()
-    w12 = t[exits >= last - pd.Timedelta(days=365)]
     oos = [r for r in runs if r["status"] in ("OUT_OF_SAMPLE", "WALK_FORWARD") and not r["holdout"]]
     holdout = [r for r in runs if r["holdout"]]
     ranked = sorted([x["ref"] for x in rows if x["ref"] and x["ref"]["trade_count"]], key=lambda r: -(r["net_r"] or -1e18))
@@ -454,8 +469,7 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
               "avg_hold_minutes": ref["avg_hold_minutes"], "gross_r_per_trade": ref["gross_r_per_trade"],
               "profit_factor": ref["profit_factor"], "sample_label": ref["sample_label"],
               "net_usd_recorded": ov._f(hm.get("net_usd"))},
-        last_12_months={**_window_stats(w12), "from": str((last - pd.Timedelta(days=365)).date()), "to": str(last.date()),
-                        "label": "Last 12 months of the data (the window ends at the last trade, not today)"},
+        years=calendar_years(t, risk), curve=lab.run_curve(svc, ref["run_id"]),
         out_of_sample=[{"run_id": r["run_id"], "status": r["status"], "scope": r["scope"], "trades": r["trade_count"],
                         "expectancy_r": r["expectancy_r"], "net_r": r["net_r"], "start": r["start"], "end": r["end"],
                         "net_usd_at_risk": r["net_r"] * risk if r["net_r"] is not None else None} for r in oos[-3:]],

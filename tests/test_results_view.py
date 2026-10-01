@@ -55,6 +55,26 @@ class TestSurvivorAndCurves(unittest.TestCase):
         self.assertAlmostEqual(cost[0.5], 1.2)                        # 0.5 x 1.2 - 0.5 - 0.1 = 0
         self.assertNotIn("after_cost", rv.breakeven_curves(None))
 
+    def test_calendar_years_known_answers(self):
+        """Years and months by the New York date of each trade's EXIT; all twelve months listed; $ = R x risk."""
+        ex = ["2021-12-31 22:00", "2022-01-01 03:00", "2022-03-15 10:00", "2022-03-16 10:00", "2024-07-01 12:00"]   # UTC
+        t = pd.DataFrame({"exit_ts": pd.to_datetime(ex, utc=True), "net_r": [1.0, 2.0, -1.0, 3.0, -0.5]})
+        ys = rv.calendar_years(t, 500.0)
+        self.assertEqual([y["year"] for y in ys], [2021, 2022, 2024])                  # 2023 had no trades: not listed
+        y21, y22, y24 = ys
+        self.assertEqual((y21["trades"], y21["net_r"]), (2, 3.0))     # 2022-01-01 03:00 UTC is 31 Dec 22:00 in New York
+        self.assertEqual((y22["trades"], y22["net_r"], y22["win_rate"]), (2, 2.0, 0.5))
+        self.assertAlmostEqual(y22["expectancy_r"], 1.0)
+        self.assertEqual(y22["net_usd_at_risk"], 1000.0)
+        self.assertEqual([m["month"] for m in y22["months"]][:3], ["Jan", "Feb", "Mar"])
+        self.assertEqual(len(y22["months"]), 12)
+        mar = y22["months"][2]
+        self.assertEqual((mar["trades"], mar["net_r"], mar["net_usd_at_risk"]), (2, 2.0, 1000.0))
+        jan = y22["months"][0]
+        self.assertEqual((jan["trades"], jan["net_r"], jan["expectancy_r"], jan["win_rate"]), (0, None, None, None))
+        self.assertEqual((y21["months"][11]["trades"], y24["months"][6]["net_r"]), (2, -0.5))
+        self.assertEqual(rv.calendar_years(t.iloc[0:0], 500.0), [])
+
 
 class TestBootstrap(unittest.TestCase):
     def test_identical_winning_days_always_pass_on_the_audited_day(self):
@@ -120,6 +140,18 @@ class TestWorkspaceViews(unittest.TestCase):
         self.assertNotIn("_", p["display_name"])
         self.assertTrue(p["prop"] and all(x["profile_name"] and "_" not in x["profile_name"] for x in p["prop"]))
         self.assertEqual(self.svc.store._query("SELECT COUNT(*) FROM runs")[0][0], before)   # nothing recorded
+
+    def test_panel_years_and_curve_match_the_stored_trades(self):
+        p = self.svc.strategy_panel(self.sid, {})
+        _, t = self.svc.store.load_run(self.run_id)
+        self.assertNotIn("last_12_months", p)
+        self.assertEqual(sum(y["trades"] for y in p["years"]), len(t))
+        self.assertAlmostEqual(sum(y["net_r"] for y in p["years"]), float(t["net_r"].sum()), places=9)
+        for y in p["years"]:
+            self.assertEqual(sum(m["trades"] for m in y["months"]), y["trades"])
+            self.assertAlmostEqual(sum(m["net_r"] or 0.0 for m in y["months"]), y["net_r"], places=9)
+        self.assertEqual(p["curve"]["n_trades"], len(t))
+        self.assertAlmostEqual(p["curve"]["final_net_r"], p["kpis"]["net_r"], places=9)
 
     def test_controls_are_stored_as_controls_never_as_runs(self):
         runs_before = self.svc.store._query("SELECT COUNT(*) FROM runs")[0][0]

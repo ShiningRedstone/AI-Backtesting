@@ -472,6 +472,8 @@ export interface PropSummaryRow { profile_id: string | null; profile_name: strin
   evaluation: string | null; failure_reason: string | null; payouts: number; pass_days: number | null; passes_with_payout: boolean;
   rule_basis_state: string | null;
   bootstrap?: { p_pass: Num; p_first_payout: Num; p_evaluation_breach: Num; median_days_to_pass: Num; valid_replays: number } | null }
+export interface PeriodStats { trades: number; net_r: Num; net_usd_at_risk: Num; expectancy_r: Num; win_rate: Num }
+export interface YearRow extends PeriodStats { year: number; months: (PeriodStats & { month: string })[] }
 export interface StrategyPanelData {
   strategy_id: string; display_name: string; explanation: string; family_id: string | null; family_name: string | null;
   facets: Record<string, unknown>; scope: string; risk_per_trade_usd: number; survivor_rule: string; tested: boolean;
@@ -481,7 +483,8 @@ export interface StrategyPanelData {
     max_drawdown_r: Num; max_drawdown_usd_at_risk: Num; max_loss_streak: number | null; cost_r_per_trade: Num; pct_weeks_with_trade: Num;
     weeks_in_data: number | null; avg_hold_minutes: Num; gross_r_per_trade: Num; profit_factor: Num; sample_label: string | null;
     net_usd_recorded: Num };
-  last_12_months?: { trades: number; expectancy_r: Num; net_r: Num; win_rate: Num; from: string; to: string; label: string };
+  years?: YearRow[];
+  curve?: RunCurve;
   out_of_sample?: { run_id: string; status: string; scope: string; trades: number; expectancy_r: Num; net_r: Num; start: string; end: string;
     net_usd_at_risk: Num }[];
   holdout?: { run_id: string; scope: string; trades: number; expectancy_r: Num; net_r: Num }[];

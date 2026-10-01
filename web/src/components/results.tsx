@@ -4,11 +4,11 @@
    labelled), basis (net / gross), synthetic data and simulated results are labelled where they are shown. */
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { BootstrapResponse, ControlPanelData, PropSummaryRow, ResultsOverview, StrategyPanelData } from "../api/types";
+import type { BootstrapResponse, ControlPanelData, PeriodStats, PropSummaryRow, ResultsOverview, StrategyPanelData, YearRow } from "../api/types";
 import { useApi, useApp } from "../app/context";
 import { facetLabel, humanize, profileLabel, statusLabel } from "../app/labels";
 import { href, useRoute } from "../app/router";
-import { HBars, PathsChart, ScatterChart } from "./charts";
+import { HBars, PathsChart, ScatterChart, StepTimeChart } from "./charts";
 import type { ScatterGroup } from "./charts";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, FavStar, KeyValues, Kpi, Loading, Mono, Scope, TableWrap, TechDetails, n, pct, r, shortTime, signCls } from "./ui";
 
@@ -174,14 +174,18 @@ export function StrategyPanel({ id }: { id: string }) {
         </div>
         <p className="small muted">Dollar figures are R multiplied by your risk per trade ({usd(p.risk_per_trade_usd)}, set in Settings); the
           backtest itself is unchanged.</p>
-        {p.last_12_months && <Card title={<>Last 12 months of data <Scope kind="is" /></>} testId="panel-last-12">
-          <div className="kpis">
-            <Kpi label="Trades" value={p.last_12_months.trades} />
-            <Kpi label="Net R per trade" value={r(p.last_12_months.expectancy_r)} tone={signCls(p.last_12_months.expectancy_r) as "pos" | "neg" | ""} />
-            <Kpi label="Total net R" value={n(p.last_12_months.net_r, 1)} sub={usd(p.last_12_months.net_r == null ? null : p.last_12_months.net_r * p.risk_per_trade_usd)} />
-            <Kpi label="Win rate" value={pct(p.last_12_months.win_rate, 0)} />
-          </div>
-          <p className="small muted">{p.last_12_months.from} to {p.last_12_months.to}. The window ends at the last trade in the data, not today.</p>
+        {p.curve && <Card title={<>Equity curve <Scope kind={panelScope(p.status)} /><Scope kind="net" /></>} testId="panel-equity">
+          <StepTimeChart points={p.curve.points.map((x) => ({ t: x.exit_ts, v: x.equity_r, n: x.i }))} start={p.dataset?.start} end={p.dataset?.end}
+            testId="panel-equity-chart" />
+          <p className="small muted" style={{ marginBottom: 0 }}>Running total of net R after each trade's exit, from the stored trades
+            {p.curve.thinned ? ` (thinned to ${p.curve.points.length.toLocaleString()} points for display; the values shown are exact)` : ""}.
+            Flat stretches are periods without trades. Historical result under the stated costs, not a forecast.</p>
+        </Card>}
+        {!!p.years?.length && <Card title={<>Results by year <Scope kind={panelScope(p.status)} /><Scope kind="net" /></>} testId="panel-years">
+          <YearTable years={p.years} dataset={p.dataset} />
+          <p className="small muted" style={{ marginBottom: 0 }}>Click a year to see its months. Each trade counts in the year and month of its
+            exit (New York time), so a year's total matches the equity curve. Dollar figures are R × your risk per trade ({usd(p.risk_per_trade_usd)}).
+            Only years with trades are listed.</p>
         </Card>}
         <Card title={<>Out-of-sample <Scope kind="oos" /></>} testId="panel-oos">
           {!p.out_of_sample?.length ? <p className="small muted" style={{ margin: 0 }}>No out-of-sample test of this strategy yet. In-sample results
@@ -206,6 +210,38 @@ export function StrategyPanel({ id }: { id: string }) {
     </div>
   );
 }
+
+const panelScope = (status?: string) => (status === "OUT_OF_SAMPLE" ? "oos" : status === "WALK_FORWARD" ? "wf" : "is");
+
+/** Per-year results with an expandable row per year showing its twelve months (from the backend read model). */
+function YearTable({ years, dataset }: { years: YearRow[]; dataset?: StrategyPanelData["dataset"] }) {
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const toggle = (y: number) => setOpen((o) => { const s = new Set(o); if (s.has(y)) s.delete(y); else s.add(y); return s; });
+  const first = dataset?.start?.slice(0, 10), last = dataset?.end?.slice(0, 10);
+  const partial = (y: number) => [first && first.startsWith(`${y}-`) && !first.endsWith("-01-01") ? `from ${dayMonth(first)}` : null,
+    last && last.startsWith(`${y}-`) && !last.endsWith("-12-31") ? `to ${dayMonth(last)}` : null].filter(Boolean).join(", ");
+  const cells = (x: PeriodStats) => <>
+    <td className="r num">{x.trades.toLocaleString()}</td>
+    <td className={`r num ${signCls(x.net_r)}`}>{n(x.net_r, 1)} R <span className="muted small">{usd(x.net_usd_at_risk)}</span></td>
+    <td className={`r num ${signCls(x.expectancy_r)}`}>{r(x.expectancy_r)}</td>
+    <td className="r num">{pct(x.win_rate, 0)}</td></>;
+  return (
+    <TableWrap><table className="dense" data-testid="year-table"><thead><tr><th>Year</th><th className="r">Trades</th><th className="r">Total net R</th>
+      <th className="r">Net R per trade</th><th className="r">Win rate</th></tr></thead>
+      <tbody>{years.map((y) => { const isOpen = open.has(y.year); const part = partial(y.year);
+        return [<tr key={y.year} data-testid={`year-${y.year}`}>
+          <td><button type="button" className="linklike" onClick={() => toggle(y.year)} aria-expanded={isOpen} data-testid={`year-toggle-${y.year}`}
+            title={isOpen ? "Hide months" : "Show months"}>{isOpen ? "▾" : "▸"} <b>{y.year}</b></button>
+            {part && <span className="small muted"> · {part}</span>}</td>
+          {cells(y)}</tr>,
+        ...(isOpen ? y.months.map((m) => <tr key={`${y.year}-${m.month}`} data-testid={`month-${y.year}-${m.month}`}>
+          <td className="small" style={{ paddingLeft: 28 }}>{m.month}</td>
+          {m.trades ? cells(m) : <td colSpan={4} className="r small faint">no trades</td>}</tr>) : [])];
+      })}</tbody></table></TableWrap>
+  );
+}
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayMonth = (d: string) => `${Number(d.slice(8, 10))} ${MONTH_ABBR[Number(d.slice(5, 7)) - 1]}`;
 
 const TECH_LABEL: Record<string, string> = { strategy_id: "Strategy ID", logic_hash: "Logic hash", definition_hash: "Definition hash",
   machine_name: "Machine name", run_id: "Backtest ID", dataset_id: "Dataset ID", trades_hash: "Trades hash", config_hash: "Config hash",

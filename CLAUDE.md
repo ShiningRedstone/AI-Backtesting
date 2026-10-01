@@ -94,6 +94,8 @@ ADR-81: paper trading in simulated prop accounts (`edgelab/paper/`: `feed.py` da
 validated feed, never a research dataset; `engine.py` attempts/fees around the unchanged lifecycle; `store.py` JSON under `<data>/paper/`;
 `manager.py` 30-min thread, launchers only); tab "Prop & paper" (Paper accounts, Start paper trading, Backtest prop check); fees in
 `ui.prop_fees`; engine option `account.equity_from_ts` (absent = byte-identical backtests). Paper results are never runs or trials.
+ADR-82: strategy panel shows an equity curve (`StepTimeChart`, time axis) and "Results by year" with expandable months
+(`results_view.calendar_years`, by exit date in New York time, display only) instead of "Last 12 months of data".
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -335,4 +337,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-81). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-82). Update `README.md` status for phases.

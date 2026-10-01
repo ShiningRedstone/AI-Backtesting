@@ -2042,3 +2042,20 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Not verified here.** The build environment cannot reach Dukascopy (proxy), so the live download is exercised only
   through the injected synthetic fetcher (`tests/paper_fixture.py`). The first real download happens on the user's
   machine.
+
+### ADR-82 Strategy panel: results by year and month, and an equity curve
+- **What changed.** The strategy panel (Backtest results → Strategies drawer, and the strategy page's summary) no longer
+  shows "Last 12 months of data". In its place: an **equity curve** (running total of net R after each trade's exit, over
+  real time from the dataset start to its end) and **Results by year**. Each year row expands to all twelve months.
+- **Read model (`research/results_view.py`).** `calendar_years(trades, risk_usd)` lists only years with trades. For each
+  year and month it gives trades, total net R, its $ value at the display risk per trade, net R per trade and win rate.
+  Months without trades are listed with nulls ("no trades"). A trade belongs to the New York date of its EXIT, so a
+  year's total equals the curve's rise over that year. The curve is the existing `lab.run_curve` of the panel's run.
+  The `last_12_months` field is removed.
+- **Display only.** Everything is recomputed from the run's stored trades. Nothing is re-run, recorded or counted, and
+  no engine, cost, sizing or prop logic changed. Dollar figures are R × the risk-per-trade display preference.
+- **Chart.** `StepTimeChart` (web/src/components/charts.tsx) is a step line on a time axis: the total only changes at an
+  exit and holds in between, so flat stretches are periods without trades. Dates are shown in New York time.
+- **Tests.** `tests/test_results_view.py` has known answers (a trade exiting at 03:00 UTC on 1 January counts in New
+  York's 31 December; empty months; $ = R × risk). It also checks that the panel's years, months and curve reconcile
+  with the stored trades.
