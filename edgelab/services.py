@@ -27,11 +27,12 @@ here judges strategies: backtest results are returned with their sample-size lab
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import math
 import re
 import threading
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -65,7 +66,54 @@ def _jsonable(x: Any) -> Any:
     return x
 
 
+_READ_STORE: contextvars.ContextVar = contextvars.ContextVar("edgelab_read_store", default=None)
+
+
 class Services:
+    # ADR-78: inside `read_context()` (page requests) `store` is a pooled READ-ONLY connection, so reads never wait
+    # for the service lock a research run holds; everywhere else it is the one writer connection. The writer lives in
+    # the instance __dict__ under "store" (assignment and mock.patch.object keep working).
+    @property
+    def store(self):
+        rs = _READ_STORE.get()
+        return rs[1] if rs is not None and rs[0] is self else self.__dict__["store"]
+
+    @store.setter
+    def store(self, value) -> None:
+        self.__dict__["store"] = value
+
+    @property
+    def writer_store(self):
+        return self.__dict__["store"]
+
+    @contextmanager
+    def read_context(self, page: bool = True):
+        """Run reads on a pooled read-only connection, without the service lock (yields False when the store has no
+        read-only connections, e.g. in-memory or DuckDB: the caller then takes the lock as before). `page`: a page
+        request (its views may reuse a cache key for a few seconds during a research run, see campaign.db_token);
+        research code passes page=False and always reads exact values."""
+        writer = self.__dict__["store"]
+        acquire = getattr(writer, "acquire_reader", None)
+        reader = acquire() if acquire is not None else None
+        if reader is None:
+            yield False
+            return
+        token = _READ_STORE.set((self, reader, page))
+        try:
+            yield True
+        finally:
+            _READ_STORE.reset(token)
+            writer.release_reader(reader)
+
+    @staticmethod
+    def in_read_context() -> bool:
+        return _READ_STORE.get() is not None
+
+    @staticmethod
+    def in_page_read() -> bool:
+        rs = _READ_STORE.get()
+        return rs is not None and bool(rs[2])
+
     def __init__(self, cfg: Mapping | None = None, root: str | Path = "."):
         self.cfg = cfg or load_config(Path(root) / "configs")
         self.root = Path(root)
@@ -387,11 +435,11 @@ class Services:
             rows = self.store._query("SELECT manifest_json FROM datasets WHERE dataset_id = ?", (dataset_id,))
             if not rows:
                 return self.load_dataset(dataset_id)                  # the gate raises the usual error
-            key = (id(self.store), rows[0][0], self._config_hash(),
+            key = (id(self.writer_store), rows[0][0], self._config_hash(),
                    None if period is None else (str(period[0]), str(period[1])))
             memo = self.__dict__.setdefault("_cell_ds", {})
             hit = memo.get(key)
-            if hit is not None and hit[0] is self.store:
+            if hit is not None and hit[0] is self.writer_store:
                 memo[key] = memo.pop(key)                             # most recently used last
                 return hit[1]
             if period is None:
@@ -401,7 +449,7 @@ class Services:
             ds = restrict_to_period(self._cell_dataset(dataset_id, None, lock), period[0], period[1],
                                     self.cfg.get("validation"))
         with guard:
-            memo[key] = (self.store, ds)
+            memo[key] = (self.writer_store, ds)
             while len(memo) > 2 * self._CELL_DATASETS_MAX:           # full datasets plus their discovery windows
                 memo.pop(next(iter(memo)))
         return ds

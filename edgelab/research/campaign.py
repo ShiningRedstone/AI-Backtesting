@@ -63,13 +63,66 @@ def _sha256(path: Path) -> str:
 _VIEW_CACHE: dict = {}
 
 
+_TOKENS: dict = {}
+VIEW_REFRESH_DURING_RESEARCH_S = 5.0
+TOTALS_REFRESH_S = 2.0                                  # live run totals / ETA refresh interval during a run
+
+
+def _file_change_counter(path: str) -> bytes | None:
+    """SQLite's file change counter (header bytes 24-27): incremented by every committed write of ANY connection or
+    process (rollback-journal mode)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(28)
+        return head[24:28] if len(head) == 28 else None
+    except OSError:
+        return None
+
+
+def _research_running(svc) -> bool:
+    jm = getattr(svc, "_jobs", None)
+    a = getattr(jm, "_active", None) if jm is not None else None
+    return a is not None and getattr(a, "state", None) in ("queued", "running")
+
+
+def read_outside_lock(svc, guard, fn: Callable):
+    """Run a READ-ONLY step of a research run on a pooled read-only connection without the service lock (ADR-78), so
+    page requests are not held up; exact values (not a page read). Falls back to the lock when the store has no
+    read-only connections or the step turns out to write."""
+    import sqlite3
+    rc = getattr(svc, "read_context", None)
+    if rc is not None:
+        with rc(page=False) as ok:
+            if ok:
+                try:
+                    return fn()
+                except sqlite3.OperationalError as exc:
+                    if "readonly" not in str(exc):
+                        raise
+    with guard:
+        return fn()
+
+
 def db_token(svc) -> tuple:
-    """Changes whenever ANY row of the store changes: this connection's own writes (total_changes) or another
-    connection's committed writes (PRAGMA data_version). Read-only views use it as a cache key."""
-    con = getattr(svc.store, "con", None)
+    """Changes whenever ANY row of the store changes: the writer connection's own writes (total_changes) or a commit
+    by any other connection or process (the file change counter). The same value in every thread, whichever
+    connection a request reads through (ADR-78). Read-only views use it as a cache key. Page requests (read context)
+    during a running research job reuse it for up to VIEW_REFRESH_DURING_RESEARCH_S, so views are rebuilt at most
+    that often instead of after every evaluated strategy; research code itself always sees the exact value."""
+    import time
+    w = getattr(svc, "writer_store", None) or svc.store
+    con = getattr(w, "con", None)
     if con is None:
-        return (id(svc.store), object())                    # unknown backend: never cached
-    return (id(svc.store), con.total_changes, con.execute("PRAGMA data_version").fetchone()[0])
+        return (id(w), object())                            # unknown backend: never cached
+    reading = getattr(svc, "in_page_read", lambda: False)()
+    now = time.monotonic()
+    last = _TOKENS.get(id(w))
+    if reading and last is not None and last[1] is w and now - last[2] < VIEW_REFRESH_DURING_RESEARCH_S \
+            and _research_running(svc):
+        return last[0]
+    tok = (id(w), con.total_changes, _file_change_counter(w.path) if w.path != ":memory:" else None)
+    _TOKENS[id(w)] = (tok, w, now)
+    return tok
 
 
 def manifest_rows_view(svc, manifest_id: str) -> tuple[dict, list[dict]]:
@@ -690,21 +743,21 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids:
     emit(status="preflight", phase=f"Preparing research - {len(ids):,} strategies selected; verifying the frozen campaign "
                                    f"({spec['manifest']['n_strategies']:,} strategies, datasets, protocol, prop profiles; no backtest)")
     try:
-        if _preflight is None:
-            with guard:
-                _preflight = check(svc, cid)
+        if _preflight is None:                                   # read-only: never holds the service lock (ADR-78)
+            _preflight = read_outside_lock(svc, guard, lambda: check(svc, cid))
         if not _preflight["ready"]:
             failed = [c for c in _preflight["checks"] if not c["ok"]]
             emit(status="failed", phase="preflight failed; nothing was evaluated", finished_at=_now(),
                  errors=[{"check": c["check"], "detail": c["detail"]} for c in failed][:50])
             raise CampaignError("PREFLIGHT_FAILED", "preflight failed; nothing was evaluated", failed=failed,
                                 run_record_id=rec["run_record_id"])
-        with guard:
-            before = progress(svc, spec, ids)
-            est = estimate(svc, spec, remaining_rows, before)
+        before = read_outside_lock(svc, guard, lambda: progress(svc, spec, ids))
+        est = read_outside_lock(svc, guard, lambda: estimate(svc, spec, remaining_rows, before))
         emit(status="running", phase="Running research", started_at=_now(), totals=before, eta=est,
              preflight_seconds=round(_time.perf_counter() - t_pre, 3),
              counts={"completed_this_run": 0, "failed_this_run": 0, "skipped_completed": 0})
+
+        refreshed = [0.0]
 
         def on_cell(event: str, c: Mapping, k: int, total: int) -> None:
             from edgelab.strategy.presentation import display_name
@@ -725,19 +778,21 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids:
                 errs = list(rec["errors"])[-49:] + [{"strategy_id": c["strategy_id"], "error": c.get("_error"),
                                                      "at": _now()}]
                 rec["errors"] = errs
-            if event == "done":
-                with guard:                                  # progress and ETA from the PERSISTED cells
-                    tot = progress(svc, spec, ids)
-                    est = estimate(svc, spec, remaining_rows, tot)
+            now = _time.monotonic()
+            if event == "done" and (now - refreshed[0] >= TOTALS_REFRESH_S or k + 1 >= total):
+                refreshed[0] = now                           # progress and ETA from the PERSISTED cells, read-only,
+                tot = read_outside_lock(svc, guard, lambda: progress(svc, spec, ids))      # at most every 2 s
+                est = read_outside_lock(svc, guard, lambda: estimate(svc, spec, remaining_rows, tot))
                 emit(counts=cnt, totals=tot, eta=est, current=None)
+            elif event == "done":
+                emit(counts=cnt, current=None)
             else:
                 emit(counts=cnt)
 
         def stop() -> bool:
             if cancel is not None and cancel():
                 return True
-            with guard:
-                b = svc.store.get_search_batch(sid) or {}
+            b = read_outside_lock(svc, guard, lambda: svc.store.get_search_batch(sid)) or {}
             return int(b.get("n_failed") or 0) > max_failures
 
         out = run_search(svc, spec["search"]["spec"], processes, lock=lock, cancel=stop,

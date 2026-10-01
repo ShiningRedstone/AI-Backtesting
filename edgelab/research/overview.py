@@ -13,6 +13,8 @@ facts only (never inferred from a metric).
 from __future__ import annotations
 
 import json
+import os
+import threading
 import math
 import re
 from collections import Counter
@@ -174,7 +176,7 @@ def library_facets(svc) -> list[dict]:
     _FACET_CACHE["facets"] = (key, rows)
     try:
         disk.parent.mkdir(parents=True, exist_ok=True)
-        tmp = disk.with_suffix(".tmp")
+        tmp = disk.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")   # unique: concurrent readers (ADR-78)
         tmp.write_text(json.dumps({"version": FACETS_CACHE_VERSION, "fingerprint": fp, "rows": rows}, default=str),
                        encoding="utf-8")
         tmp.replace(disk)
@@ -192,7 +194,7 @@ def run_records(svc) -> list[dict]:
         out = hit[1]
     else:
         out = _run_rows_incremental(svc, hit)
-        _FACET_CACHE["runs"] = (key, out, svc.store)
+        _FACET_CACHE["runs"] = (key, out, getattr(svc, "writer_store", svc.store))
     hr = holdout_run_ids(svc)
     crit = criteria_profile(svc)
     return [{**apply_criteria(r, crit), "holdout": True, "scope": HOLDOUT_SCOPE} if r["run_id"] in hr
@@ -203,7 +205,7 @@ def _run_rows_incremental(svc, hit) -> list[dict]:
     """ADR-77: run records are insert-only (never updated or deleted in place; a workspace reset replaces the store),
     so after a write only the runs added since the last read are parsed. Anything unexpected (another store, fewer
     runs, a gap) falls back to a full re-read."""
-    if hit and len(hit) > 2 and hit[2] is svc.store and hit[1]:
+    if hit and len(hit) > 2 and hit[2] is getattr(svc, "writer_store", svc.store) and hit[1]:
         old = hit[1]
         count, last = svc.store._query("SELECT COUNT(*), MAX(run_id) FROM runs")[0]
         if count == len(old) and last == old[-1]["run_id"]:
@@ -695,10 +697,11 @@ def _cost_share(runs: list[dict]) -> dict:
 
 def _pooled_calendar(svc, runs: list[dict]) -> dict:
     frames = []
-    memo = svc.__dict__.setdefault("_calendar_trades", {})   # ADR-77: stored trades never change (per store object)
-    if memo.get("_store") is not svc.store:
-        memo.clear()
-        memo["_store"] = svc.store
+    writer = getattr(svc, "writer_store", svc.store)
+    memo = svc.__dict__.get("_calendar_trades")              # ADR-77: stored trades never change (per store object)
+    if memo is None or memo.get("_store") is not writer:
+        memo = {"_store": writer}                             # replaced, never cleared: safe for concurrent readers
+        svc.__dict__["_calendar_trades"] = memo
     for r in runs:
         t = memo.get(r["run_id"])
         if t is None:
@@ -708,8 +711,8 @@ def _pooled_calendar(svc, runs: list[dict]) -> dict:
                 continue
             t = full[["entry_ts", "net_r", "gross_r"]] if len(full) else full
             if len(memo) > 2 * MAX_POOLED_RUNS:
-                memo.clear()
-                memo["_store"] = svc.store
+                memo = {"_store": writer}
+                svc.__dict__["_calendar_trades"] = memo
             memo[r["run_id"]] = t
         if len(t):
             frames.append(t)

@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Pages load while a research run is going (ADR-78)
+
+| Item | Status |
+|---|---|
+| Page requests read through read-only database connections without waiting for the research run's lock (a page that waited 7.8 s behind an 8 s research step now answers in 0.02 s) | IMPLEMENTED, TESTED (pages answer with the lock held; same JSON as before) |
+| Research run holds the lock less: preflight, progress/ETA and stop check read outside it; planned cells written in one transaction | IMPLEMENTED, TESTED |
+| During a research run, page numbers refresh at most every 5 s; live run totals every 2 s (exact at the end) | IMPLEMENTED, TESTED |
+| GPU acceleration | NOT IMPLEMENTED (pages were lock-bound; GPU math could change result hashes) |
+| Backtest engine, results, trial counting, write order | UNCHANGED |
+
 ## Fix: in-app update failed with "the installed folder is in use" (WinError 32)
 
 | Item | Status |

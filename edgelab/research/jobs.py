@@ -16,6 +16,7 @@ spec resumes it explicitly, skipping its completed cells).
 from __future__ import annotations
 
 import threading
+from contextlib import nullcontext
 import uuid
 from datetime import datetime, timezone
 from typing import Mapping
@@ -209,7 +210,8 @@ class JobManager:
     def progress(self, search_id: str) -> dict:
         """Counts for polling, from the stored batch row and its CURRENT cells."""
         store = self.services.store
-        with self.lock:
+        reading = getattr(self.services, "in_read_context", lambda: False)()   # ADR-78: own read-only connection
+        with (nullcontext() if reading else self.lock):
             b = store.get_search_batch(search_id)
             cells = store.list_search_cells(search_id, current=True) if b else []
         if b is None:

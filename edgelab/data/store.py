@@ -11,6 +11,7 @@ load so a silently altered dataset is detected.
 from __future__ import annotations
 
 import json
+import threading
 import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -245,6 +246,16 @@ class ResultStore(ABC):
         self._exec(f"INSERT OR REPLACE INTO search_cells ({cols}) VALUES ({marks})",
                    tuple(row.get(c) for c in SEARCH_CELL_COLS))
 
+    def upsert_search_cells(self, rows: list[dict]) -> None:
+        """Many `upsert_search_cell` rows in ONE transaction (one commit instead of one per row; same rows)."""
+        self._require_search_storage()
+        if not rows:
+            return
+        cols = ", ".join(SEARCH_CELL_COLS)
+        marks = ", ".join("?" for _ in SEARCH_CELL_COLS)
+        self._executemany(f"INSERT OR REPLACE INTO search_cells ({cols}) VALUES ({marks})",
+                          [tuple(r.get(c) for c in SEARCH_CELL_COLS) for r in rows])
+
     def get_search_batch(self, search_id: str) -> dict | None:
         self._require_search_storage()
         rows = self._query(f"SELECT {', '.join(SEARCH_BATCH_COLS)} FROM search_batches WHERE search_id = ?",
@@ -407,7 +418,12 @@ class SQLiteStore(ResultStore):
         # check_same_thread=False: the web app (Phase 3.5) serves requests on worker threads and
         # serializes every store access behind one lock, so the connection is never shared
         # concurrently. Single-threaded callers (CLI, tests) are unaffected.
-        self.con = sqlite3.connect(self.path, check_same_thread=False)
+        # timeout 60 s: page requests read on their own read-only connections (ADR-78); a commit waits for a running
+        # read to finish instead of failing
+        self.con = sqlite3.connect(self.path, check_same_thread=False, timeout=60)
+        self._readers: list = []                     # pooled ReadOnlySQLiteStore connections (ADR-78)
+        self._readers_mu = threading.Lock()
+        self._readers_made = 0
         for s in SCHEMA + SEARCH_SCHEMA + PROTOCOL_SCHEMA:
             self.con.execute(s.replace("DOUBLE", "REAL").replace("BIGINT", "INTEGER"))
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_bars ON bars(dataset_id, ts_ns)")
@@ -472,6 +488,51 @@ class SQLiteStore(ResultStore):
         return pd.read_sql_query("SELECT ts_ns, open, high, low, close, volume, spread, "
                                  + ", ".join(ASK_COLUMNS) + " FROM bars "
                                  "WHERE dataset_id = ? ORDER BY ts_ns", self.con, params=(dataset_id,))
+
+    def close(self):
+        with self._readers_mu:
+            readers, self._readers = self._readers, []
+            self._readers_made = READ_POOL_SIZE + 1          # no new readers after close
+        for r in readers:
+            r.close()
+        self.con.close()
+
+    # ---- ADR-78 read-only connections for page requests (never the writer connection, never under the lock)
+    def acquire_reader(self) -> "ReadOnlySQLiteStore | None":
+        """A pooled read-only connection to the same database file (None for an in-memory store or a closed one)."""
+        if self.path == ":memory:":
+            return None
+        with self._readers_mu:
+            if self._readers:
+                return self._readers.pop()
+            if self._readers_made >= READ_POOL_SIZE:
+                return ReadOnlySQLiteStore(self.path)       # burst beyond the pool: closed on release
+            self._readers_made += 1
+        return ReadOnlySQLiteStore(self.path)
+
+    def release_reader(self, reader: "ReadOnlySQLiteStore") -> None:
+        with self._readers_mu:
+            if self._readers_made <= READ_POOL_SIZE and len(self._readers) < READ_POOL_SIZE:
+                self._readers.append(reader)
+                return
+        reader.close()
+
+
+READ_POOL_SIZE = 4
+
+
+class ReadOnlySQLiteStore(SQLiteStore):
+    """The same SQLite file opened READ-ONLY (``mode=ro``): no schema creation, no migration, any write raises
+    ``sqlite3.OperationalError: attempt to write a readonly database``. Used by page requests (ADR-78)."""
+
+    def __init__(self, path: str | Path):
+        self.path = str(path)
+        uri = Path(self.path).resolve().as_uri() + "?mode=ro"     # percent-encoded (spaces, '#', Windows drives)
+        self.con = sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=30)
+        self._readers, self._readers_mu, self._readers_made = [], threading.Lock(), READ_POOL_SIZE + 1
+
+    def acquire_reader(self):
+        return None
 
     def close(self):
         self.con.close()

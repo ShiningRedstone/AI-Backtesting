@@ -216,9 +216,9 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
             "finished_at": None, "status": "running", "spec_json": _dumps(plan.spec),
             "shortlist_json": existing["shortlist_json"] if existing else None,
             "warnings_json": _dumps(plan.warnings), "protocol_id": plan.protocol_id, **counts})
-        for c in plan.cells:                               # every planned cell is durable before execution
-            if not done(prior.get(c["cell_id"])):
-                store.upsert_search_cell(cell_row(c, status="pending" if c["eligible"] else "ineligible"))
+        # every planned cell is durable before execution (one transaction: one commit, not one per cell, ADR-78)
+        store.upsert_search_cells([cell_row(c, status="pending" if c["eligible"] else "ineligible")
+                                   for c in plan.cells if not done(prior.get(c["cell_id"]))])
         store.mark_current_search_cells(sid, [c["cell_id"] for c in plan.cells])   # older rows stay, as history
 
     sources = {s["strategy_id"]: s["sources"] for s in plan.strategies}

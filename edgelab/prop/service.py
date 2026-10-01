@@ -35,10 +35,13 @@ def default_profiles(root: Path | str) -> list[dict]:
     from edgelab.prop.profiles import _registry_path, load_default_profiles, profiles_dir
     reg = _registry_path(profiles_dir(root))
     key = (str(Path(root).resolve()), reg.stat().st_mtime_ns if reg.exists() else None)
-    if key not in _PROFILE_CACHE:
-        _PROFILE_CACHE.clear()
-        _PROFILE_CACHE[key] = load_default_profiles(root)
-    return _PROFILE_CACHE[key]
+    hit = _PROFILE_CACHE.get(key)
+    if hit is None:                                     # no clear-then-set: concurrent page reads never miss (ADR-78)
+        hit = load_default_profiles(root)
+        for k in [k for k in list(_PROFILE_CACHE) if k != key]:
+            _PROFILE_CACHE.pop(k, None)
+        _PROFILE_CACHE[key] = hit
+    return hit
 
 
 def profile_status(root: Path | str) -> dict:

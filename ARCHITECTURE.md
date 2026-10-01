@@ -1907,3 +1907,34 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Not done.** WAL journal mode, because read-only workspace tools open the store with `mode=ro` and opening a
   workspace must not change its files beyond schema/index migration. Reading views during a research run still share
   the one service lock, now held only briefly per cell.
+
+### ADR-78 Page requests never wait for a research run (read-only connections outside the service lock)
+- **Why.** Every API request ran inside the one service lock, and a research run holds that lock for long
+  stretches: the preflight (compiles every frozen strategy), writing all planned cells, progress and ETA after every
+  cell, and the stop check. Pages queued behind it: with the lock held for 8 s, the overview took 7.8 s to answer.
+- **Read-only connections.** `ReadOnlySQLiteStore` opens the same file with `mode=ro` (no DDL; any write raises).
+  The writer store keeps a pool of 4 and closes them with itself; its own connection waits up to 60 s on a busy
+  database instead of 5 s.
+  - `Services.store` is a property. Inside `Services.read_context()` (a contextvar, so per thread or request) it
+    returns the pooled reader; otherwise the writer (`__dict__["store"]`, `writer_store`).
+  - The web `call()` runs every GET in a read context without the lock. A GET that turns out to write is retried
+    once under the lock. POSTs are unchanged.
+  - `jobs.progress` skips the lock in a read context.
+  - Rollback-journal mode is unchanged: readers hold a shared lock only while a statement runs, and a commit waits
+    for running reads.
+- **One cache key in every thread.** `db_token` = (writer id, writer `total_changes`, the database header's file
+  change counter). It is identical for readers and the writer and changes on any commit by any connection or process.
+  - Identity-keyed caches (`run_records`, the calendar memo, `_cell_ds`) use the writer.
+  - Page requests during a running research job reuse the token for up to 5 s, so views are rebuilt at most every 5 s
+    rather than after every strategy. Research code (`read_context(page=False)`) always reads exact values.
+- **The research run holds the lock less, with the same writes in the same order.**
+  - The preflight, the progress and ETA, and the stop check read on a read-only connection
+    (`campaign.read_outside_lock`).
+  - Live totals and ETA refresh at most every 2 s, and are exact at the end.
+  - Planned cells are written in one transaction (`upsert_search_cells`).
+- **Thread safety for concurrent reads.**
+  - The prop profile cache is never cleared then refilled, which removes a spurious 404.
+  - The calendar memo is replaced rather than cleared.
+  - The facets disk-cache temp file name is unique.
+- **GPU: not used.** Page loading was lock-bound, not compute-bound. GPU float arithmetic can change result hashes
+  (reproducibility), and CUDA is NVIDIA-only with a large runtime.

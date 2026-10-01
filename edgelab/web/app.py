@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import sqlite3
 import threading
 import traceback
 from pathlib import Path
@@ -108,6 +109,16 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     app.config["EDGELAB"] = {"root": root, "demo": demo, "services": svc, "web": web}
 
     def call(fn: Callable, *a, **kw):
+        # ADR-78: page reads (GET) run on a pooled read-only connection WITHOUT the service lock, so pages load
+        # while a research run holds it. A GET that turns out to write is retried once under the lock on the writer.
+        if request.method == "GET":
+            with svc.read_context() as ok:
+                if ok:
+                    try:
+                        return fn(*a, **kw)
+                    except sqlite3.OperationalError as exc:
+                        if "readonly" not in str(exc):
+                            raise
         with lock:
             return fn(*a, **kw)
 

@@ -81,6 +81,9 @@ jobs (`Services.start_backtest_job`, `/api/backtests/jobs`, lock free while comp
 ADR-77: speed without result changes: `Services._cell_dataset` (validated once per process), causality truncation feature cache
 (`strategy_api.truncation_cache`, content-addressed, memory-bounded), multi-core research runs (`run_scope(processes=)`, Settings
 `ui.research_processes`, default all cores but one; parent writes in plan order), trades/metrics/ledger indexes, incremental read views, browser view cache.
+ADR-78: GET requests run in `Services.read_context()` on pooled `ReadOnlySQLiteStore` connections WITHOUT the service lock (`Services.store`
+is a property; writer = `writer_store`); `db_token` = writer total_changes + file change counter (5 s reuse for pages during a job);
+research run reads (preflight, progress, stop) via `campaign.read_outside_lock`; planned cells in one transaction.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
