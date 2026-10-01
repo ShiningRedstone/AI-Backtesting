@@ -2059,3 +2059,36 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Tests.** `tests/test_results_view.py` has known answers (a trade exiting at 03:00 UTC on 1 January counts in New
   York's 31 December; empty months; $ = R × risk). It also checks that the panel's years, months and curve reconcile
   with the stored trades.
+
+### ADR-83 Paper feed checked against the research data; paper browser test
+- **Why.** Paper results only mean something next to the backtests if the paper feed is the same source as the research
+  data. The paper feed covers recent days, so it rarely overlaps the user's research dataset. The check therefore
+  downloads overlap days on purpose.
+- **Check (`paper/feed.py::source_check`).**
+  - Takes the last 3 trading dates whose whole session lies inside the research dataset.
+  - Downloads them with the paper downloader, runs `combine_day`, then compares every shared 1-minute bar with
+    `verify_against`: BID and ASK OHLC, exact (tolerance 1e-9). The report gives `max_abs_diff` per column,
+    `bars_different`, and bars present on one side only. Nothing is filled.
+  - Check days are never stored in the paper feed.
+  - Verdicts: match, mismatch, no_overlap, error (download failed), no_dataset.
+  - Stored in `<data>/paper/feed/source_check.json` via `core/fsutil.atomic_write_text`.
+- **Research dataset compared (`Services._paper_research_manifest`).** 1-minute `NQ_DUKASCOPY` with ASK OHLC; the
+  Preferred Research Dataset's family first, else the one ending latest. Read on a read-only connection; the dataset
+  is loaded only when a check really runs.
+- **When.** Automatically once per research dataset (by content hash): the first time paper data is downloaded, again
+  when the dataset changes, and after a failed download. "Check against my research data" (`POST /api/paper/feed/check`)
+  forces a new check.
+- **Mismatch.** Paper accounts are **paused**: not recomputed, they keep their last state and are not stopped. They
+  resume automatically when a later check matches, or when the user chooses "Continue anyway"
+  (`POST /api/paper/feed/continue-anyway`). That choice is recorded on that check only; a new check replaces it.
+  `no_overlap`, `error` and `no_dataset` never pause.
+- **UI.** The Market data card gets a "Same as your research data" row, the check button, and a red mismatch banner
+  (bars different, largest BID and ASK gap) with a confirm dialog for "Continue anyway".
+- **Tests.**
+  - Unit (`tests/test_paper_trading.py`): match, mismatch (+0.25 on every price) → pause → continue anyway → re-match;
+    no dataset; re-check on a new dataset; check days never stored; offline gives error.
+  - Browser (`tests/test_paper_e2e.py`, in-thread server, synthetic downloader, start date pinned): fees, batch start
+    with the non-MNQ refusal, accounts table and drawer, stop/resume, check button, mismatch banner, continue anyway.
+- **Not verified here.** The real Dukascopy comparison runs on the user's PC: the build environment cannot reach
+  Dukascopy. If the user's research CSV was written with rounded prices, the report shows that as small, uniform
+  `max_abs_diff` values.

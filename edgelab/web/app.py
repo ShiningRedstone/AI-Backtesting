@@ -475,6 +475,14 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def paper_feed_update():
         return jsonify(svc.paper_update_now()), 202
 
+    @app.post("/api/paper/feed/check")               # ADR-83: compare downloaded days with the research data
+    def paper_feed_check():
+        return jsonify(svc.paper_check_source()), 202
+
+    @app.post("/api/paper/feed/continue-anyway")
+    def paper_feed_continue():
+        return jsonify(call(svc.paper_continue_anyway))
+
     @app.get("/api/preferences/research-processes")
     def research_processes():                       # ADR-77: CPU cores research runs use (choice, default, max)
         return jsonify(call(svc.research_processes))

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { PaperAccountDetail, PaperAccountRow, PaperAttempt, PaperCandidates, PaperFeedStatus, PaperState } from "../api/types";
+import type { PaperAccountDetail, PaperAccountRow, PaperAttempt, PaperCandidates, PaperFeedStatus, PaperSourceCheck, PaperState } from "../api/types";
 import { go, href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
-import { facetLabel, humanize, plainProse, profileLabel } from "../app/labels";
+import { datasetLabel, facetLabel, humanize, plainProse, profileLabel } from "../app/labels";
 import { Badge, Banner, Button, Card, Checkbox, Confirm, Drawer, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, TableWrap, TechDetails, fmt,
   shortTime, signCls } from "../components/ui";
 import { LineChart } from "../components/charts";
@@ -40,7 +40,8 @@ function stateBadge(row: { state: PaperAccountRow["state"]; current_attempt: num
 function FeedBanner({ onUpdated }: { onUpdated: () => void }) {
   const { toast } = useApp();
   const feed = useApi<PaperFeedStatus>("/api/paper/feed");
-  const running = feed.data?.manager.state === "running";
+  const running = feed.data?.manager.state === "running" || !!feed.data?.manager.checking_source;
+  const [askContinue, setAskContinue] = useState(false);
   const lastRun = feed.data?.manager.last_run;
   useEffect(() => {
     const t = window.setInterval(feed.reload, running ? 3000 : 60000);
@@ -52,22 +53,61 @@ function FeedBanner({ onUpdated }: { onUpdated: () => void }) {
   const f = feed.data, errs = Object.entries(f.errors ?? {});
   const update = () => api.post("/api/paper/feed/update", {}).then(() => { toast("info", "Checking for new trading days…"); window.setTimeout(feed.reload, 800); })
     .catch((e: Error) => toast("error", e.message));
+  const check = () => api.post("/api/paper/feed/check", {}).then(() => { toast("info", "Comparing downloaded days with your research data…");
+    window.setTimeout(feed.reload, 800); }).catch((e: Error) => toast("error", e.message));
+  const goOn = () => api.post("/api/paper/feed/continue-anyway", {}).then(() => { setAskContinue(false); toast("ok", "Paper accounts continue updating");
+    feed.reload(); }).catch((e: Error) => toast("error", e.message));
+  const c = f.source_check;
   return (
-    <Card testId="paper-feed" title="Market data" actions={<Button small onClick={update} busy={running} busyLabel="Updating…" testId="paper-update">Update now</Button>}>
+    <Card testId="paper-feed" title="Market data" actions={<>
+      <Button small onClick={check} busy={!!f.manager.checking_source} busyLabel="Comparing…" disabled={running && !f.manager.checking_source}
+        testId="paper-check">Check against my research data</Button>
+      <Button small onClick={update} busy={f.manager.state === "running" && !f.manager.checking_source} busyLabel="Updating…" testId="paper-update">Update now</Button></>}>
       <KeyValues rows={[
         ["Source", f.source],
+        ["Same as your research data", <span data-testid="paper-source-status">{sourceSummary(c, !!f.manager.checking_source)}</span>],
         ["Days downloaded", f.n_days ? `${f.n_days} (${f.first_day} to ${f.newest_day})` : "none yet (downloads start with the first paper account)"],
         ["Last check", f.manager.last_run ? shortTime(f.manager.last_run) : f.checked_at ? shortTime(f.checked_at) : "—"],
         ["Next automatic check", f.manager.next_check ? shortTime(f.manager.next_check) : "when the app is open: at start, then every 30 minutes"]]} />
+      {c?.verdict === "mismatch" && <Banner tone="error" testId="paper-source-mismatch">
+        <b>The downloaded data does not match your research data</b> ({datasetLabel(c.dataset_id)}): {(c.bars_different ?? 0).toLocaleString()} of
+        {" "}{(c.compared ?? 0).toLocaleString()} one-minute bars have different prices (largest gap: BID {gap(c, false)}, ASK {gap(c, true)}).
+        {f.paused ? <> Paper accounts are <b>paused</b> and keep their last results until a later check matches.{" "}
+          <button className="linklike" onClick={() => setAskContinue(true)} data-testid="paper-continue">Continue anyway</button></>
+          : <> You chose to continue anyway{c.continue_anyway ? ` (${shortTime(c.continue_anyway.at)})` : ""}.</>}</Banner>}
       {!f.downloader_available && <Banner tone="error">The Dukascopy downloader (dukascopy-python) is not installed, so no new days can be downloaded.</Banner>}
       {f.manager.last_error && <Banner tone="error" testId="paper-feed-error">Last update failed: {f.manager.last_error}. It is retried at the next check.</Banner>}
       {errs.length > 0 && <Banner tone="warn">Waiting on {errs.length === 1 ? "a day" : "days"} that could not be used yet: {errs.map(([d, m]) =>
         `${d} (${plainProse(m)})`).join("; ")}. Later days wait for {errs.length === 1 ? "it" : "them"}, so the data never has a hole.</Banner>}
       <p className="small muted">Only completed trading days are used (after the 16:15 New York close plus 45 minutes). Days are never filled in or
         changed after download; a day with no data from the source (a holiday) is skipped and listed under Technical details.</p>
-      <TechDetails rows={[["Skipped days", Object.keys(f.skipped ?? {}).join(", ") || "none"], ["Last completed trading day", f.last_completed_date ?? "—"]]} />
+      <TechDetails rows={[["Skipped days", Object.keys(f.skipped ?? {}).join(", ") || "none"], ["Last completed trading day", f.last_completed_date ?? "—"],
+        ["Research dataset compared", <Mono>{c?.dataset_id ?? "—"}</Mono>],
+        ["Days compared", (c?.days ?? []).map((d) => `${d.date}: ${d.error ? plainProse(d.error) : `${d.compared ?? 0} bars, ${d.bars_different ?? 0} different`
+          + `${d.only_in_download ? `, ${d.only_in_download} only in the download` : ""}${d.only_in_research ? `, ${d.only_in_research} only in the research data` : ""}`}`).join("; ") || "—"]]} />
+      <Confirm open={askContinue} title="Continue paper trading on this data?" confirmLabel="Continue anyway" danger onConfirm={goOn} onCancel={() => setAskContinue(false)}>
+        The prices downloaded for paper trading differ from your research data, so paper results may not be comparable with your backtests.
+        Accounts start updating again; the next check you run replaces this choice.</Confirm>
     </Card>
   );
+}
+
+const gap = (c: PaperSourceCheck, ask: boolean) => {
+  const keys = ask ? ["ask_open", "ask_high", "ask_low", "ask_close"] : ["open", "high", "low", "close"];
+  return Math.max(0, ...keys.map((k) => c.max_abs_diff?.[k] ?? 0)).toFixed(3);
+};
+function sourceSummary(c: PaperSourceCheck | null, checking: boolean) {
+  if (checking) return "comparing…";
+  if (!c) return "not checked yet (runs by itself with the first download)";
+  switch (c.verdict) {
+    case "match": return <><Badge tone="ok">same prices</Badge> {(c.compared ?? 0).toLocaleString()} one-minute bars over {c.days?.length ?? 0} days identical
+      to {datasetLabel(c.dataset_id)} (checked {shortTime(c.checked_at)})</>;
+    case "mismatch": return <><Badge tone="error">different prices</Badge> checked {shortTime(c.checked_at)}</>;
+    case "no_overlap": return <><Badge tone="neutral">nothing to compare</Badge> {plainProse(c.note ?? "")}</>;
+    case "no_dataset": return <><Badge tone="neutral">not checked</Badge> {plainProse(c.note ?? "")}</>;
+    default: return <><Badge tone="warn">could not check</Badge> {plainProse((c.days ?? []).find((d) => d.error)?.error ?? c.note ?? "")}; tried again at the
+      next update</>;
+  }
 }
 
 function PaperAccounts() {

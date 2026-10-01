@@ -298,20 +298,97 @@ def build_feed(cfg: Mapping, data_root: Path | str, start: date, end: date | Non
 
 
 # ------------------------------------------------------------------------------------------- identity
+SOURCE_CHECK_DAYS = 3
+PRICE_COLS = ("open", "high", "low", "close") + ASK_COLS
+
+
 def verify_against(ds_research, day_frame: pd.DataFrame) -> dict:
     """Compare a downloaded day (combine_day output) with the user's research dataset on the shared timestamps:
-    BID OHLC and ASK OHLC must be identical. Proves the feed is the research source."""
+    BID OHLC and ASK OHLC must be identical. Proves the feed is the research source. ``max_abs_diff`` per column tells
+    a rounding difference from a different source; bars present on one side only are counted, never filled."""
     import numpy as np
     b = ds_research.bars
     ts = pd.to_datetime(day_frame["timestamp"], utc=True).dt.as_unit("ns").astype("int64").to_numpy()
-    pos = {int(t): i for i, t in enumerate(b.ts_ns)}
-    shared = [(i, pos[int(t)]) for i, t in enumerate(ts) if int(t) in pos]
-    if not shared:
+    rts = np.asarray(b.ts_ns, dtype="int64")
+    lo, hi = np.searchsorted(rts, ts.min()), np.searchsorted(rts, ts.max(), side="right")
+    ri = np.searchsorted(rts, ts).clip(0, len(rts) - 1)
+    hit = rts[ri] == ts
+    if not hit.any():
         return {"compared": 0, "identical": None, "note": "the research data does not cover this day"}
-    fi = np.array([s[0] for s in shared])
-    ri = np.array([s[1] for s in shared])
-    pairs = [("open", b.open), ("high", b.high), ("low", b.low), ("close", b.close)]
+    fi, ri = np.nonzero(hit)[0], ri[hit]
+    arrs = {"open": b.open, "high": b.high, "low": b.low, "close": b.close}
     if b.has_ask_ohlc:
-        pairs += [("ask_open", b.ask_open), ("ask_high", b.ask_high), ("ask_low", b.ask_low), ("ask_close", b.ask_close)]
-    diffs = {c: int((~np.isclose(day_frame[c].to_numpy(float)[fi], arr[ri], rtol=0, atol=1e-9)).sum()) for c, arr in pairs}
-    return {"compared": len(shared), "identical": all(v == 0 for v in diffs.values()), "differences": diffs}
+        arrs.update(ask_open=b.ask_open, ask_high=b.ask_high, ask_low=b.ask_low, ask_close=b.ask_close)
+    diffs, maxd = {}, {}
+    any_diff = np.zeros(len(fi), dtype=bool)
+    for c, arr in arrs.items():
+        d = np.abs(day_frame[c].to_numpy(float)[fi] - np.asarray(arr, float)[ri])
+        any_diff |= d > 1e-9
+        diffs[c] = int((d > 1e-9).sum())
+        maxd[c] = round(float(d.max()), 6) if len(d) else 0.0
+    return {"compared": int(len(fi)), "identical": all(v == 0 for v in diffs.values()), "differences": diffs,
+            "max_abs_diff": maxd, "bars_different": int(any_diff.sum()), "only_in_download": int((~hit).sum()), "only_in_research": int(hi - lo - len(fi)),
+            "ask_compared": bool(b.has_ask_ohlc)}
+
+
+def check_days(cfg: Mapping, ds_research, n_days: int = SOURCE_CHECK_DAYS) -> list[date]:
+    """The last ``n_days`` trading dates whose whole session lies inside the research dataset's bars."""
+    import numpy as np
+    rts = np.asarray(ds_research.bars.ts_ns, dtype="int64")
+    first, last = pd.Timestamp(int(rts[0]), tz="UTC"), pd.Timestamp(int(rts[-1]), tz="UTC")
+    out = []
+    for d in reversed(trading_dates(cfg, first.date(), last.date())):
+        s, e = _window(cfg, d)
+        if pd.Timestamp(s) >= first and pd.Timestamp(e) <= last + pd.Timedelta(minutes=1):
+            out.append(d)
+            if len(out) == n_days:
+                break
+    return sorted(out)
+
+
+def source_check(cfg: Mapping, ds_research, fetcher: Callable | None = None,
+                 n_days: int = SOURCE_CHECK_DAYS) -> dict:
+    """Download the last complete trading days INSIDE the research dataset with the paper downloader and compare them
+    bar by bar (verify_against). The downloaded days are never stored in the paper feed. Verdict: match (every shared
+    price identical), mismatch (any price differs), no_overlap (nothing comparable), error (download failed)."""
+    fetcher = fetcher or dukascopy_fetcher
+    m = ds_research.manifest
+    out = {"dataset_id": m.dataset_id, "dataset_name": getattr(m, "dataset_name", "") or m.dataset_id,
+           "dataset_content_hash": m.content_hash, "checked_at": datetime.now(timezone.utc).isoformat(), "days": []}
+    days = check_days(cfg, ds_research, n_days)
+    if not days:
+        return {**out, "verdict": "no_overlap", "compared": 0,
+                "note": "the research dataset has no complete trading day to compare"}
+    errors = 0
+    for d in days:
+        s, e = _window(cfg, d)
+        try:
+            frame = combine_day(fetcher("BID", s, e), fetcher("ASK", s, e), s, e)
+        except Exception as exc:                          # FeedError or a download failure: reported, never guessed
+            out["days"].append({"date": d.isoformat(), "error": f"{type(exc).__name__}: {exc}"})
+            errors += 1
+            continue
+        if frame is None:
+            out["days"].append({"date": d.isoformat(), "compared": 0, "identical": None, "note": "no bars from the source"})
+            continue
+        out["days"].append({"date": d.isoformat(), **verify_against(ds_research, frame)})
+    compared = sum(x.get("compared", 0) for x in out["days"])
+    differ = any(x.get("identical") is False for x in out["days"])
+    verdict = ("mismatch" if differ else "error" if errors else "match" if compared else "no_overlap")
+    return {**out, "verdict": verdict, "compared": compared,
+            "bars_different": sum(x.get("bars_different", 0) for x in out["days"]),
+            "max_abs_diff": {c: max((x.get("max_abs_diff", {}).get(c, 0.0) for x in out["days"]), default=0.0)
+                             for c in PRICE_COLS}}
+
+
+def read_source_check(data_root: Path | str) -> dict | None:
+    try:
+        return json.loads((feed_dir(data_root) / "source_check.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def write_source_check(data_root: Path | str, rec: dict) -> None:
+    fd = feed_dir(data_root)
+    fd.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(fd / "source_check.json", json.dumps(rec, indent=1, sort_keys=True))

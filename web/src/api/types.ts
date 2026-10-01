@@ -512,7 +512,16 @@ export interface PaperFeedStatus {
   n_days: number; first_day: string | null; newest_day: string | null; checked_at: string | null; last_completed_date: string | null;
   errors: Record<string, string>; skipped: Record<string, string>; source: string; downloader_available: boolean; next_start_date: string;
   manager: { state: string; last_run: string | null; last_error: string | null; next_check: string | null; started?: string;
-    last_result?: { accounts_updated: number } | null };
+    last_result?: { accounts_updated: number } | null; checking_source?: boolean; paused?: boolean };
+  source_check: PaperSourceCheck | null; paused: boolean;
+}
+/** ADR-83: downloaded days compared bar by bar with the user's Dukascopy research dataset. */
+export interface PaperSourceCheck {
+  verdict: "match" | "mismatch" | "no_overlap" | "error" | "no_dataset"; checked_at: string; note?: string;
+  dataset_id?: string; dataset_name?: string; compared?: number; bars_different?: number; max_abs_diff?: Record<string, number>;
+  days?: { date: string; compared?: number; identical?: boolean | null; error?: string; note?: string; bars_different?: number;
+    only_in_download?: number; only_in_research?: number }[];
+  continue_anyway?: { at: string };
 }
 export interface PaperCandidate {
   strategy_id: string; display_name: string | null; family_id: string | null; timeframe: string | null; survivor: boolean;

@@ -310,5 +310,119 @@ class TestPaperHttp(PaperBase):
             s2.store.close()
 
 
+def shifted_fetcher(side, start, end):
+    """A DIFFERENT source (synthetic): every price 0.25 higher than the stand-in archive."""
+    df = fake_fetcher(side, start, end)
+    for c in ("open", "high", "low", "close"):
+        df[c] = df[c] + 0.25
+    return df
+
+
+def import_research_dataset(svc, tmp: Path, start: date, now: datetime, name: str, derive=()) -> str:
+    """A stored 1-minute NQ_DUKASCOPY BID/ASK 'research' dataset built from the same SYNTHETIC archive."""
+    from edgelab.data.importer import ImportOptions, import_dataset
+    d = tmp / f"research_{name}"
+    feed.update(svc.cfg, d, start, fetcher=fake_fetcher, now=now)
+    days = sorted((feed.feed_dir(d) / "days").glob("*.csv"))
+    out = d / "research.csv"
+    with open(out, "w", encoding="utf-8", newline="") as fh:
+        for i, p in enumerate(days):
+            lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+            fh.writelines(lines if i == 0 else lines[1:])
+    opts = ImportOptions(file=str(out), instrument=feed.INSTRUMENT, provider=feed.PROVIDER, asset_type="CFD",
+                         timeframe="1m", profile="dukascopy_utc_csv", symbol="USATECH.IDX/USD", price_basis="bid",
+                         bid_close_column="close", ask_close_column="ask_close", ask_open_column="ask_open",
+                         ask_high_column="ask_high", ask_low_column="ask_low", dataset_name=name,
+                         derive_timeframes=list(derive), build_features=False, notes="SYNTHETIC test research dataset")
+    return import_dataset(opts, svc.cfg, svc.writer_store).dataset_id
+
+
+class TestResearchSourceCheck(unittest.TestCase):
+    """ADR-83: downloaded days are compared bar by bar with the research dataset; a different source pauses accounts."""
+
+    def setUp(self):
+        from edgelab.services import Services
+        from edgelab.web.demo import create_demo_workspace
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        create_demo_workspace(self.tmp / "demo", REPO)
+        self.svc = Services(root=self.tmp / "demo")
+        self.addCleanup(self.svc.store.close)
+        self.svc.paper.fetcher = fake_fetcher
+        sid = self.svc.save_strategy(mnq_strategy("paper_src_ema"))["strategy_id"]
+        self.svc.set_ui_preferences({"prop_fees": {PROFILE: FEES}})
+        self.aid = self.svc.paper_start([sid], PROFILE, now=CREATED)["accounts"][0]
+
+    def computed_at(self):
+        return (self.svc.paper_account(self.aid)["state"] or {}).get("computed_at")
+
+    def test_match_mismatch_pause_continue_and_rematch(self):
+        svc = self.svc
+        did = import_research_dataset(svc, self.tmp, date(2024, 1, 15), datetime(2024, 3, 2, 3, tzinfo=UTC),
+                                      "NQ_DUKASCOPY_BIDASK_OHLC_TEST")
+        out = svc.paper.run_once(now=datetime(2024, 3, 20, 23, tzinfo=UTC))
+        chk = out["source_check"]
+        self.assertEqual((chk["verdict"], chk["dataset_id"]), ("match", did))
+        self.assertEqual([d["date"] for d in chk["days"]], ["2024-02-28", "2024-02-29", "2024-03-01"])
+        self.assertGreater(chk["compared"], 3000)
+        self.assertTrue(all(d["ask_compared"] for d in chk["days"]))
+        self.assertEqual((out["paused"], out["accounts_updated"]), (False, 1))
+        first = self.computed_at()
+        again = svc.paper.run_once(now=datetime(2024, 3, 20, 23, tzinfo=UTC))
+        self.assertEqual(again["source_check"]["checked_at"], chk["checked_at"])     # automatic: once per dataset
+        # a different source: the check says so, accounts keep their last state (not stopped)
+        svc.paper.fetcher = shifted_fetcher
+        svc.paper.request_check()
+        st0 = self.computed_at()
+        out = svc.paper.run_once(now=datetime(2024, 3, 20, 23, tzinfo=UTC))
+        chk = out["source_check"]
+        self.assertEqual(chk["verdict"], "mismatch")
+        self.assertAlmostEqual(chk["max_abs_diff"]["close"], 0.25, places=6)
+        self.assertAlmostEqual(chk["max_abs_diff"]["ask_close"], 0.25, places=6)   # both sides shifted
+        self.assertEqual(chk["bars_different"], chk["compared"])
+        self.assertEqual((out["paused"], out["accounts_updated"]), (True, 0))
+        self.assertEqual(self.computed_at(), st0)
+        self.assertEqual(svc.paper_accounts()[0]["status"], "running")
+        self.assertTrue(svc.paper_feed_status()["paused"])
+        svc.paper.fetcher = fake_fetcher
+        self.assertEqual(svc.paper.run_once(now=datetime(2024, 3, 21, 23, tzinfo=UTC))["accounts_updated"], 0)
+        svc.paper_continue_anyway()                                                    # the user's choice
+        self.assertFalse(svc.paper_feed_status()["paused"])
+        self.assertEqual(svc.paper.run_once(now=datetime(2024, 3, 21, 23, tzinfo=UTC))["accounts_updated"], 1)
+        with self.assertRaises(ValueError):
+            svc.paper_continue_anyway()                                                # nothing paused any more
+        svc.paper.request_check()                                                      # same source again
+        out = svc.paper.run_once(now=datetime(2024, 3, 21, 23, tzinfo=UTC))
+        self.assertEqual((out["source_check"]["verdict"], out["paused"]), ("match", False))
+        self.assertNotEqual(self.computed_at(), first)
+
+    def test_no_research_dataset_never_pauses_and_a_new_dataset_is_checked(self):
+        svc = self.svc
+        out = svc.paper.run_once(now=datetime(2024, 3, 20, 23, tzinfo=UTC))
+        self.assertEqual(out["source_check"]["verdict"], "no_dataset")
+        self.assertEqual((out["paused"], out["accounts_updated"]), (False, 1))
+        import_research_dataset(svc, self.tmp, date(2024, 1, 15), datetime(2024, 2, 10, 3, tzinfo=UTC), "RES_A")
+        a = svc.paper.run_once(now=datetime(2024, 3, 20, 23, tzinfo=UTC))["source_check"]
+        self.assertEqual((a["verdict"], a["dataset_name"]), ("match", "RES_A"))
+        later = import_research_dataset(svc, self.tmp, date(2024, 1, 15), datetime(2024, 3, 2, 3, tzinfo=UTC),
+                                        "RES_B")                                     # ends later: the one compared
+        b = svc.paper.run_once(now=datetime(2024, 3, 20, 23, tzinfo=UTC))["source_check"]
+        self.assertEqual((b["verdict"], b["dataset_id"]), ("match", later))
+        self.assertNotEqual(a["checked_at"], b["checked_at"])
+
+    def test_check_days_are_never_stored_in_the_feed(self):
+        svc = self.svc
+        did = import_research_dataset(svc, self.tmp, date(2024, 1, 15), datetime(2024, 2, 10, 3, tzinfo=UTC), "RES")
+        empty = self.tmp / "fresh_root"
+        rec = feed.source_check(svc.cfg, svc.load_dataset(did), fetcher=fake_fetcher)
+        self.assertEqual(rec["verdict"], "match")
+        self.assertFalse((feed.feed_dir(empty) / "days").exists())
+        self.assertEqual(feed.status(svc.data_root)["n_days"], 0)                    # nothing downloaded into the feed
+
+        def offline(side, a, b):
+            raise ConnectionError("offline")
+        self.assertEqual(feed.source_check(svc.cfg, svc.load_dataset(did), fetcher=offline)["verdict"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()

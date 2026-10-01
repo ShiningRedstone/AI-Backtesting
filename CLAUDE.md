@@ -96,6 +96,9 @@ validated feed, never a research dataset; `engine.py` attempts/fees around the u
 `ui.prop_fees`; engine option `account.equity_from_ts` (absent = byte-identical backtests). Paper results are never runs or trials.
 ADR-82: strategy panel shows an equity curve (`StepTimeChart`, time axis) and "Results by year" with expandable months
 (`results_view.calendar_years`, by exit date in New York time, display only) instead of "Last 12 months of data".
+ADR-83: paper feed checked against the research data (`paper/feed.py::source_check`: last 3 complete trading days inside the
+1m NQ_DUKASCOPY ASK-OHLC research dataset re-downloaded and compared bar by bar; never stored in the feed; verdict in
+`<data>/paper/feed/source_check.json`; mismatch pauses paper accounts until a match or "Continue anyway"); browser test `tests/test_paper_e2e.py`.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -269,11 +272,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..81.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..83.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..81, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..83, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -337,4 +340,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-82). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-83). Update `README.md` status for phases.

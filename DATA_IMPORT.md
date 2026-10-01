@@ -458,6 +458,10 @@ manifest. Each update builds it through the normal import pipeline and validatio
 into a temporary in-memory store. It is never stored as a research dataset, so it never mixes with research data or the
 protocol holdout.
 
+"Check against my research data" (ADR-83) re-downloads the last 3 complete trading days inside your 1-minute
+`NQ_DUKASCOPY` BID/ASK research dataset and compares every bar with it. It runs automatically once per research dataset.
+If prices differ, paper accounts pause until a later check matches or you choose "Continue anyway".
+
 ## Audited source-quality exclusions (opt-in)
 
 For a known, documented source defect that lies entirely outside the session (not a way to make

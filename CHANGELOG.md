@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Paper data checked against your research data; paper browser test (ADR-83)
+
+| Item | Status |
+|---|---|
+| "Check against my research data": the last 3 complete trading days inside your Dukascopy research dataset are downloaded with the paper downloader and every 1-minute BID and ASK price is compared (bars compared, bars different, largest gap); runs automatically once per research dataset and on the button; check days are never added to the paper data | IMPLEMENTED, TESTED (synthetic: identical source matches; a source 0.25 higher is a mismatch with largest gap 0.25; offline reports an error) |
+| On a mismatch, paper accounts pause (keep their last results, not stopped) until a later check matches or you choose "Continue anyway" | IMPLEMENTED, TESTED |
+| Real comparison with your Dukascopy research file | REQUIRES REAL DATA (runs on your PC; the build environment cannot reach Dukascopy) |
+| Permanent browser test of the Prop & paper tab (fees, batch start and refusal, accounts, drawer, stop/resume, data check, continue anyway) | IMPLEMENTED, TESTED |
+| Backtests, research, prop rules, paper attempt and fee rules | UNCHANGED |
+
 ## Strategy panel: results by year and month, and an equity curve (ADR-82)
 
 | Item | Status |

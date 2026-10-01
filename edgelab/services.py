@@ -1221,8 +1221,59 @@ class Services:
 
     def paper_feed_status(self) -> dict:
         from edgelab.paper import feed
+        from edgelab.paper.manager import is_paused
+        chk = feed.read_source_check(self.data_root)
         return _jsonable({**feed.status(self.data_root), "next_start_date": feed.first_unstarted_date(self.cfg).isoformat(),
+                          "source_check": chk, "paused": is_paused(chk),
                           "manager": {k: v for k, v in self.paper.status.items() if k != "trace"}})
+
+    # ---------------------------------------------------------------- research-source check (ADR-83)
+    def _paper_research_manifest(self) -> tuple[dict | None, str]:
+        """The user's Dukascopy research dataset the paper feed is compared with: 1-minute NQ_DUKASCOPY with ASK OHLC,
+        the Preferred Research Dataset's family first, else the one ending latest. (manifest, note)."""
+        from contextlib import ExitStack
+        from edgelab.paper import feed
+        with ExitStack() as es:
+            if not es.enter_context(self.read_context(page=False)):
+                es.enter_context(self.lock)
+            rows = [m for m in self.store.list_datasets() if m.get("instrument") == feed.INSTRUMENT
+                    and m.get("has_ask_ohlc") and m.get("timeframe") == "1m"]
+            pref = self.preferred_dataset_id()
+            fam = next((m.get("dataset_name") for m in self.store.list_datasets() if m["dataset_id"] == pref), None)
+        if not rows:
+            return None, ("no 1-minute Dukascopy BID/ASK research dataset (NQ_DUKASCOPY with ASK OHLC) in this "
+                          "workspace to compare with")
+        rows.sort(key=lambda m: (bool(fam) and m.get("dataset_name") == fam, str(m.get("end"))))
+        return rows[-1], ""
+
+    def _paper_load_research(self, dataset_id: str):
+        """Load and validate a research dataset from a background thread (read-only connection; no service lock)."""
+        from contextlib import ExitStack
+        with ExitStack() as es:
+            if not es.enter_context(self.read_context(page=False)):
+                es.enter_context(self.lock)
+            return load_validated(self.store, self.cfg, dataset_id)
+
+    def paper_check_source(self) -> dict:
+        """'Check against my research data': runs on the paper thread (or a one-off thread when none is running)."""
+        m = self.paper
+        m.request_check()                                   # wakes the paper thread
+        if m.thread is None:                                # not started by a launcher (tests, embedding): run here
+            threading.Thread(target=m.run_once, daemon=True, name="munyun-paper-check").start()
+        return {"started": True}
+
+    def paper_continue_anyway(self) -> dict:
+        """Keep paper accounts updating although the latest check found different prices (that check only)."""
+        from datetime import datetime, timezone
+        from edgelab.paper import feed
+        from edgelab.paper.manager import is_paused
+        rec = feed.read_source_check(self.data_root)
+        if not is_paused(rec):
+            raise ValueError("paper accounts are not paused by a data check")
+        rec["continue_anyway"] = {"at": datetime.now(timezone.utc).isoformat()}
+        feed.write_source_check(self.data_root, rec)
+        self.paper.wake()
+        return _jsonable(rec)
 
     def paper_update_now(self) -> dict:
         m = self.paper
