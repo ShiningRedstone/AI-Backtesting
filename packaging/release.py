@@ -87,7 +87,7 @@ def main(argv=None) -> int:
         sys.exit("refusing to prepare a release:\n  - " + "\n  - ".join(problems))
     channel, build_number = build.get("channel"), int(build.get("build_number") or 0)
     branch_build = bool(channel and build_number)
-    label = f"EdgeLab {version} build {build_number} ({channel})" if branch_build else f"EdgeLab {version}"
+    label = f"Munyun Lab {version} build {build_number} ({channel})" if branch_build else f"Munyun Lab {version}"
     notes = Path(a.notes).read_text(encoding="utf-8") if a.notes else label
     out.mkdir(parents=True, exist_ok=True)
     name = f"EdgeLab-{version}-b{build_number}-{a.platform}.zip" if branch_build else f"EdgeLab-{version}-{a.platform}.zip"

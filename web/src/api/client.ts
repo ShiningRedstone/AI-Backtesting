@@ -16,7 +16,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
-    throw new ApiError(0, "unavailable", "The EdgeLab backend is not reachable. Is `python -m edgelab.web` running?",
+    throw new ApiError(0, "unavailable", "The Munyun Lab backend is not reachable. Is `python -m edgelab.web` running?",
       [], "", String(e));
   }
   let data: unknown = null;

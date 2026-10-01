@@ -6,7 +6,7 @@ import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, humanize, plainProse, statusLabel, valueLabel } from "../app/labels";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, ObjectView, Select, TableWrap, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, ObjectView, Select, TableWrap, TechDetails, TextInput, fmt, shortTime, ReadOnly } from "../components/ui";
 import type { ProtocolRecordRow } from "../api/types";
 import { UI_VERSION, UpdatePanel, useVersion } from "../components/updates";
 import { SystemPanel } from "./Strategies";
@@ -31,9 +31,9 @@ function AboutCard() {
   const { data: build } = useApi<{ built_at: string; react: string; app_version?: string }>("/build-info.json");
   const active = (protos.data ?? []).filter((p) => p.status === "ACTIVE");
   return (
-    <Card title="About EdgeLab" testId="about">
+    <Card title="About Munyun Lab" testId="about">
       <KeyValues rows={[
-        ["EdgeLab version", <><b data-testid="about-version">{v?.version ?? "…"}</b>{v && v.version !== UI_VERSION &&
+        ["Munyun Lab version", <><b data-testid="about-version">{v?.version ?? "…"}</b>{v && v.version !== UI_VERSION &&
           <Badge tone="error">UI bundle is {UI_VERSION}: rebuild the frontend</Badge>}</>],
         ["Build", v ? (v.packaged ? "packaged desktop build" : "development (running from source)") : "…"],
         ["Build date", v?.built_at ? shortTime(v.built_at) : build?.built_at ? `UI ${shortTime(build.built_at)}` : "—"],
@@ -134,7 +134,7 @@ export function DatasetsPage() {
       <ErrorPanel error={err} title="Not set as preferred" testId="preferred-error" />
       {loading && !data ? <Loading label="Loading datasets…" /> : !data?.length ? (
         <Empty><span data-testid="datasets-empty">No datasets in this workspace.</span> Open the research workspace that holds your datasets
-          (<ChooseWorkspaceLink />), or import one into this workspace (existing Phase 2 pipeline). EdgeLab never fabricates market data.</Empty>
+          (<ChooseWorkspaceLink />), or import one into this workspace (existing Phase 2 pipeline). Munyun Lab never fabricates market data.</Empty>
       ) : (
         <TableWrap testId="datasets-table"><table>
           <thead><tr><th>Dataset</th><th>Provider</th><th>Instrument</th><th>Identity</th><th>Timeframe</th><th>Range</th><th>Bars</th>
@@ -272,7 +272,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
     <Card title="Import a dataset (existing Phase 2 import pipeline)" testId="import-panel">
       <ErrorPanel error={error} />
       <p className="muted small">Files are read only from the configured import folder(s): <b>{files?.import_dirs.join(", ")}</b> (relative to the
-        EdgeLab root). Copy a CSV there, then pick it below. Provider, timezone and asset type must describe the real file — nothing is assumed.</p>
+        Munyun Lab root). Copy a CSV there, then pick it below. Provider, timezone and asset type must describe the real file — nothing is assumed.</p>
       <div className="grid3">
         <Field label="File">
           <Select value={path} onChange={setPath} testId="import-file" placeholder={files?.files.length ? "choose a file…" : "no files in the import folder"}
@@ -348,10 +348,12 @@ export function SettingsPage() {
   if (!c) return <Loading label="Loading configuration…" />;
   return (
     <div className="page">
-      <header className="page-head"><div><div className="eyebrow">System</div><h1>Settings</h1>
-        <div className="subtitle small">About this build, application updates, the research workspace and the (read-only) configuration.</div></div></header>
+      <header className="page-head"><div><h1>Settings</h1></div></header>
       <div className="grid-cards">{about}<UpdatePanel /></div>
-      <div className="grid-cards"><RiskPerTradeCard />{wsCard}</div>
+      <div className="grid-cards">{wsCard}<RiskPerTradeCard /></div>
+      <div className="grid-cards"><PropCriteriaCard /><DisplayCard /></div>
+      <ResetCard />
+      <ReadOnly>
       <h3>System status</h3>
       <SystemPanel />
       <Banner tone="info">Read-only view. Configuration lives in the YAML files of the workspace's configs folder (described in the configuration
@@ -367,7 +369,7 @@ export function SettingsPage() {
             <tbody>{Object.entries(c.cost_profiles).map(([k, v]) => (
               <tr key={k}><td>{humanize(k)}</td><td><Badge tone={v.status === "unconfigured" ? "error" : "neutral"}>{valueLabel(v.status)}</Badge></td>
                 <td className="small">{v.reason ? prose(v.reason) : v.profile ? humanize(v.profile) : ""}</td></tr>))}</tbody></table></TableWrap>
-          <p className="muted small">Unconfigured profiles block backtests. EdgeLab never invents broker spreads, commissions or slippage.</p>
+          <p className="muted small">Unconfigured profiles block backtests. Munyun Lab never invents broker spreads, commissions or slippage.</p>
           <TechDetails rows={Object.entries(c.cost_profiles).map(([k, v]) => [k, <Mono>{`${v.status}${v.profile ? ` · ${v.profile}` : ""}`}</Mono>])} />
         </Card>
         <Card title="Backtest engine"><ObjectView value={c.backtest} />
@@ -381,7 +383,72 @@ export function SettingsPage() {
         </table></TableWrap>
           <TechDetails rows={Object.entries(c.instruments).map(([k, v]) => [humanize(k), <Mono>{`${k} · ${v.asset_class} · ${v.calendar}`}</Mono>])} /></Card>
       </div>
+      </ReadOnly>
       {c.demo && <p className="muted small">{SYNTHETIC_NOTICE}</p>}
     </div>
+  );
+}
+
+/** Which prop account decides "passes evaluation / payout" (explorer filter and columns) and survivors. Display only. */
+function PropCriteriaCard() {
+  const { prefs, setPref, toast } = useApp();
+  return (
+    <Card title="Prop firm pass criteria" testId="settings-prop-criteria">
+      <div className="inline">
+        <select className="input" value={prefs.prop_criteria_profile} aria-label="prop account for pass criteria" data-testid="criteria-select"
+          onChange={(e: { target: HTMLSelectElement }) => setPref({ prop_criteria_profile: e.target.value })
+            .then(() => toast("ok", "Pass criteria updated")).catch((er: Error) => toast("error", er.message))}>
+          {(prefs.profile_choices ?? []).map((p) => <option key={p.profile_id} value={p.profile_id}>{p.name}</option>)}
+        </select>
+      </div>
+      <p className="small muted">This account's rules decide "Pass eval", "Pass payout" and the survivor label across the app. It reads the prop
+        check stored with every backtest; backtests are unchanged.</p>
+    </Card>
+  );
+}
+
+function Switch({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId: string }) {
+  return (
+    <label className="switch-row"><span>{label}</span>
+      <button type="button" role="switch" aria-checked={on} className={`switch${on ? " on" : ""}`} data-testid={testId}
+        onClick={() => onChange(!on)}><span /></button></label>
+  );
+}
+
+function DisplayCard() {
+  const { prefs, setPref, toast } = useApp();
+  const set = (k: "show_ids" | "show_readonly") => (v: boolean) => setPref({ [k]: v }).catch((er: Error) => toast("error", er.message));
+  return (
+    <Card title="Display" testId="settings-display">
+      <Switch on={prefs.show_ids} onChange={set("show_ids")} label="Show IDs (strategy, backtest and dataset IDs, hashes)" testId="switch-show-ids" />
+      <Switch on={prefs.show_readonly} onChange={set("show_readonly")} label="Show read-only information (fixed research design, configuration, system status)"
+        testId="switch-show-readonly" />
+    </Card>
+  );
+}
+
+/** Delete every strategy and result, keeping the price data. Irreversible: the user types DELETE. */
+function ResetCard() {
+  const { toast, reloadPrefs } = useApp();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const run = () => {
+    setBusy(true);
+    api.post<{ deleted_rows: Record<string, number>; deleted_folders: string[] }>("/api/workspace/reset", { confirm: text })
+      .then((r) => { toast("ok", `Deleted ${(r.deleted_rows.runs ?? 0).toLocaleString()} backtests and all strategies; price data kept`);
+        setText(""); reloadPrefs(); })
+      .catch((e: Error) => toast("error", e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <Card title="Delete all strategies and results" testId="settings-reset">
+      <p className="small">Deletes every strategy, backtest and its trades, research run and campaign (with its frozen strategy list), experiment,
+        random control, prop simulation, AI proposal, research protocol with its trial count, favorites and run names. <b>Keeps</b> the imported
+        price data, its import files, the settings above and the configuration. This cannot be undone.</p>
+      <div className="inline">
+        <input className="input" style={{ width: 200 }} placeholder='Type DELETE to confirm' value={text} aria-label="type DELETE to confirm"
+          data-testid="reset-confirm" onChange={(e: { target: HTMLInputElement }) => setText(e.target.value)} />
+        <Button kind="danger" onClick={run} busy={busy} busyLabel="Deleting…" disabled={text !== "DELETE"} testId="reset-run">Delete everything except price data</Button>
+      </div>
+    </Card>
   );
 }

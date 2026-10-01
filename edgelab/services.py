@@ -27,6 +27,7 @@ here judges strategies: backtest results are returned with their sample-size lab
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 import threading
@@ -213,6 +214,148 @@ class Services:
         prefs["risk_per_trade_usd"] = round(float(value), 2)
         save_prefs(self.data_root, prefs)
         return self.risk_per_trade()
+
+    # ------------------------------------------------------------ display preferences (ADR-74; outside the config hash)
+    UI_PREF_DEFAULTS = {"favorites": [], "prop_criteria_profile": "LUCID_LUCIDFLEX_50K", "show_ids": False,
+                        "show_readonly": False}
+
+    def ui_preferences(self) -> dict:
+        """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
+        never part of a run record, a strategy, a dataset or the research config hash; no backtest reads them."""
+        from edgelab.data.preferences import load_prefs
+        raw = load_prefs(self.data_root).get("ui") or {}
+        out = {k: raw.get(k, v) for k, v in self.UI_PREF_DEFAULTS.items()}
+        out["favorites"] = [x for x in out["favorites"] if isinstance(x, str)]
+        return out
+
+    def prop_profile_choices(self) -> list[dict]:
+        """The configured prop rule profiles with plain names (for the pass-criteria choice)."""
+        from edgelab.research.results_view import profile_names
+        return [{"profile_id": k, "name": v} for k, v in profile_names(self).items()]
+
+    def set_ui_preferences(self, changes: Mapping) -> dict:
+        from edgelab.data.preferences import load_prefs, save_prefs
+        if not isinstance(changes, Mapping):
+            raise ValueError("preferences must be an object")
+        cur = self.ui_preferences()
+        for k, v in changes.items():
+            if k not in self.UI_PREF_DEFAULTS or k == "favorites":
+                raise ValueError(f"unknown or read-only preference {k!r}")
+            if k in ("show_ids", "show_readonly"):
+                if not isinstance(v, bool):
+                    raise ValueError(f"{k} must be true or false")
+            elif k == "prop_criteria_profile":
+                from edgelab.prop.service import default_profiles
+                if v not in {p["profile_id"] for p in default_profiles(self.root)}:
+                    raise ValueError(f"unknown prop rule profile {v!r}")
+            cur[k] = v
+        prefs = load_prefs(self.data_root)
+        prefs["ui"] = cur
+        save_prefs(self.data_root, prefs)
+        return self.ui_preferences()
+
+    def set_favorite(self, strategy_id: str, on: bool) -> dict:
+        """Star / unstar a TESTED strategy (one with a stored backtest). Display metadata only."""
+        from edgelab.data.preferences import load_prefs, save_prefs
+        if not isinstance(on, bool):
+            raise ValueError("favorite must be true or false")
+        self.library.load(strategy_id)                       # KeyError for an unknown strategy
+        if on and not self.store._query("SELECT 1 FROM runs WHERE json_extract(record_json, '$.strategy.strategy_id') = ? "
+                                        "LIMIT 1", (strategy_id,)):
+            raise ValueError("only tested strategies (with a stored backtest) can be favorites")
+        cur = self.ui_preferences()
+        fav = [x for x in cur["favorites"] if x != strategy_id] + ([strategy_id] if on else [])
+        prefs = load_prefs(self.data_root)
+        prefs["ui"] = {**cur, "favorites": fav}
+        save_prefs(self.data_root, prefs)
+        return self.ui_preferences()
+
+    def favorites_info(self) -> dict:
+        """Favorites and the ids of every tested strategy (for the star buttons)."""
+        rows = self.store._query("SELECT DISTINCT json_extract(record_json, '$.strategy.strategy_id') FROM runs")
+        return {"favorites": self.ui_preferences()["favorites"], "tested": sorted(r[0] for r in rows if r[0])}
+
+    def campaign_run_names(self, campaign_id: str) -> dict:
+        """User-given names of research runs ({run record id: name}), kept beside the run records (never inside them)."""
+        from edgelab.research import campaign
+        p = campaign.runs_dir(self, campaign_id) / "names.json"
+        try:
+            d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        except (OSError, ValueError):
+            d = {}
+        return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, str)}
+
+    def rename_campaign_run(self, campaign_id: str, run_record_id: str, name: Any) -> dict:
+        from edgelab.research import campaign
+        if not isinstance(name, str) or len(name.strip()) > 80:
+            raise ValueError("the run name must be text of at most 80 characters")
+        ids = {r["run_record_id"] for r in campaign.run_records(self, campaign_id)}
+        if run_record_id not in ids:
+            raise KeyError(f"research run {run_record_id} is not stored in campaign {campaign_id}")
+        names = self.campaign_run_names(campaign_id)
+        if name.strip():
+            names[run_record_id] = name.strip()
+        else:
+            names.pop(run_record_id, None)
+        d = campaign.runs_dir(self, campaign_id)
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / "names.json.tmp"
+        tmp.write_text(json.dumps(names, indent=1, sort_keys=True), encoding="utf-8")
+        tmp.replace(d / "names.json")
+        return {"campaign_id": campaign_id, "run_record_id": run_record_id, "name": names.get(run_record_id)}
+
+    RESET_TABLES = ("trades", "metrics", "runs", "search_cells", "search_batches", "protocol_trials", "protocol_proposals",
+                    "holdout_access", "research_protocols")
+    RESET_DIRS = ("strategy_library", "campaigns", "strategy_factory", "controls", "prop_bootstrap", "prop_simulations",
+                  "ai_discovery")
+
+    def reset_workspace(self, confirm: Any) -> dict:
+        """Delete every strategy and research result of this workspace and KEEP the price data (datasets, bars, their
+        validation reports, the import folder and the feature cache) plus configs and settings. Deleted: the strategy
+        library, backtests and their trades, searches, research campaigns with their frozen strategy manifests, random
+        controls, prop simulations, evaluation-simulator cache, AI generations, research protocols with their trial
+        ledger and holdout log, favorites and run names. Irreversible; requires confirm == "DELETE"; refused while a
+        background job runs. Every reset is appended to <data>/workspace_reset_log.jsonl (what, when, how many)."""
+        import shutil
+        from datetime import datetime, timezone
+        from edgelab.data.preferences import load_prefs, save_prefs
+        if confirm != "DELETE":
+            raise ValueError('type DELETE to confirm deleting all strategies and results')
+        if not hasattr(self.store, "con"):
+            raise ValueError("deleting results is only supported for the SQLite store")
+        if self._jobs is not None and self._jobs.active():
+            raise ValueError("a background job is running; wait for it to finish or cancel it first")
+        from edgelab.prop import bootstrap as bs
+        if any(j.get("state") == "running" for j in bs._jobs.values()):
+            raise ValueError("an evaluation simulation is running; wait for it to finish first")
+        with self.lock:
+            existing = {r[0] for r in self.store._query("SELECT name FROM sqlite_master WHERE type='table'")}
+            counts = {}
+            for t in self.RESET_TABLES:
+                if t in existing:
+                    counts[t] = self.store._query(f"SELECT COUNT(*) FROM {t}")[0][0]
+                    self.store.con.execute(f"DELETE FROM {t}")
+            self.store.con.commit()
+            removed = []
+            for name in self.RESET_DIRS:
+                d = self.data_root / name
+                if d.is_dir():
+                    shutil.rmtree(d)
+                    removed.append(name)
+            prefs = load_prefs(self.data_root)
+            if prefs.get("ui"):
+                prefs["ui"] = {**prefs["ui"], "favorites": []}
+                save_prefs(self.data_root, prefs)
+            from edgelab.strategy.lineage import StrategyLibrary
+            self.library = StrategyLibrary(self.data_root / "strategy_library")
+            from edgelab.research import overview as ov, results_view as rv
+            ov._FACET_CACHE.clear()
+            rv._GROSS.clear()
+            entry = {"at": datetime.now(timezone.utc).isoformat(), "deleted_rows": counts, "deleted_folders": removed,
+                     "kept": "datasets, bars, dataset reports, import folder, feature cache, configs, settings"}
+            with open(self.data_root / "workspace_reset_log.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        return _jsonable(entry)
 
     def inspect_file(self, options: Mapping) -> dict:
         return _jsonable(inspect_file(ImportOptions(**options), self.cfg))
@@ -654,7 +797,10 @@ class Services:
 
     def campaign_detail(self, campaign_id: str) -> dict:
         from edgelab.research import campaign
-        return _jsonable(campaign.detail(self, campaign_id))
+        d = campaign.detail(self, campaign_id)
+        names = self.campaign_run_names(campaign_id)
+        d["runs"] = [{**r, "name": names.get(r.get("run_record_id"))} for r in d.get("runs") or []]
+        return _jsonable(d)
 
     def campaign_family_results(self, campaign_id: str, family_id: str) -> dict:
         from edgelab.research import campaign
@@ -1709,6 +1855,10 @@ class Services:
         progress (prop/bootstrap.py; simulated, downstream, changes nothing)."""
         from edgelab.prop import bootstrap as bs
         return _jsonable(bs.request(self, run_id, profile_id, params))
+
+    def research_runs(self) -> list[dict]:
+        from edgelab.research import results_view as rv
+        return _jsonable(rv.research_runs(self))
 
     def explore_strategies(self, params: Mapping) -> dict:
         from edgelab.research import overview as ov

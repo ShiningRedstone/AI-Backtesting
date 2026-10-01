@@ -244,7 +244,7 @@ def inspect_workspace(path: str | Path) -> dict:
     if out["demo"]:
         out["problems"].append("this is a synthetic demo workspace (start it with --demo)")
     if not (root / "configs").is_dir():
-        out["problems"].append("no configs/ folder: this is not an EdgeLab research workspace")
+        out["problems"].append("no configs/ folder: this is not a Munyun Lab research workspace")
         return out
     try:
         from edgelab.core.config import load_config
@@ -272,7 +272,7 @@ def inspect_workspace(path: str | Path) -> dict:
                 tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 missing = [t for t in STORE_TABLES if t not in tables]
                 if missing:
-                    out["problems"].append(f"the SQLite file has no EdgeLab tables {missing}")
+                    out["problems"].append(f"the SQLite file has no Munyun Lab tables {missing}")
                 else:
                     out["has_store"] = True
                     out["datasets"] = con.execute("SELECT COUNT(*) FROM datasets").fetchone()[0]
@@ -312,7 +312,7 @@ def _load_manifest(path: str) -> dict:
     need = {"schema", "app_version", "build_id", "git_commit", "source_sha256", "compiler_source_sha256",
             "feature_impl_hashes"}
     if m.get("schema") != MANIFEST_SCHEMA or not need <= set(m):
-        raise BuildManifestError(f"{p} is not a valid EdgeLab build manifest (schema {MANIFEST_SCHEMA})")
+        raise BuildManifestError(f"{p} is not a valid Munyun Lab build manifest (schema {MANIFEST_SCHEMA})")
     return m
 
 

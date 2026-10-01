@@ -1772,3 +1772,31 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   collapsed "Technical details". App event timestamps are shown in the computer's local time; market, bar, trade and
   backtest-period times keep their dataset convention. The research tab no longer shows an estimated time remaining
   (`campaign.estimate_remaining` and its tests stay).
+
+### ADR-74 Munyun Lab name, favorites, pass criteria account, named research runs, display switches, workspace reset
+- **Name.** The application is shown as **Munyun Lab** (logo/top bar "MUNYUN LAB"): window title, pages, dialogs,
+  Windows file description / product name, release titles. Deliberately unchanged so installed builds keep updating and
+  workspaces keep opening: the `edgelab` Python package, `EdgeLab.exe` / `EdgeLabConsole.exe`, the release manifest
+  `app: "EdgeLab"` and artifact names, `%APPDATA%\EdgeLab` / `%LOCALAPPDATA%\EdgeLab*` folders, prop profile files and
+  stored record text (the UI shows stored "EdgeLab" prose as "Munyun Lab").
+- **Display preferences** (`workspace_preferences.json` key `ui`, outside every record and the config hash; read by no
+  backtest): favorites (tested strategies only; star in explorer, strategy panel, library; first in the prop
+  simulator), `prop_criteria_profile` (default `LUCID_LUCIDFLEX_50K`), `show_ids`, `show_readonly` (both off).
+- **Pass criteria.** `overview.apply_criteria(row, profile)` derives `prop_pass_eval`, `prop_pass_payout` and `survivor`
+  from the run's STORED chronological prop audit for ONE account (Settings). A run without an audit for that account
+  is "not audited" (None), never a fail. `run_row(..., criteria=None)` keeps the any-account rule for callers that pass
+  no account. Explorer: `prop=eval|payout`, `favorites_only`, columns "Pass eval" / "Pass payout".
+- **Named research runs.** Names live in `<data>/campaigns/<CMP>/runs/names.json` (run records are never rewritten).
+  Backtest results → Overview and Strategies take `campaign_run=<CMP>/<CR>`: the strategies selected in that run (its
+  persisted scope file) with their backtests; default all backtests.
+- **Prop firm simulator** = pick a tested strategy (favorites first) → its automatic per-account audit + the
+  evaluation simulator; the manual simulator (custom rule sets, several accounts, start dates) is under "Advanced".
+- **Workspace reset** (`Services.reset_workspace("DELETE")`): deletes strategies, runs/metrics/trades, searches,
+  campaigns + frozen manifests, controls, prop simulations, bootstrap cache, AI generations, research protocols with
+  their trial ledger and holdout log, favorites, run names; keeps datasets, bars, dataset reports, the import folder,
+  the feature cache, configs and settings. Refused while a job runs; every reset is appended to
+  `<data>/workspace_reset_log.jsonl`. A reset also resets program-wide trial counting (the user's explicit choice);
+  the log records that it happened.
+- **UI.** No small labels above / explanation lines under page titles, no global search, skeleton loaders
+  (`Loading` renders a skeleton), consistent button spacing; machine ids and read-only panels only through the two
+  switches. No engine, compiler, search runner or prop lifecycle code changed.

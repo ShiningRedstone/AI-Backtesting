@@ -56,7 +56,7 @@ export function VersionChip() {
   const avail = !!s?.available && !s.skipped;
   return (
     <a className={`chip${avail ? " accent" : ""}`} href={href("/settings?tab=about")} data-testid="version-chip"
-      title={avail && s?.release ? `EdgeLab ${relLabel(s.release)} is available` : `EdgeLab ${UI_VERSION}`}>
+      title={avail && s?.release ? `Munyun Lab ${relLabel(s.release)} is available` : `Munyun Lab ${UI_VERSION}`}>
       v{UI_VERSION}{avail && <b>· update</b>}
     </a>
   );
@@ -76,7 +76,7 @@ function Progress({ s }: { s: UpdateStatus }) {
 
 /** Shown across the top of the app whenever a newer build of this installation's branch exists (ADR-72).
  *  "Restart and update" runs the backend's one-click install: check, download, SHA-256 verify, then the helper
- *  swaps the application folder and EdgeLab reopens on the new build (rolled back if it does not start). */
+ *  swaps the application folder and Munyun Lab reopens on the new build (rolled back if it does not start). */
 export function UpdateBanner() {
   const [s] = useUpdates();
   const [err, setErr] = useState<ApiError | null>(null);
@@ -99,7 +99,7 @@ export function UpdateBanner() {
     <div className="update-banner" role="status" data-testid="update-banner">
       <span><b>Update available:</b> {relLabel(rel)}{rel.channel ? <> of <b>{rel.channel}</b></> : null}
         {" "}<span className="muted">(you have {currentLabel(s)})</span></span>
-      {installing && <span className="muted small" data-testid="update-banner-step">{step} EdgeLab will close and reopen.</span>}
+      {installing && <span className="muted small" data-testid="update-banner-step">{step} Munyun Lab will close and reopen.</span>}
       {inst?.state === "error" && inst.error && <span className="neg small">Not installed: {inst.error.message}</span>}
       {err && <span className="neg small">{err.message}</span>}
       <span className="spacer" />
@@ -132,8 +132,8 @@ export function UpdatePanel() {
         busyLabel="Checking…" testId="update-check">Check for updates</Button>
       <Button small kind="primary" onClick={act("install")} busy={installing} busyLabel={stepLabel} disabled={!s.apply_supported}
         title={s.apply_unsupported_reason ?? "Check, download, verify and restart into the newest release"} testId="update-install">Update now</Button></>}>
-      {inst?.state === "up_to_date" && <Banner tone="info" testId="update-uptodate">EdgeLab {currentLabel(s)} is up to date; nothing to install.</Banner>}
-      {installing && <Banner tone="info" testId="update-installing">{stepLabel} EdgeLab will close and reopen on the new version
+      {inst?.state === "up_to_date" && <Banner tone="info" testId="update-uptodate">Munyun Lab {currentLabel(s)} is up to date; nothing to install.</Banner>}
+      {installing && <Banner tone="info" testId="update-installing">{stepLabel} Munyun Lab will close and reopen on the new version
         {inst?.version ? ` (${inst.version})` : ""}.</Banner>}
       {inst?.state === "error" && inst.error && <Banner tone="error" testId="update-install-error"><b>{humanize(inst.error.code)}</b> — {inst.error.message}
         {" "}Nothing was installed; the current version is unchanged.</Banner>}
@@ -166,7 +166,7 @@ export function UpdatePanel() {
       {s.download.state === "error" && s.download.error && <Banner tone="error"><b>{humanize(s.download.error.code)}</b> — {s.download.error.message}</Banner>}
       {s.skipped_versions.length > 0 && <p className="small muted">Skipped versions: {s.skipped_versions.join(", ")}</p>}
       <ErrorPanel error={err} />
-      <p className="small muted">EdgeLab works fully offline; a failed check never affects research. Updates come from the builds GitHub
+      <p className="small muted">Munyun Lab works fully offline; a failed check never affects research. Updates come from the builds GitHub
         makes of this installation's own branch (ShiningRedstone/AI-Backtesting) and are verified by SHA-256 before anything is installed.
         Your research workspace and settings are never touched.</p>
     </Card>

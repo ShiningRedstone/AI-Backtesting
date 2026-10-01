@@ -72,7 +72,7 @@ export function StrategyDetail({ id, tab: initial = "summary" }: { id: string; t
         </Card>
         <Card title="Rules in plain English">
           {ex.error ? <ErrorPanel error={ex.error} /> : <RulesTable definition={def} explain={ex.data?.explain} />}
-          <details className="tech"><summary>Technical details: definition (canonical DSL)</summary><pre className="code">{JSON.stringify(def, null, 2)}</pre></details>
+          <TechDetails summary="Technical details: definition (canonical DSL)"><pre className="code">{JSON.stringify(def, null, 2)}</pre></TechDetails>
         </Card>
       </>}
       {tab === "performance" && needRun((a) => <>

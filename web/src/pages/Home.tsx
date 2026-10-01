@@ -4,7 +4,7 @@ import { useApi } from "../app/context";
 import { datasetLabel, humanize, statusLabel, strategyLabel } from "../app/labels";
 import { DatasetIdentity, ExecutionPanel, ProtocolPanel } from "../components/research";
 import { UI_VERSION, useUpdates } from "../components/updates";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Kpi, Loading, Mono, Scope, ScopeOf, TableWrap, TechDetails, n, r, shortTime, signCls } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Kpi, Loading, Mono, Scope, ScopeOf, TableWrap, TechDetails, n, r, shortTime, signCls, ReadOnly } from "../components/ui";
 import { ChooseWorkspaceLink } from "../components/workspace";
 
 const storeLabel = (b: string | null | undefined) => (b === "sqlite" ? "SQLite" : b === "duckdb" ? "DuckDB" : humanize(b));
@@ -22,13 +22,11 @@ export function HomePage() {
   return (
     <div className="page" data-testid="home">
       <header className="page-head hero">
-        <div><div className="eyebrow">Research terminal</div><h1>Home</h1>
-          <div className="subtitle small">System facts and stored results. A positive backtest is a historical result under stated assumptions,
-            never a verdict that a strategy is profitable.</div></div>
+        <div><h1>Home</h1></div>
         <div className="actions">
           <Button kind="primary" onClick={() => go("/runs")} testId="qa-run-research">Run research</Button>
           <Button onClick={() => go("/explorer")}>Strategy explorer</Button>
-          <Button onClick={() => go("/dashboard")}>Research dashboard</Button>
+          <Button onClick={() => go("/dashboard")}>Backtest results</Button>
           <Button kind="primary" onClick={() => go("/builder?new=1")} testId="qa-create">New strategy</Button>
         </div>
       </header>
@@ -51,14 +49,15 @@ export function HomePage() {
         </div>
       </section>
 
-      {o.protocols.length ? o.protocols.map((p) => <ProtocolPanel key={p.protocol_id} p={p} />)
-        : <Banner tone="warn">No active research protocol in this workspace ({o.protocol_records.length} protocol record(s)). Discovery evaluations
-          are not governed by a locked holdout or a trial budget.</Banner>}
-
-      <div className="grid-cards">
-        <DatasetIdentity o={o} />
-        <ExecutionPanel e={o.execution} />
-      </div>
+      <ReadOnly>
+        {o.protocols.length ? o.protocols.map((p) => <ProtocolPanel key={p.protocol_id} p={p} />)
+          : <Banner tone="warn">No active research protocol in this workspace ({o.protocol_records.length} protocol record(s)). Discovery evaluations
+            are not governed by a locked holdout or a trial budget.</Banner>}
+        <div className="grid-cards">
+          <DatasetIdentity o={o} />
+          <ExecutionPanel e={o.execution} />
+        </div>
+      </ReadOnly>
 
       <Card title={<>Latest research results <Scope kind="net" /><Scope kind="descriptive" /></>} testId="home-recent-runs"
         actions={<a className="small" href={href("/results")}>All results ›</a>}>
@@ -67,7 +66,7 @@ export function HomePage() {
             <th className="r">Net R</th><th className="r">Profit factor</th><th className="r">Max drawdown (R)</th><th>Created</th></tr></thead>
           <tbody>{o.recent_runs.map((x) => (
             <tr key={x.run_id}>
-              <td><a href={href(`/results/${x.run_id}`)}>{humanize(x.run_id)}</a></td>
+              <td><a href={href(`/results/${x.run_id}`)}>Open</a></td>
               <td><ScopeOf status={x.status} holdout={x.holdout} />{x.synthetic && <> <Scope kind="synthetic" /></>}</td>
               <td><a href={href(`/explorer?open=${x.strategy_id}`)}>{x.strategy_name ? strategyLabel(x.strategy_name) : "Unnamed strategy"}</a></td>
               <td className="small">{datasetLabel(x.dataset_id)}</td>

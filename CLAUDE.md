@@ -1,6 +1,6 @@
-# CLAUDE.md: EdgeLab project context
+# CLAUDE.md: Munyun Lab project context
 
-EdgeLab (package `edgelab/`) is an AI-assisted trading research and backtesting platform. Its job
+Munyun Lab (formerly EdgeLab; package `edgelab/`, program `EdgeLab.exe`, data folders `EdgeLab` unchanged on purpose) is an AI-assisted trading research and backtesting platform. Its job
 is to find out whether a repeatable statistical edge **actually exists**, and to **disprove**
 strategies as aggressively as it discovers them. The final product is a unified web GUI.
 
@@ -69,6 +69,10 @@ smoke-tested by `.github/workflows/windows-build.yml`; banner "Restart and updat
 strategy/control panels), `prop/bootstrap.py` (seeded day-block bootstrap through the unchanged lifecycle; intraday trailing
 refused), controls stored as control records (never runs/trials), risk per trade ($) display preference outside the config
 hash, plain-English UI (`web/src/app/labels.ts`; ids only under "Technical details"), local time for app events, no ETA.
+ADR-74: shown as "Munyun Lab" (internal names unchanged); display preferences in workspace prefs `ui` (favorites, prop criteria
+account default LucidFlex 50K driving Pass eval / Pass payout / survivor, Show IDs, Show read-only information); named research
+runs (`runs/names.json`) pickable on Backtest results (`campaign_run` = that run's scope); simplified Prop firm simulator;
+`reset_workspace("DELETE")` keeps price data only (logged); no eyebrow/subtitle, no global search, skeleton loaders.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

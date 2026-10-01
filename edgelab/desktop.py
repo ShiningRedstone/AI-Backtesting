@@ -57,11 +57,11 @@ class StartupError(RuntimeError):
 
 # ------------------------------------------------------------------------------------ helpers
 def show_error(message: str) -> None:
-    print(f"EdgeLab could not start:\n{message}", file=sys.stderr)
+    print(f"Munyun Lab could not start:\n{message}", file=sys.stderr)
     if sys.platform == "win32" and getattr(sys, "frozen", False):
         try:
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, message, "EdgeLab could not start", 0x10)
+            ctypes.windll.user32.MessageBoxW(None, message, "Munyun Lab could not start", 0x10)
         except Exception:                                    # noqa: BLE001 - best effort UI
             pass
 
@@ -160,13 +160,13 @@ def _stop_on_signals(stop: threading.Event) -> None:
 
 # ------------------------------------------------------------------------------------ main
 def parse_args(argv):
-    ap = argparse.ArgumentParser(prog="EdgeLab", description="EdgeLab local research application")
+    ap = argparse.ArgumentParser(prog="EdgeLab", description="Munyun Lab local research application")
     ap.add_argument("--data-root", help="persistent workspace (default: %%LOCALAPPDATA%%\\EdgeLab or "
                                         "$EDGELAB_DATA_ROOT)")
     ap.add_argument("--demo", action="store_true", help="separate synthetic demo workspace (<data root>/demo)")
     ap.add_argument("--port", type=int, default=0, help="loopback port (default: a free port)")
     ap.add_argument("--ui", choices=("window", "browser", "none"), default="window",
-                    help="window: native EdgeLab window (default); browser: default web browser; none: headless")
+                    help="window: native Munyun Lab window (default); browser: default web browser; none: headless")
     ap.add_argument("--no-browser", action="store_true", help="alias for --ui none (headless)")
     ap.add_argument("--ready-timeout", type=float, default=60.0)
     return ap.parse_args(argv)
@@ -290,10 +290,10 @@ def run(argv=None) -> int:
         state["info"] = info
         (logs / RUNTIME_FILE).write_text(json.dumps(info, indent=1))
         _report_ready(info)                           # to the update helper that relaunched us (if any)
-        print(f"EdgeLab running at {url}\n  workspace: {host.root or 'none selected (first run)'} ({host.source})\n"
+        print(f"Munyun Lab running at {url}\n  workspace: {host.root or 'none selected (first run)'} ({host.source})\n"
               f"  build: {runtime.build_label()}\n  ui: {ui}\n"
-              + ("Close the EdgeLab window to stop." if ui == "window" else
-                 "Keep this window open while you use EdgeLab; close it (or press Ctrl+C) to stop."), flush=True)
+              + ("Close the Munyun Lab window to stop." if ui == "window" else
+                 "Keep this window open while you use Munyun Lab; close it (or press Ctrl+C) to stop."), flush=True)
         _stop_on_signals(stop)
         if ui == "window":
             controller.run(stop)                      # blocks until the window is closed
@@ -302,7 +302,7 @@ def run(argv=None) -> int:
                 webbrowser.open(url)
             while not stop.wait(0.5):
                 pass
-        print("EdgeLab stopping…", flush=True)
+        print("Munyun Lab stopping…", flush=True)
         return 0
     except StartupError as exc:
         _log(logs, str(exc))
@@ -333,10 +333,10 @@ def _hand_off(root: Path, logs: Path, ui: str) -> int:
     window, show its URL in a window (or browser) of this process. Never a second server."""
     info = _read_runtime(logs)
     if not info:
-        show_error(f"EdgeLab is already running for {root} (it is still starting, or a previous instance is "
+        show_error(f"Munyun Lab is already running for {root} (it is still starting, or a previous instance is "
                    "shutting down). Try again in a moment.")
         return 1
-    print(f"EdgeLab is already running for {root} at {info['url']}")
+    print(f"Munyun Lab is already running for {root} at {info['url']}")
     if ui == "none":
         return 0
     from edgelab.desktop_window import TOKEN_HEADER

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections import Counter
 from typing import Any, Iterable, Mapping
 
@@ -133,7 +134,53 @@ def run_records(svc) -> list[dict]:
         out = [run_row(rid, _loads(raw) or {}) for rid, raw in rows]
         _FACET_CACHE["runs"] = (key, out)
     hr = holdout_run_ids(svc)
-    return [{**r, "holdout": True, "scope": HOLDOUT_SCOPE} if r["run_id"] in hr else {**r, "holdout": False} for r in out]
+    crit = criteria_profile(svc)
+    return [{**apply_criteria(r, crit), "holdout": True, "scope": HOLDOUT_SCOPE} if r["run_id"] in hr
+            else {**apply_criteria(r, crit), "holdout": False} for r in out]
+
+
+DEFAULT_CRITERIA_PROFILE = "LUCID_LUCIDFLEX_50K"
+CAMPAIGN_RUN_REF = re.compile(r"^(CMP_[0-9A-F]{12})/(CR_\d{8}_\d{6}_[0-9A-F]{6})$")
+
+
+def campaign_run_scope(svc, ref: Any) -> set[str] | None:
+    """The strategy ids selected in one research run ("<campaign id>/<run record id>"), or None for all backtests.
+    Read from the run's persisted scope file (written once when the run started; never edited here)."""
+    if not ref:
+        return None
+    m = CAMPAIGN_RUN_REF.match(str(ref))
+    if not m:
+        raise ValueError("campaign_run must be '<campaign id>/<run record id>'")
+    from edgelab.research import campaign as C
+    try:
+        return set(C.load_scope(svc, m.group(1), m.group(2))["strategy_ids"])
+    except C.CampaignError as exc:
+        raise ValueError(f"research run {ref} has no stored selection") from exc
+
+
+def criteria_profile(svc) -> str | None:
+    """The prop rule profile whose stored audit decides "passes evaluation / payout" and survivors (workspace preference,
+    display only; default LucidFlex 50K). None only when the preference cannot be read."""
+    try:
+        return svc.ui_preferences()["prop_criteria_profile"]
+    except Exception:                                        # noqa: BLE001 - unreadable preferences: fall back
+        return DEFAULT_CRITERIA_PROFILE
+
+
+def apply_criteria(row: Mapping, profile_id: str | None) -> dict:
+    """Pass flags and the survivor flag of one run row under ONE rule profile's stored chronological audit
+    (``profile_id`` None: any profile, the ADR-73 rule). A run without an audit for that profile is not a survivor and
+    its pass flags are None (not audited), never False."""
+    prop = row.get("prop") or []
+    if profile_id is None:
+        ev = any(p["evaluation"] == "PASS" for p in prop) if prop else None
+        pay = any(p["passes_with_payout"] for p in prop) if prop else None
+    else:
+        p = next((x for x in prop if x.get("profile_id") == profile_id), None)
+        ev = (p["evaluation"] == "PASS") if p else None
+        pay = bool(p["passes_with_payout"]) if p else None
+    return {**row, "criteria_profile": profile_id, "prop_pass_eval": ev, "prop_pass_payout": pay,
+            "survivor": bool(pay and (row.get("expectancy_r") or 0.0) > 0)}
 
 
 HOLDOUT_SCOPE = "Holdout evaluation (protocol)"
@@ -167,7 +214,7 @@ def prop_summary(rec: Mapping) -> list[dict]:
     return out
 
 
-def run_row(run_id: str, rec: Mapping) -> dict:
+def run_row(run_id: str, rec: Mapping, criteria: str | None = None) -> dict:
     d, a, s = rec.get("dataset") or {}, rec.get("assumptions") or {}, rec.get("strategy") or {}
     hm = rec.get("headline_metrics") or {}
     n = int(hm.get("trade_count") or 0)
@@ -176,8 +223,7 @@ def run_row(run_id: str, rec: Mapping) -> dict:
     costs = a.get("costs") or {}
     aw, al = _f(hm.get("avg_winner_r")), _f(hm.get("avg_loser_r"))
     prop = prop_summary(rec)
-    pass_payout = any(p["passes_with_payout"] for p in prop)
-    return {"run_id": run_id, "created_at": rec.get("created_at"), "status": status,
+    row = {"run_id": run_id, "created_at": rec.get("created_at"), "status": status,
             "scope": SCOPE_LABEL.get(status, status), "strategy_id": s.get("strategy_id"),
             "strategy_name": (s.get("dsl") or {}).get("name"), "dataset_id": d.get("dataset_id"),
             "instrument": d.get("instrument"), "provider": d.get("provider"), "timeframe": d.get("timeframe"),
@@ -194,10 +240,10 @@ def run_row(run_id: str, rec: Mapping) -> dict:
             "sample_label": hm.get("sample_label"),
             "avg_winner_r": aw, "avg_loser_r": al, "avg_rr": aw / abs(al) if aw is not None and al not in (None, 0.0) else None,
             "max_loss_streak": hm.get("max_loss_streak"), "avg_hold_minutes": _f(hm.get("avg_hold_minutes")),
-            "prop": prop, "prop_pass_payout": pass_payout,
-            # survivor (ADR-73): positive net R per trade AND the recorded trade sequence passes an evaluation and
-            # reaches the first payout under at least one prop rule profile (in-sample unless the run says otherwise)
-            "survivor": bool(pass_payout and (_f(hm.get("expectancy_r")) or 0.0) > 0)}
+            "prop": prop}
+    # survivor (ADR-73/74): positive net R per trade AND the recorded trade sequence passes an evaluation and reaches the
+    # first payout under the criteria rule profile (Settings; any profile when none is given). In-sample unless labelled.
+    return apply_criteria(row, criteria)
 
 
 def protocol_facts(svc) -> dict:
@@ -350,6 +396,10 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
     for r in runs:
         by_strat.setdefault(r["strategy_id"], []).append(r)
     protocol = params.get("protocol")
+    try:
+        favorites = set(svc.ui_preferences()["favorites"])
+    except Exception:                                        # noqa: BLE001 - unreadable preferences: no favorites
+        favorites = set()
     rows = []
     for f in facets:
         sruns = by_strat.get(f["strategy_id"], [])
@@ -373,8 +423,8 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
                                                         "expectancy_r", "gross_r_per_trade", "net_r", "profit_factor",
                                                         "max_drawdown_r", "cost_r_per_trade", "sample_label",
                                                         "synthetic", "avg_rr", "max_loss_streak", "avg_hold_minutes",
-                                                        "prop_pass_payout")},
-                     "survivor": bool(ref and ref.get("survivor"))})
+                                                        "prop_pass_eval", "prop_pass_payout")},
+                     "survivor": bool(ref and ref.get("survivor")), "favorite": f["strategy_id"] in favorites})
 
     def keep(r: dict) -> bool:
         q = str(params.get("q") or "").strip().lower()
@@ -382,6 +432,12 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
                                                                   "hypothesis", "category")).lower():
             return False
         if params.get("survivors_only") in ("1", "true", True) and not r["survivor"]:
+            return False
+        if params.get("favorites_only") in ("1", "true", True) and not r["favorite"]:
+            return False
+        if params.get("prop") == "eval" and not r["prop_pass_eval"]:
+            return False
+        if params.get("prop") == "payout" and not r["prop_pass_payout"]:
             return False
         for key in ("family_id", "timeframe", "session", "direction", "entry_type", "stop_type", "target_type",
                     "source", "instrument", "state", "trailing", "signal_exit"):
@@ -402,7 +458,8 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
             return False
         return True
 
-    kept = [r for r in rows if keep(r)]
+    in_run = campaign_run_scope(svc, params.get("campaign_run"))
+    kept = [r for r in rows if keep(r) and (in_run is None or r["strategy_id"] in in_run)]
     present = [r for r in kept if r.get(sort) is not None]
     missing = [r for r in kept if r.get(sort) is None]
     present.sort(key=lambda r: (r[sort] if not isinstance(r[sort], str) else r[sort].lower()), reverse=desc)
@@ -417,6 +474,7 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
                 "any": "Latest run of any status"}[scope],
             "sort": sort, "order": "desc" if desc else "asc", "facets": facet_values,
             "states": STATE_LABEL, "protocols": pf["protocols"], "library_total": len(rows),
+            "criteria_profile": criteria_profile(svc), "campaign_run": params.get("campaign_run") or None,
             "basis": "Metrics come from the latest stored run of each strategy in the chosen scope, net of that "
                      "run's stated costs unless labelled gross. Win rate is shown but never used to rank.",
             "note": DESCRIPTIVE}

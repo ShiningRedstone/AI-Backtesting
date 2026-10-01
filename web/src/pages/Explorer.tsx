@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ExplorerResponse, ExplorerRow } from "../api/types";
 import { go, href, useRoute } from "../app/router";
-import { useApi } from "../app/context";
+import { useApi, useApp } from "../app/context";
 import { StrategyDetail } from "../components/strategy/detail";
+import { RunPicker, useCriteriaName } from "../components/results";
 import { facetLabel, humanize } from "../app/labels";
-import { Badge, Button, Card, Drawer, Empty, ErrorPanel, Loading, Pager, Scope, SortTh, TableWrap, n, pct, r, signCls,
+import { Badge, Button, Card, Drawer, FavStar, Empty, ErrorPanel, Loading, Pager, Scope, SortTh, TableWrap, n, pct, r, signCls,
   useDebounced } from "../components/ui";
 
 const FILTERS: { key: string; label: string }[] = [
@@ -13,15 +14,20 @@ const FILTERS: { key: string; label: string }[] = [
   { key: "target_type", label: "Target" }, { key: "trailing", label: "Trailing stop" }, { key: "signal_exit", label: "Signal exit" },
   { key: "direction", label: "Direction" }, { key: "source", label: "Source" }, { key: "state", label: "State" },
 ];
-const KEYS = ["q", "strategy_id", "scope", "protocol", "min_trades", "max_trades_per_week", "tested_only", "survivors_only", "sort", "order", "page",
+const KEYS = ["q", "strategy_id", "scope", "protocol", "min_trades", "max_trades_per_week", "tested_only", "survivors_only", "favorites_only",
+  "prop", "campaign_run", "sort", "order", "page",
   "page_size", ...FILTERS.map((f) => f.key)];
 const CHIP: Record<string, string> = { q: "Search", strategy_id: "Strategy ID", scope: "Scope", protocol: "Protocol",
-  min_trades: "Minimum trades", max_trades_per_week: "Maximum trades per week", tested_only: "Tested only", survivors_only: "Survivors only" };
+  min_trades: "Minimum trades", max_trades_per_week: "Maximum trades per week", tested_only: "Tested only", survivors_only: "Survivors only",
+  favorites_only: "Favorites only", prop: "Prop firm result", campaign_run: "Backtests" };
+const PROP_TEXT: Record<string, string> = { eval: "passes evaluation", payout: "passes evaluation and payout" };
 const SCOPE_TEXT: Record<string, string> = { in_sample: "In-sample", oos: "Out-of-sample", walk_forward: "Walk-forward", any: "Any" };
 function optLabel(k: string, v: string, states?: Record<string, string>): string {
   if (k === "state") return states?.[v] ?? humanize(v);
   if (k === "scope") return SCOPE_TEXT[v] ?? humanize(v);
-  if (k === "tested_only" || k === "survivors_only") return "yes";
+  if (k === "tested_only" || k === "survivors_only" || k === "favorites_only") return "yes";
+  if (k === "prop") return PROP_TEXT[v] ?? v;
+  if (k === "campaign_run") return "one research run";
   if (["q", "strategy_id", "min_trades", "max_trades_per_week", "protocol"].includes(k)) return v;
   return facetLabel(k, v);
 }
@@ -35,6 +41,8 @@ function readQuery(q: URLSearchParams): Record<string, string> {
 
 export function ExplorerPage() {
   const route = useRoute();
+  const { prefs } = useApp();
+  const crit = useCriteriaName();
   const [f, setF] = useState<Record<string, string>>(() => readQuery(route.query));
   const [open, setOpen] = useState<string | null>(route.query.get("open"));
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -60,9 +68,7 @@ export function ExplorerPage() {
   return (
     <div className="page" data-testid="explorer">
       <header className="page-head">
-        <div><div className="eyebrow">Strategies</div><h1>Strategy explorer</h1>
-          <div className="subtitle small">Every stored strategy with the statistics of its latest run in the chosen scope. Ordered by what you pick;
-            nothing here is a ranking of "best" strategies.</div></div>
+        <div><h1>Strategy explorer</h1></div>
         <div className="actions">
           <div className="segmented small" role="group" aria-label="scope">
             {[["in_sample", "In-sample"], ["oos", "Out-of-sample"], ["walk_forward", "Walk-forward"], ["any", "Any"]].map(([k, l]) =>
@@ -76,8 +82,15 @@ export function ExplorerPage() {
       <div className="filterbar" data-testid="explorer-filters">
         <input className={`input search-box${f.q ? " active" : ""}`} placeholder="Search name, ID, family, hypothesis…" value={f.q ?? ""}
           aria-label="search" data-testid="explorer-q" onChange={(e: { target: HTMLInputElement }) => set("q", e.target.value)} />
-        <input className={`input${f.strategy_id ? " active" : ""}`} style={{ width: 150 }} placeholder="Strategy ID" value={f.strategy_id ?? ""}
-          aria-label="strategy id" onChange={(e: { target: HTMLInputElement }) => set("strategy_id", e.target.value.toUpperCase())} />
+        {prefs.show_ids && <input className={`input${f.strategy_id ? " active" : ""}`} style={{ width: 150 }} placeholder="Strategy ID" value={f.strategy_id ?? ""}
+          aria-label="strategy id" onChange={(e: { target: HTMLInputElement }) => set("strategy_id", e.target.value.toUpperCase())} />}
+        <RunPicker value={f.campaign_run ?? ""} onChange={(v) => set("campaign_run", v)} />
+        <select className={`input${f.prop ? " active" : ""}`} value={f.prop ?? ""} aria-label="prop firm result" data-testid="filter-prop"
+          title={`Prop firm result under ${crit} (change the account in Settings)`} onChange={(e: { target: HTMLSelectElement }) => set("prop", e.target.value)}>
+          <option value="">Prop firm: all</option>
+          <option value="eval">Passes evaluation</option>
+          <option value="payout">Passes evaluation and payout</option>
+        </select>
         {FILTERS.map((fl) => (
           <select key={fl.key} className={`input${f[fl.key] ? " active" : ""}`} value={f[fl.key] ?? ""} aria-label={fl.label}
             data-testid={`filter-${fl.key}`} onChange={(e: { target: HTMLSelectElement }) => set(fl.key, e.target.value)}>
@@ -97,6 +110,8 @@ export function ExplorerPage() {
           aria-label="maximum trades per week" onChange={(e: { target: HTMLInputElement }) => set("max_trades_per_week", e.target.value.replace(/[^0-9.]/g, ""))} />
         <label className="check small"><input type="checkbox" checked={f.tested_only === "1"}
           onChange={(e: { target: HTMLInputElement }) => set("tested_only", e.target.checked ? "1" : "")} />tested only</label>
+        <label className="check small"><input type="checkbox" checked={f.favorites_only === "1"} data-testid="filter-favorites"
+          onChange={(e: { target: HTMLInputElement }) => set("favorites_only", e.target.checked ? "1" : "")} />favorites only</label>
         <label className="check small"><input type="checkbox" checked={f.survivors_only === "1"} data-testid="filter-survivors"
           onChange={(e: { target: HTMLInputElement }) => set("survivors_only", e.target.checked ? "1" : "")} />survivors only</label>
         <Button small kind="ghost" onClick={reset} disabled={!active.length} testId="explorer-reset">Reset</Button>
@@ -115,7 +130,7 @@ export function ExplorerPage() {
           : <>
             <TableWrap testId="explorer-table"><table className="dense">
               <thead><tr>
-                <th style={{ width: 28 }} />
+                <th style={{ width: 28 }} /><th style={{ width: 30 }} aria-label="favorite" />
                 <SortTh k="strategy_id" label="Strategy" {...sortProps} width={210} />
                 <SortTh k="family_id" label="Family" {...sortProps} />
                 <th>Market</th><SortTh k="timeframe" label="Timeframe" {...sortProps} /><th>Session</th>
@@ -129,7 +144,8 @@ export function ExplorerPage() {
                 <SortTh k="max_drawdown_r" label="Max drawdown R" right {...sortProps} />
                 <SortTh k="cost_r_per_trade" label="Cost per trade" right {...sortProps} />
                 <SortTh k="win_rate" label="Win rate" right {...sortProps} title="shown for completeness; never a ranking criterion" />
-                <th className="r">Out-of-sample</th><th>Prop</th><th>State</th>
+                <th className="r">Out-of-sample</th><th>State</th>
+                <th title={`Under ${crit}`}>Pass eval</th><th title={`Under ${crit}`}>Pass payout</th>
               </tr></thead>
               <tbody>{data.rows.map((x) => <Row key={x.strategy_id} x={x} sel={selected.has(x.strategy_id)} onSel={() => toggle(x.strategy_id)}
                 onOpen={() => setOpen(x.strategy_id)} />)}</tbody>
@@ -142,13 +158,15 @@ export function ExplorerPage() {
 
       <Drawer open={!!open} onClose={() => setOpen(null)} testId="strategy-drawer"
         title={open ? humanize(data?.rows.find((x) => x.strategy_id === open)?.name ?? "Strategy") : ""}
-        subtitle={<>Descriptive statistics of stored runs; formal acceptance happens only in a protocol holdout evaluation.</>}
         actions={open ? <Button small onClick={() => go(`/strategies/${open}`)}>Open strategy page</Button> : null}>
         {open && <StrategyDetail key={open} id={open} />}
       </Drawer>
     </div>
   );
 }
+
+const YesNo = ({ v }: { v: boolean | null | undefined }) => (v == null ? <span className="faint">—</span>
+  : <Badge tone={v ? "ok" : "neutral"}>{v ? "Pass" : "No"}</Badge>);
 
 const STATE_TONE: Record<string, "ok" | "warn" | "error" | "info" | "neutral"> = {
   untested: "neutral", tested: "neutral", oos_tested: "info", shortlisted: "info", holdout_granted: "info",
@@ -160,6 +178,7 @@ function Row({ x, sel, onSel, onOpen }: { x: ExplorerRow; sel: boolean; onSel: (
     <tr className={`clickable${sel ? " selected" : ""}`} onClick={onOpen} data-testid={`xrow-${x.strategy_id}`}>
       <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><input type="checkbox" checked={sel} onChange={onSel}
         aria-label={`select ${x.strategy_id}`} /></td>
+      <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><FavStar id={x.strategy_id} /></td>
       <td><div style={{ color: "var(--text)", fontWeight: 560 }}>{humanize(x.name ?? "—")}</div>
         {x.survivor && <Badge tone="ok">Survivor</Badge>}{x.synthetic && <> <Scope kind="synthetic">synthetic</Scope></>}</td>
       <td className="small">{x.family_name ?? facetLabel("family_id", x.family_id)}</td>
@@ -172,8 +191,9 @@ function Row({ x, sel, onSel, onOpen }: { x: ExplorerRow; sel: boolean; onSel: (
       <td className="r num">{n(x.profit_factor)}</td><td className="r num">{n(x.max_drawdown_r, 1)}</td>
       <td className="r num muted">{n(x.cost_r_per_trade, 3)}</td><td className="r num faint">{pct(x.win_rate, 0)}</td>
       <td className={`r num ${signCls(x.oos_expectancy_r)}`}>{x.oos_expectancy_r == null ? <span className="faint">—</span> : n(x.oos_expectancy_r, 3)}</td>
-      <td className="small">{x.prop_pass_payout == null ? <span className="faint">—</span> : x.prop_pass_payout ? "Pass and payout" : "No payout"}</td>
       <td><Badge tone={STATE_TONE[x.state] ?? "neutral"}>{x.state_label}</Badge></td>
+      <td data-testid={`pass-eval-${x.strategy_id}`}><YesNo v={x.prop_pass_eval} /></td>
+      <td data-testid={`pass-payout-${x.strategy_id}`}><YesNo v={x.prop_pass_payout} /></td>
     </tr>
   );
 }

@@ -5,12 +5,31 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { BootstrapResponse, ControlPanelData, PropSummaryRow, ResultsOverview, StrategyPanelData } from "../api/types";
-import { useApi } from "../app/context";
+import { useApi, useApp } from "../app/context";
 import { facetLabel, humanize, profileLabel, statusLabel } from "../app/labels";
-import { href } from "../app/router";
+import { href, useRoute } from "../app/router";
 import { HBars, PathsChart, ScatterChart } from "./charts";
 import type { ScatterGroup } from "./charts";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, Scope, TableWrap, n, pct, r, signCls } from "./ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, FavStar, KeyValues, Kpi, Loading, Mono, Scope, TableWrap, TechDetails, n, pct, r, shortTime, signCls } from "./ui";
+
+/** The plain name of the prop account chosen in Settings for "passes evaluation / payout" and survivors. */
+export function useCriteriaName(): string {
+  const { prefs } = useApp();
+  return prefs.profile_choices?.find((p) => p.profile_id === prefs.prop_criteria_profile)?.name ?? profileLabel(prefs.prop_criteria_profile);
+}
+
+/** Pick which backtests Backtest results shows: all, or the strategies selected in one (named) research run. */
+export function RunPicker({ value, onChange, testId = "run-picker" }: { value: string; onChange: (ref: string) => void; testId?: string }) {
+  const { data } = useApi<{ ref: string; name: string | null; created_at: string | null; n_scope: number | null; status: string | null }[]>("/api/results-view/runs");
+  return (
+    <select className={`input${value ? " active" : ""}`} value={value} aria-label="which backtests" data-testid={testId}
+      onChange={(e: { target: HTMLSelectElement }) => onChange(e.target.value)} style={{ maxWidth: 360 }}>
+      <option value="">All backtests</option>
+      {(data ?? []).map((r) => <option key={r.ref} value={r.ref}>{r.name ?? `Research run of ${shortTime(r.created_at)}`}
+        {r.n_scope != null ? ` · ${r.n_scope.toLocaleString()} strategies` : ""}</option>)}
+    </select>
+  );
+}
 
 export const usd = (v: number | null | undefined, digits = 0) => (v == null || !Number.isFinite(v) ? "—"
   : `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits })}`);
@@ -23,10 +42,15 @@ const BREAKDOWNS: [string, string][] = [["target_type", "By target"], ["entry_ty
 export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid: string) => void; onOpenControl: (cid: string) => void }) {
   const [basis, setBasis] = useState<"net" | "gross">("net");
   const [controls, setControls] = useState(true);
-  const qs = `basis=${basis}&controls=${controls ? 1 : 0}`;
+  const route = useRoute();
+  const [run, setRun] = useState(route.query.get("run") ?? "");
+  const crit = useCriteriaName();
+  const qs = `basis=${basis}&controls=${controls ? 1 : 0}${run ? `&campaign_run=${encodeURIComponent(run)}` : ""}`;
   const { data: o, error } = useApi<ResultsOverview>(`/api/results-view/overview?${qs}`, [qs]);
-  if (error) return <ErrorPanel error={error} />;
-  if (!o) return <Loading label="Reading stored backtests…" />;
+  const picker = <div className="filterbar" data-testid="results-picker"><span className="fgroup">Show</span>
+    <RunPicker value={run} onChange={setRun} testId="results-run-picker" /></div>;
+  if (error) return <>{picker}<ErrorPanel error={error} /></>;
+  if (!o || (o.campaign_run ?? "") !== run) return <>{picker}<Loading label="Reading stored backtests…" /></>;
   const f = o.facts;
   const tags = <><Scope kind="is" /><Scope kind={basis} />{f.synthetic_tested > 0 && <Scope kind="synthetic" />}</>;
   const groups: ScatterGroup[] = [
@@ -46,11 +70,12 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
   const ex = o.exit_comparison, ev = o.eval_summary;
   return (
     <>
+      {picker}
       <section className="featured" data-testid="results-facts">
         <h3>The field <span className="labels">{tags}</span></h3>
         <div className="kpis">
           <Kpi label="Strategies" value={f.strategies.toLocaleString()} sub={`${f.tested.toLocaleString()} with trades in this scope`} />
-          <Kpi label="Survivors" value={f.survivors.toLocaleString()} accent sub="positive after costs and pass an evaluation with a payout" testId="kpi-survivors" />
+          <Kpi label="Survivors" value={f.survivors.toLocaleString()} accent sub={`positive after costs and pass evaluation and payout under ${crit}`} testId="kpi-survivors" />
           <Kpi label="Positive before costs" value={f.gross_positive.toLocaleString()} sub={f.tested ? `${pct(f.gross_positive / f.tested, 0)} of tested` : undefined} />
           <Kpi label="Positive after costs" value={f.net_positive.toLocaleString()} sub={f.tested ? `${pct(f.net_positive / f.tested, 0)} of tested` : undefined} />
           <Kpi label="Typical cost per trade" value={f.median_cost_r_per_trade == null ? "—" : `${n(f.median_cost_r_per_trade, 3)} R`} sub="median across tested strategies" />
@@ -69,7 +94,7 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
           <p className="small muted">Each dot is one strategy's latest in-sample backtest ({o.basis_label.toLowerCase()}); click a dot for its panel.
             Points above the dashed line made money on average{basis === "gross" ? " before costs" : ""}. {o.breakeven.note}
             {!o.breakeven.after_cost && basis === "net" && " Switch to Before costs to see the break-even line after a typical cost."}</p>
-          <p className="small muted">{o.survivor_rule.replace("Survivor:", "Survivor means")}</p>
+          <p className="small muted">{o.survivor_rule}</p>
         </>}
       </Card>
       <h3>What the tested strategies have in common</h3>
@@ -117,7 +142,7 @@ export function StrategyPanel({ id }: { id: string }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }} data-testid="strategy-panel">
       <div>
         <div className="inline" style={{ flexWrap: "wrap", gap: 6 }}>
-          <b style={{ fontSize: 16 }}>{p.display_name}</b>
+          {p.tested && <FavStar id={p.strategy_id} testId="panel-fav" />}<b style={{ fontSize: 16 }}>{p.display_name}</b>
           {p.survivor && <Badge tone="ok">Survivor</Badge>}
           {p.tested && <Scope kind={p.status === "OUT_OF_SAMPLE" ? "oos" : p.status === "WALK_FORWARD" ? "wf" : "is"} />}
           {p.tested && <Scope kind="net" />}{p.synthetic && <Scope kind="synthetic" />}
@@ -171,9 +196,7 @@ export function StrategyPanel({ id }: { id: string }) {
       <Card title="Rules in plain English" testId="panel-rules">
         <TableWrap><table className="dense"><tbody>{p.rules.map((x) => <tr key={x.rule}><th style={{ width: 170 }}>{x.rule}</th><td>{x.text}</td></tr>)}</tbody></table></TableWrap>
       </Card>
-      <details className="tech" data-testid="panel-technical"><summary>Technical details</summary>
-        <KeyValues rows={Object.entries(p.technical).filter(([, v]) => v).map(([key, v]) => [TECH_LABEL[key] ?? key, <Mono>{v}</Mono>])} />
-      </details>
+      <TechDetails testId="panel-technical" rows={Object.entries(p.technical).filter(([, v]) => v).map(([key, v]) => [TECH_LABEL[key] ?? key, <Mono>{v}</Mono>])} />
     </div>
   );
 }
@@ -184,7 +207,7 @@ const TECH_LABEL: Record<string, string> = { strategy_id: "Strategy ID", logic_h
 const humanProvider = (p: string) => ({ synthetic: "synthetic demo data", dukascopy: "Dukascopy", histdata: "HistData" } as Record<string, string>)[p] ?? facetLabel("provider", p);
 const humanCost = (s: string) => ({ configured: "configured", unconfigured: "not configured", assumption: "assumed" } as Record<string, string>)[s] ?? facetLabel("cost", s).toLowerCase();
 
-function PropRows({ rows, runId }: { rows: PropSummaryRow[]; runId: string }) {
+export function PropRows({ rows, runId }: { rows: PropSummaryRow[]; runId: string }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <>
@@ -289,11 +312,10 @@ export function ControlPanelView({ id }: { id: string }) {
         <Kpi label="Total net R" value={n(c.net_r, 1)} sub={`${usd(c.net_usd_at_risk)} at ${usd(c.risk_per_trade_usd)} risk per trade`} />
         <Kpi label="Max drawdown" value={`${n(c.max_drawdown_r, 1)} R`} sub={`longest losing streak ${c.max_loss_streak ?? "—"}`} />
       </div>
-      <details className="tech"><summary>Technical details</summary>
-        <KeyValues rows={([["control_id", c.control_id], ["candidate_strategy_id", c.candidate_strategy_id], ["validation_id", c.validation_id],
-          ["dataset_id", c.dataset_id]] as [string, string | null][]).filter(([, v]) => v).map(([key, v]) => [TECH_LABEL[key] ?? key, <Mono>{v}</Mono>])} />
+      <TechDetails rows={([["control_id", c.control_id], ["candidate_strategy_id", c.candidate_strategy_id], ["validation_id", c.validation_id],
+        ["dataset_id", c.dataset_id]] as [string, string | null][]).filter(([, v]) => v).map(([key, v]) => [TECH_LABEL[key] ?? key, <Mono>{v}</Mono>])}>
         <p className="small muted">Realization {c.realization}, seed {c.seed ?? "—"}.</p>
-      </details>
+      </TechDetails>
     </div>
   );
 }

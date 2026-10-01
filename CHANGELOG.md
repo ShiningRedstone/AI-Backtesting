@@ -3,6 +3,21 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Munyun Lab: favorites, pass criteria account, named runs, display switches, workspace reset (ADR-74)
+
+| Item | Status |
+|---|---|
+| Shown as Munyun Lab everywhere visible (logo "MUNYUN LAB", window title, dialogs, file description, release titles); internal package, exe, manifest and folders unchanged so updates and workspaces keep working | IMPLEMENTED, TESTED |
+| Small labels above and explanation lines under page titles removed; global search bar removed | IMPLEMENTED |
+| Favorites (yellow star, tested strategies only) in the explorer (with a favorites-only filter), strategy panel and library; favorites first in the prop simulator | IMPLEMENTED, TESTED |
+| Settings: prop account for pass criteria (default LucidFlex 50K) drives the explorer prop filter, "Pass eval" / "Pass payout" columns and the survivor rule | IMPLEMENTED, TESTED |
+| Research runs can be named; Backtest results (Overview, Strategies) can show one run's selected strategies | IMPLEMENTED, TESTED |
+| Prop firm simulator simplified (strategy → automatic prop result per account + chance-to-pass simulation; manual simulator under Advanced) | IMPLEMENTED, TESTED (browser) |
+| Settings trimmed to build, updates, workspace, risk per trade, pass criteria, display switches and delete-all; "Show IDs" and "Show read-only information" switches (off by default) hide ids, Technical details and read-only panels app-wide | IMPLEMENTED, TESTED |
+| Delete all strategies and results, keeping the price data (type DELETE; refused while a job runs; logged) | IMPLEMENTED, TESTED |
+| Skeleton loaders; consistent spacing between buttons; checkbox/label alignment fixes | IMPLEMENTED |
+| Backtest engine, compiler, search runner, prop lifecycle, research config hash | UNCHANGED |
+
 ## Branch auto-updates, seven tabs, Backtest results views, evaluation simulator, plain English (ADR-72, ADR-73)
 
 | Item | Status |

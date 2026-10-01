@@ -44,8 +44,7 @@ function ResearchHome() {
   const list = useApi<SearchBatch[]>(research.searchesUrl);
   return (
     <div className="page" data-testid="research-page">
-      <header className="page-head"><div><div className="eyebrow">Research</div><h1>Experiments</h1>
-        <div className="subtitle small">Batch searches: strategy × dataset cells, honest trial counts, in-sample ranking and shortlist tags.</div></div>
+      <header className="page-head"><div><h1>Experiments</h1></div>
         <Badge tone="info">batch search</Badge></header>
       <Banner tone="info" testId="research-in-sample">Searches run stored strategies on datasets (one strategy on one dataset per
         cell; datasets are never merged). Results are <b>{IN_SAMPLE}</b>. The top of a ranking is not a valid strategy: out-of-sample,
@@ -152,8 +151,8 @@ function SearchSetup() {
           <NumberInput value={maxCells} onChange={setMaxCells} integer testId="rs-max-cells" /></Field>
         <Field label="Seed" hint="Optional; part of the search identity."><NumberInput value={seed} onChange={setSeed} integer testId="rs-seed" /></Field>
       </div>
-      <details className="tech"><summary>Technical details: search spec (exactly what is sent)</summary>
-        <pre className="code" data-testid="rs-spec-json">{JSON.stringify(spec(), null, 2)}</pre></details>
+      <TechDetails summary="Technical details: search spec (exactly what is sent)">
+        <pre className="code" data-testid="rs-spec-json">{JSON.stringify(spec(), null, 2)}</pre></TechDetails>
       <div className="actions">
         <Button onClick={() => run("validate")} busy={busy === "validate"} testId="rs-validate">Check spec</Button>
         <Button onClick={() => run("plan")} busy={busy === "plan"} testId="rs-plan">Preview plan</Button>
@@ -271,7 +270,7 @@ function SearchPage({ id }: { id: string }) {
   return (
     <div className="page" data-testid="rs-search-page">
       <header className="page-head"><div><h1>Search of {shortTime(d.created_at)}</h1>
-        <div className="subtitle"><StatusBadge s={d.status} /> · created {shortTime(d.created_at)} · finished {shortTime(d.finished_at)}</div></div>
+        <div className="head-meta"><StatusBadge s={d.status} /></div></div>
         <div className="actions"><a href={href(`/compare?source=search&id=${d.search_id}`)} data-testid="rs-compare">Compare runs</a>
           {" · "}<a href={href("/research")}>All searches</a></div></header>
       <Banner tone="info" testId="rs-search-in-sample"><b>{IN_SAMPLE}.</b> {plainText(d.note)}</Banner>

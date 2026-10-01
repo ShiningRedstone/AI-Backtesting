@@ -59,7 +59,7 @@ jobs:
           $zip = (Get-ChildItem dist/release/*.zip | Select-Object -First 1).FullName
           gh release create $tag $zip dist/release/edgelab-release.json dist/release/SHA256SUMS.txt `
             --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --prerelease `
-            --title "EdgeLab build $env:BUILD_NUMBER ($env:CHANNEL)" `
+            --title "Munyun Lab build $env:BUILD_NUMBER ($env:CHANNEL)" `
             --notes "Automatic build $env:BUILD_NUMBER of branch $env:CHANNEL at commit $env:GITHUB_SHA."
           if ($LASTEXITCODE -ne 0) { throw "publishing failed" }
 

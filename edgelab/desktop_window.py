@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-TITLE = "EdgeLab"
+TITLE = "Munyun Lab"
 SIZE = (1440, 900)
 MIN_SIZE = (1000, 680)
 WEBVIEW2_CLIENT = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"

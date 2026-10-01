@@ -234,7 +234,7 @@ class TestLauncher(unittest.TestCase):
                                 "--no-browser", "--port", str(s.getsockname()[1])], cwd=REPO,
                                capture_output=True, text=True, timeout=120)
             self.assertEqual(r.returncode, 1)
-            self.assertIn("EdgeLab could not start", r.stderr)
+            self.assertIn("Munyun Lab could not start", r.stderr)
             self.assertIn("already in use", r.stderr)
             self.assertTrue((Path(d) / "ws" / "logs" / "desktop.log").read_text())
 

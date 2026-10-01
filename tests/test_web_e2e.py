@@ -60,6 +60,7 @@ class TestBrowserFlow(unittest.TestCase):
         else:
             cls.tearDownClass()
             raise RuntimeError("web server did not start")
+        _post(cls.base + "/api/preferences/ui", {"show_ids": True})      # these flows read ids under Technical details
         cls.pw = sync_playwright().start()
         try:
             cls.browser = cls.pw.chromium.launch()
@@ -229,6 +230,42 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertIn(run_id, self.tid(pg, "runs-demo").inner_html())     # kept apart from research runs
         self.assertEqual(self.errors, [])
 
+    def test_13_munyun_lab_preferences_favorites_and_hidden_ids(self):
+        """ADR-74: new name, no global search, ids hidden unless switched on, favorites (tested only) first in the prop
+        simulator and filterable in the explorer, the read-only switch."""
+        sid = _get(self.base + "/api/strategies")[0]["strategy_id"]
+        fut = next(d for d in _get(self.base + "/api/datasets") if d["asset_type"] == "FUTURE")
+        _post(self.base + "/api/backtests", {"strategy": sid, "dataset_id": fut["dataset_id"]})
+        _post(self.base + "/api/preferences/ui", {"show_ids": False})
+        try:
+            pg = self.page()
+            pg.goto(self.base + "/#/explorer?tested_only=1")
+            self.tid(pg, "explorer-table").wait_for()
+            self.assertIn("MUNYUN LAB", pg.locator(".brand").inner_text())
+            self.assertEqual(pg.locator("[data-testid='global-search']").count(), 0)
+            self.assertNotIn("STR_", pg.locator("main").inner_text())                     # ids hidden by default
+            self.tid(pg, f"fav-{sid}").click()
+            pg.wait_for_function(f"() => document.querySelector(\"[data-testid='fav-{sid}']\")?.getAttribute('aria-pressed') === 'true'")
+            self.assertEqual(_get(self.base + "/api/favorites")["favorites"], [sid])
+            self.tid(pg, "filter-favorites").check()
+            pg.wait_for_function("() => document.querySelectorAll(\"[data-testid='explorer-table'] tbody tr\").length === 1")
+            pg.goto(self.base + "/#/prop")
+            fav_group = pg.locator("[data-testid='prop-strategy'] optgroup[label*='Favorites']")
+            fav_group.wait_for(state="attached")
+            self.assertIn("Favorites", fav_group.get_attribute("label"))
+            self.assertEqual(fav_group.locator("option").first.get_attribute("value"), sid)
+            pg.goto(self.base + "/#/settings")
+            self.tid(pg, "switch-show-readonly").wait_for()
+            heading = pg.locator("h3", has_text="System status")
+            self.assertEqual(heading.count(), 0)                                           # read-only panels hidden
+            self.tid(pg, "switch-show-readonly").click()
+            heading.wait_for()
+            self.tid(pg, "switch-show-readonly").click()
+            self.assertEqual(self.errors, [])
+        finally:
+            _post(self.base + "/api/preferences/ui", {"show_ids": True, "show_readonly": False})
+            _post(self.base + f"/api/favorites/{sid}", {"favorite": False})
+
     def test_10_prop_simulation_and_dataset_eligibility(self):
         """Phase 6: choose a stored run + two accounts with different rule sets, run, inspect."""
         sid = _get(self.base + "/api/strategies")[0]["strategy_id"]
@@ -237,6 +274,7 @@ class TestBrowserFlow(unittest.TestCase):
         before = _get(f"{self.base}/api/results/{run_id}")
         pg = self.page()
         pg.goto(self.base + "/#/prop")
+        pg.locator("[data-testid='prop-advanced'] > summary").click()           # the manual simulator is under Advanced
         self.tid(pg, "prop-run").select_option(run_id)
         self.tid(pg, "prop-config-0").select_option("SYNTH_STATIC_EVAL")
         self.tid(pg, "prop-add-account").click()
@@ -296,7 +334,7 @@ class TestBrowserFlow(unittest.TestCase):
         res.locator("a[href^='#/results/']").click()
         self.tid(pg, "equity-chart").wait_for()
         self.tid(pg, "run-analytics").wait_for()
-        self.assertIn("In-sample", pg.locator(".subtitle").first.inner_text())
+        self.assertIn("In-sample", pg.locator(".head-meta").first.inner_text())
         pg.goto(f"{self.base}/#/strategies/{new_id}?tab=research")
         self.tid(pg, "lab-runs").wait_for()
         self.assertIn(run_id, self.tid(pg, "lab-runs").inner_html())          # id in the link, not the text

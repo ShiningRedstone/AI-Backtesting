@@ -10,8 +10,7 @@ import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, Loading, Mono, N
 export function ControlsPage() {
   return (
     <div className="page" data-testid="controls-page">
-      <header className="page-head"><div><div className="eyebrow">Research</div><h1>Random controls</h1>
-        <div className="subtitle small">Could an apparent edge arise from random entries with the same exits, costs and sizing?</div></div></header>
+      <header className="page-head"><div><h1>Random controls</h1></div></header>
       <Card title="What a random-entry control is">
         <div className="grid2 small">
           <div><b>Preserved</b> — the candidate's compiled exits (stop, target, time stop), costs and execution quotes, sizing, cooldown,

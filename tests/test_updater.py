@@ -386,7 +386,7 @@ class TestApplyHelper(Base):
         inst = self.install()
         before = sorted(p.name for p in inst.parent.iterdir())
         wrong = fake_app(self.tmp / "staged" / "EdgeLab", "0.9.9")
-        self.assertIn("not EdgeLab 0.3.0", ap.apply_update(inst, wrong, "0.3.0")["error"])
+        self.assertIn("not Munyun Lab 0.3.0", ap.apply_update(inst, wrong, "0.3.0")["error"])
         (inst / "data").mkdir()                                                               # a workspace inside
         staged = fake_app(self.tmp / "staged2" / "EdgeLab", "0.3.0")
         res = ap.apply_update(inst, staged, "0.3.0")
@@ -395,7 +395,7 @@ class TestApplyHelper(Base):
         res = ap.apply_update(inst, staged, "0.3.0", protected=[inst.parent])                 # overlaps a protected root
         self.assertIn("overlaps the protected folder", res["error"])
         res = ap.apply_update(self.tmp / "nothing-here", staged, "0.3.0")
-        self.assertIn("not a packaged EdgeLab folder", res["error"])
+        self.assertIn("not a packaged Munyun Lab folder", res["error"])
         self.assertEqual(sorted(p.name for p in inst.parent.iterdir()), before)
         self.assertEqual(ap._manifest_version(inst), "0.2.0")
 

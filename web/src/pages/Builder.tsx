@@ -172,11 +172,11 @@ export function BuilderPage() {
         <header className="page-head">
           <div>
             <h1>Strategy Builder</h1>
-            <div className="subtitle">
+            <div className="head-meta">
               <b data-testid="builder-name" title={doc.name || undefined}>{doc.name ? strategyLabel(doc.name) : "(unnamed)"}</b>{" "}
               {origin.kind === "new" && <Badge>new draft</Badge>}
-              {origin.kind === "edit" && <>editing <a href={href(`/strategies/${origin.id}`)} title={origin.id}>the saved version</a> — saving a logic change creates a new instance with lineage</>}
-              {origin.kind === "duplicate" && <>duplicate of <a href={href(`/strategies/${origin.id}`)} title={origin.id}>a saved strategy</a></>}
+              {origin.kind === "edit" && <Badge>editing <a href={href(`/strategies/${origin.id}`)} title={origin.id}>saved version</a></Badge>}
+              {origin.kind === "duplicate" && <Badge>duplicate of <a href={href(`/strategies/${origin.id}`)} title={origin.id}>saved strategy</a></Badge>}
               {dirty && <Badge tone="warn">unsaved changes</Badge>}
             </div>
           </div>

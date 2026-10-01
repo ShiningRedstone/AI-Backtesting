@@ -1,6 +1,7 @@
 """Backtest results read models, bootstrapped prop evaluations, stored random controls and the risk-per-trade display
 preference (ADR-73): known answers and guarantees (read-only views; controls never become runs or trials; the
 preference never touches the research config hash)."""
+import json
 import shutil
 import tempfile
 import unittest
@@ -156,8 +157,114 @@ class TestWorkspaceViews(unittest.TestCase):
                                                                   "mode": "intraday_trailing"}).status_code, 400)
             self.assertEqual(c.post("/api/preferences/risk-per-trade", json={"risk_per_trade_usd": "x"}).status_code, 400)
             self.assertEqual(c.get("/api/explorer/strategies?survivors_only=1").status_code, 200)
+            self.assertEqual(c.get("/api/explorer/strategies?prop=payout&favorites_only=1").status_code, 200)
+            self.assertFalse(c.get("/api/preferences/ui").get_json()["show_ids"])
+            self.assertEqual(c.post("/api/preferences/ui", json={"show_ids": "x"}).status_code, 400)
+            self.assertEqual(c.get("/api/results-view/runs").status_code, 200)
+            self.assertEqual(c.get("/api/favorites").status_code, 200)
+            self.assertEqual(c.post("/api/workspace/reset", json={"confirm": "no"}).status_code, 400)
+            self.assertEqual(c.post("/api/campaigns/bad/runs/bad/name", json={"name": "x"}).status_code, 400)
         finally:
             c.application.config["EDGELAB"]["services"].store.close()
+
+
+class TestPreferencesAndReset(unittest.TestCase):
+    """ADR-74: favorites, the criteria prop account, research-run names / selection and the workspace reset. Display
+    metadata only: backtests, the config hash and the price data are never changed by them."""
+
+    def setUp(self):
+        from edgelab.services import Services
+        from edgelab.web.demo import create_demo_workspace
+        self.tmp = Path(tempfile.mkdtemp())
+        create_demo_workspace(self.tmp / "demo", REPO)
+        self.svc = Services(root=self.tmp / "demo")
+        lib = self.svc.library.list()
+        self.sid, self.other = lib[0]["strategy_id"], lib[1]["strategy_id"]
+        self.ds = next(d["dataset_id"] for d in self.svc.backtest_readiness(self.sid)["datasets"] if d["runnable"])
+        self.run_id = self.svc.backtest_strategy(self.sid, self.ds, record=True)["run_id"]
+
+    def tearDown(self):
+        self.svc.store.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_criteria_profile_decides_pass_flags_and_survivor(self):
+        def rec(lucid, growth):
+            def prof(pid, ok):
+                return {"profile": {"profile_id": pid}, "status": "PASS" if ok else "FAIL",
+                        "evaluation": {"status": "PASS" if ok else "FAIL"}, "totals": {"n_payouts": 1 if ok else 0}}
+            return {"headline_metrics": {"trade_count": 10, "expectancy_r": 0.2},
+                    "prop": {"profiles": [prof("LUCID_LUCIDFLEX_50K", lucid), prof("TRADEIFY_GROWTH_50K", growth)]}}
+        r = ov.run_row("RUN_2026_00001", rec(False, True))
+        self.assertTrue(r["survivor"])                                         # any account (no criteria)
+        lucid = ov.apply_criteria(r, "LUCID_LUCIDFLEX_50K")
+        self.assertEqual((lucid["prop_pass_eval"], lucid["prop_pass_payout"], lucid["survivor"]), (False, False, False))
+        growth = ov.apply_criteria(r, "TRADEIFY_GROWTH_50K")
+        self.assertEqual((growth["prop_pass_eval"], growth["prop_pass_payout"], growth["survivor"]), (True, True, True))
+        self.assertIsNone(ov.apply_criteria(r, "TRADEIFY_SELECT_DAILY_50K")["prop_pass_eval"])   # not audited != fail
+        self.assertEqual(self.svc.ui_preferences()["prop_criteria_profile"], "LUCID_LUCIDFLEX_50K")   # default
+        h = config_hash(load_config(self.svc.root / "configs"))
+        self.svc.set_ui_preferences({"prop_criteria_profile": "TRADEIFY_GROWTH_50K", "show_ids": True})
+        self.assertEqual(ov.criteria_profile(self.svc), "TRADEIFY_GROWTH_50K")
+        self.assertEqual(config_hash(load_config(self.svc.root / "configs")), h)
+        with self.assertRaises(ValueError):
+            self.svc.set_ui_preferences({"prop_criteria_profile": "NOPE"})
+        with self.assertRaises(ValueError):
+            self.svc.set_ui_preferences({"show_ids": "yes"})
+
+    def test_favorites_only_for_tested_strategies_and_explorer_filters(self):
+        with self.assertRaises(ValueError):
+            self.svc.set_favorite(self.other, True)                            # never backtested
+        self.svc.set_favorite(self.sid, True)
+        self.assertEqual(self.svc.favorites_info()["favorites"], [self.sid])
+        e = self.svc.explore_strategies({"favorites_only": "1"})
+        self.assertEqual([r["strategy_id"] for r in e["rows"]], [self.sid])
+        self.assertTrue(e["rows"][0]["favorite"])
+        self.assertTrue(self.svc.strategy_panel(self.sid, {})["favorite"])
+        ev = self.svc.explore_strategies({"prop": "eval"})["rows"]
+        self.assertTrue(all(r["prop_pass_eval"] for r in ev))
+        self.svc.set_favorite(self.sid, False)
+        self.assertEqual(self.svc.favorites_info()["favorites"], [])
+
+    def test_research_run_names_and_selection_filter(self):
+        from edgelab.research import campaign as C
+        cid, rid = "CMP_0123456789AB", "CR_20261001_120000_ABCDEF"
+        d = C.runs_dir(self.svc, cid)
+        d.mkdir(parents=True)
+        (d / f"{rid}.json").write_text(json.dumps({"run_record_id": rid, "campaign_id": cid, "created_at": "2026-10-01"}))
+        C.save_scope(self.svc, cid, rid, [self.sid])
+        self.assertEqual(self.svc.rename_campaign_run(cid, rid, "  First pass  ")["name"], "First pass")
+        self.assertEqual(json.loads((d / f"{rid}.json").read_text())["run_record_id"], rid)    # record untouched
+        self.assertEqual(self.svc.campaign_run_names(cid), {rid: "First pass"})
+        with self.assertRaises(KeyError):
+            self.svc.rename_campaign_run(cid, "CR_20261001_120000_000000", "x")
+        o = self.svc.results_overview({"campaign_run": f"{cid}/{rid}"})
+        self.assertEqual(o["facts"]["strategies"], 1)
+        e = self.svc.explore_strategies({"campaign_run": f"{cid}/{rid}"})
+        self.assertEqual([r["strategy_id"] for r in e["rows"]], [self.sid])
+        with self.assertRaises(ValueError):
+            self.svc.results_overview({"campaign_run": "bad"})
+
+    def test_reset_keeps_price_data_and_deletes_research(self):
+        datasets = self.svc.store._query("SELECT COUNT(*) FROM datasets")[0][0]
+        bars = self.svc.store._query("SELECT COUNT(*) FROM bars")[0][0]
+        h = config_hash(load_config(self.svc.root / "configs"))
+        self.svc.set_favorite(self.sid, True)
+        self.svc.random_entry_control(self.sid, self.ds, n_controls=2, seed=1)
+        with self.assertRaises(ValueError):
+            self.svc.reset_workspace("yes")
+        out = self.svc.reset_workspace("DELETE")
+        self.assertGreaterEqual(out["deleted_rows"]["runs"], 1)
+        self.assertEqual(self.svc.store._query("SELECT COUNT(*) FROM runs")[0][0], 0)
+        self.assertEqual(self.svc.store._query("SELECT COUNT(*) FROM trades")[0][0], 0)
+        self.assertEqual(self.svc.library.list(), [])
+        self.assertFalse((self.svc.data_root / "controls").exists())
+        self.assertEqual(self.svc.store._query("SELECT COUNT(*) FROM datasets")[0][0], datasets)   # price data kept
+        self.assertEqual(self.svc.store._query("SELECT COUNT(*) FROM bars")[0][0], bars)
+        self.svc.load_dataset(self.ds)                                          # still loads and re-validates
+        self.assertEqual(self.svc.ui_preferences()["favorites"], [])
+        self.assertEqual(config_hash(load_config(self.svc.root / "configs")), h)
+        self.assertTrue((self.svc.data_root / "workspace_reset_log.jsonl").is_file())
+        self.assertEqual(self.svc.results_overview({})["facts"]["strategies"], 0)
 
 
 if __name__ == "__main__":

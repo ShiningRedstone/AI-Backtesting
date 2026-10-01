@@ -10,7 +10,7 @@ import type { TreeNode } from "../components/strategy";
 import { BatchResearch, ProvenanceCard, RunsTable, ValidationPanel } from "../components/strategy/lab";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { RulesTable } from "../components/research";
-import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Checkbox, FavStar, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
 import type { StrategyDoc } from "../dsl/types";
 
 // =========================================================================== system panel (Settings & About)
@@ -107,9 +107,10 @@ export function LibraryPage() {
       ) : (
         <TableWrap testId="library-table">
           <table>
-            <thead><tr><th>Name</th><th>Family</th><th>Timeframe</th><th>Created</th><th>Parent</th><th>Parameters</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th style={{ width: 34 }} aria-label="favorite" /><th>Name</th><th>Family</th><th>Timeframe</th><th>Created</th><th>Parent</th><th>Parameters</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.strategy_id} className={r.archived ? "disabled-row" : ""} data-testid={`row-${r.strategy_id}`}>
+                <td><FavStar id={r.strategy_id} /></td>
                 <td><a href={href(`/strategies/${r.strategy_id}`)} title={r.strategy_id}>{strategyLabel(r.name)}</a></td>
                 <td><a href={href(`/families/${r.family_id}`)} title={r.family_id}>{familyLabel(r.family_id)}</a></td>
                 <td>{facetLabel("timeframe", r.timeframe)}</td><td className="small">{shortTime(r.created_at)}</td>
@@ -162,8 +163,8 @@ export function StrategyPage() {
       <header className="page-head">
         <div>
           <h1 data-testid="strategy-title" title={s.strategy_id}>{strategyLabel(s.name)}</h1>
-          <div className="subtitle">Strategy Lab · family <a href={href(`/families/${s.family_id}`)} title={s.family_id}>{familyLabel(s.family_id, fam.name)}</a>
-            {" "}· <Badge>{methodLabel(first.generation_method)}</Badge>
+          <div className="head-meta"><a className="chip" href={href(`/families/${s.family_id}`)} title={s.family_id}>{familyLabel(s.family_id, fam.name)}</a>
+            <Badge>{methodLabel(first.generation_method)}</Badge>
             {s.archived && <Badge tone="warn">archived</Badge>}</div>
         </div>
         <div className="actions">

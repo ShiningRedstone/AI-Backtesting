@@ -14,9 +14,7 @@ export function PipelinePage() {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className="page" data-testid="pipeline-page">
-      <header className="page-head"><div><div className="eyebrow">Research</div><h1>Candidate pipeline</h1>
-        <div className="subtitle small">Hypothesis → proposal validation → numerical testing → controls → out-of-sample → shortlist → holdout authorization →
-          holdout result → paper evaluation → human review. Every state is derived by the backend from stored facts; the UI infers nothing.</div></div></header>
+      <header className="page-head"><div><h1>Candidate pipeline</h1></div></header>
       {error ? <ErrorPanel error={error} /> : !data ? <Loading label="Loading the pipeline…" /> : <>
         <div className="pipeline" data-testid="pipeline-board">
           {data.stages.map((s, i) => (

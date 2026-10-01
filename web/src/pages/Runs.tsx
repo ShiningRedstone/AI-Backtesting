@@ -8,7 +8,7 @@ import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, metricLabel, profileLabel, statusLabel, valueLabel } from "../app/labels";
 import { go, href, useRoute } from "../app/router";
 import { plainText } from "../components/research";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, TableWrap, TechDetails, fmt, n, r,
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, ReadOnly, TableWrap, TechDetails, fmt, n, r,
   shortTime } from "../components/ui";
 
 /** Research Runs (ADR-69/70): a research browser (All strategies -> families -> strategies) over a FROZEN campaign.
@@ -65,9 +65,7 @@ const lastRunAt = (c: CampaignListRow) => c.latest_run?.created_at ?? "";
 function RunsHome() {
   const route = useRoute();
   const list = useApi<CampaignListRow[]>(campaigns.listUrl);
-  const head = <header className="page-head"><div><div className="eyebrow">Research</div><h1>Research runs</h1>
-    <p className="subtitle">Run frozen research campaigns from the desktop app. Runs continue in the background, are stored
-      permanently in this workspace and can be resumed after the app is closed.</p></div></header>;
+  const head = <header className="page-head"><div><h1>Research runs</h1></div></header>;
   if (list.error) return <div className="page" data-testid="runs-page">{head}<ErrorPanel error={list.error} title="Could not load campaigns" /></div>;
   if (!list.data) return <div className="page" data-testid="runs-page">{head}<Loading label="Loading campaigns…" /></div>;
   const broken = list.data.filter((c) => c.error).map((c) => (
@@ -182,10 +180,7 @@ function CampaignPage({ cid, home }: { cid: string; home?: { switcher: ReactNode
   const latest = d.latest_run;
   return (
     <div className="page" data-testid="campaign-page">
-      <header className="page-head"><div><div className="eyebrow">Research</div>
-        <h1>Research runs</h1>
-        <p className="subtitle" title={d.campaign_id}>Choose strategies below and run them; runs continue in the background, are stored
-          permanently in this workspace and can be resumed after the app is closed. {plainText(d.data_line)}</p></div>
+      <header className="page-head"><div><h1>Research runs</h1></div>
         {home?.switcher && <div className="actions">{home.switcher}</div>}</header>
       <ActiveJobBanner except={cid} />
       {home?.extra}
@@ -230,8 +225,8 @@ function CampaignPage({ cid, home }: { cid: string; home?: { switcher: ReactNode
               onSelectStrategy={(id, on) => setMany([id], on)} />))}
         </div>
       </Card>
-      <Card title="Governance — fixed research design (not editable here)" testId="campaign-governance"><Governance c={d} /></Card>
-      <RunHistory cid={cid} runs={d.runs} onRestoreScope={(ids) => setSel(new Set(ids.filter((x) => allIds.includes(x))))} />
+      <ReadOnly><Card title="Fixed research design" testId="campaign-governance"><Governance c={d} /></Card></ReadOnly>
+      <RunHistory cid={cid} runs={d.runs} onRestoreScope={(ids) => setSel(new Set(ids.filter((x) => allIds.includes(x))))} onRenamed={det.reload} />
     </div>
   );
 }
@@ -327,16 +322,37 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
   );
 }
 
-function RunHistory({ cid, runs, onRestoreScope }: { cid: string; runs: CampaignRunRecord[]; onRestoreScope: (ids: string[]) => void }) {
+/** A research run's name: click to name or rename it; it is how the run is picked under Backtest results. */
+function RunName({ cid, x, onSaved }: { cid: string; x: CampaignRunRecord; onSaved: () => void }) {
+  const { toast } = useApp();
+  const [edit, setEdit] = useState<string | null>(null);
+  const save = () => {
+    if (edit === null) return;
+    campaigns.rename(cid, x.run_record_id, edit).then(() => { setEdit(null); onSaved(); })
+      .catch((e: Error) => toast("error", e.message));
+  };
+  if (edit !== null) return (
+    <span className="inline"><input className="input input-sm" autoFocus maxLength={80} value={edit} placeholder="Run name" aria-label="run name"
+      data-testid={`run-name-input-${x.run_record_id}`} onChange={(e: { target: HTMLInputElement }) => setEdit(e.target.value)}
+      onKeyDown={(e: KeyboardEvent) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEdit(null); }} />
+      <Button small kind="primary" onClick={save} testId={`run-name-save-${x.run_record_id}`}>Save</Button>
+      <Button small kind="ghost" onClick={() => setEdit(null)}>Cancel</Button></span>);
+  return <button type="button" className="linklike" data-testid={`run-name-${x.run_record_id}`} onClick={() => setEdit(x.name ?? "")}
+    title="Name this run">{x.name ? <b>{x.name}</b> : <span className="muted">Add a name</span>}</button>;
+}
+
+function RunHistory({ cid, runs, onRestoreScope, onRenamed }: { cid: string; runs: CampaignRunRecord[]; onRestoreScope: (ids: string[]) => void;
+  onRenamed: () => void }) {
   const { toast } = useApp();
   return (
     <Card title={`Run history (${runs.length})`} testId="run-history">
       {!runs.length ? <Empty>No run yet.</Empty> : (
         <TableWrap><table>
-          <thead><tr><th>Run (created)</th><th>Status</th><th>Scope</th><th className="num">Strategies</th>
+          <thead><tr><th>Name</th><th>Run (created)</th><th>Status</th><th>Scope</th><th className="num">Strategies</th>
             <th className="num">Completed in run</th><th className="num">Skipped</th><th className="num">Errors</th><th>Duration</th><th>Source</th><th></th></tr></thead>
           <tbody>{runs.map((x) => (
             <tr key={x.run_record_id}>
+              <td><RunName cid={cid} x={x} onSaved={onRenamed} /></td>
               <td title={x.run_record_id}>{shortTime(x.created_at)}</td>
               <td><Badge tone={statusTone(x.status)}>{statusLabel(x.status)}</Badge>{x.status === "interrupted" && <span className="small muted"> resumable</span>}</td>
               <td className="small">{x.all_families ? "all strategies" : `${x.scope_kind === "strategies" ? "selection" : "families"}: ${x.families.map((f) => familyLabel(f)).join(", ")}`}</td>
@@ -345,7 +361,9 @@ function RunHistory({ cid, runs, onRestoreScope }: { cid: string; runs: Campaign
               <td>{fmtDuration(elapsedS(x.started_at ?? x.created_at, x.finished_at ?? x.updated_at))}</td><td>{SOURCE[x.source] ?? humanize(x.source)}</td>
               <td>{x.scope_file && <button type="button" className="linklike small" data-testid={`restore-${x.run_record_id}`}
                 onClick={() => campaigns.runScope(cid, x.run_record_id).then((s) => { onRestoreScope(s.strategy_ids); toast("info", `Selection restored from the run of ${shortTime(x.created_at)}`); })
-                  .catch(() => toast("error", "Could not load that run's scope"))}>reselect scope</button>}</td>
+                  .catch(() => toast("error", "Could not load that run's scope"))}>reselect scope</button>}
+                {x.scope_file && <a className="small" style={{ marginLeft: 10 }} href={href(`/dashboard?run=${encodeURIComponent(`${cid}/${x.run_record_id}`)}`)}
+                  data-testid={`show-results-${x.run_record_id}`}>show results</a>}</td>
             </tr>))}</tbody>
         </table>
         <TechDetails rows={runs.map((x): [string, ReactNode] => [shortTime(x.created_at), <Mono>{x.run_record_id}</Mono>])} /></TableWrap>)}
@@ -360,9 +378,8 @@ function FamilyResultsPage({ cid, fid }: { cid: string; fid: string }) {
   const d = res.data;
   return (
     <div className="page" data-testid="family-results">
-      <header className="page-head"><div><div className="eyebrow"><a href={href(`/runs?campaign=${cid}`)} title={cid}>Research runs</a></div>
-        <h1>{d.name}</h1>
-        <p className="subtitle">{d.hypothesis}</p></div></header>
+      <header className="page-head"><div><h1>{d.name}</h1></div>
+        <div className="actions"><a className="btn" href={href(`/runs?campaign=${cid}`)}>‹ Research runs</a></div></header>
       <div className="kpis">
         <Kpi label="Strategies" value={fmt(d.n)} />
         <Kpi label="Completed" value={fmt(d.completed)} />
@@ -398,10 +415,9 @@ function StrategyResultPage({ cid, fid, sid }: { cid: string; fid: string; sid: 
   const p = d.presentation;
   return (
     <div className="page" data-testid="strategy-result">
-      <header className="page-head"><div><div className="eyebrow"><a href={href(`/runs?campaign=${cid}`)} title={cid}>Research runs</a> › <a href={href(`/runs/${cid}/${fid}`)}>{d.family_name}</a></div>
-        <h1>{p.display_name} <Badge tone={statusTone(d.status)}>{statusLabel(d.status)}</Badge></h1>
-        <p className="subtitle" data-testid="strategy-explanation">{p.explanation}</p></div>
-        <div className="actions">{d.run_id && <a className="btn btn-primary" href={href(`/results/${d.run_id}`)}>Full run report</a>}
+      <header className="page-head"><div>
+        <h1>{p.display_name} <Badge tone={statusTone(d.status)}>{statusLabel(d.status)}</Badge></h1></div>
+        <div className="actions"><a className="btn" href={href(`/runs/${cid}/${fid}`)}>‹ {d.family_name}</a>{d.run_id && <a className="btn btn-primary" href={href(`/results/${d.run_id}`)}>Full run report</a>}
           <a className="btn" href={href(`/strategies/${sid}`)}>Strategy definition</a></div></header>
       {d.error && <Banner tone="error">{d.error}</Banner>}
       <Card title="Identity and research design (read-only)" testId="strategy-identity">

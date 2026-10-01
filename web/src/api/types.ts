@@ -373,7 +373,8 @@ export interface ExplorerRow {
   gross_r_per_trade: Num; net_r: Num; profit_factor: Num; max_drawdown_r: Num; cost_r_per_trade: Num;
   sample_label: string | null; synthetic: boolean | null;
   target_multiple?: number | null; trailing?: string | null; signal_exit?: string | null;
-  avg_rr?: Num; max_loss_streak?: number | null; avg_hold_minutes?: Num; prop_pass_payout?: boolean | null; survivor?: boolean;
+  avg_rr?: Num; max_loss_streak?: number | null; avg_hold_minutes?: Num; prop_pass_eval?: boolean | null; prop_pass_payout?: boolean | null;
+  survivor?: boolean; favorite?: boolean;
 }
 export interface ExplorerResponse {
   rows: ExplorerRow[]; total: number; page: number; page_size: number; pages: number; scope: string; scope_label: string;
@@ -465,7 +466,7 @@ export interface ResultsOverview {
     fixed_target: { strategies: number; median_expectancy_r: Num; multiples: number[] }; difference_r: Num; label: string };
   eval_summary: { survivors: number; survivors_simulated: number; median_p_pass: Record<string, Num>; profile_names?: Record<string, string>;
     defaults: { replays: number; block_days: number; seed: number }; label: string };
-  survivor_rule: string; note: string;
+  survivor_rule: string; note: string; criteria_profile?: string | null; campaign_run?: string | null;
 }
 export interface PropSummaryRow { profile_id: string | null; profile_name: string | null; version: number | null; status: string | null;
   evaluation: string | null; failure_reason: string | null; payouts: number; pass_days: number | null; passes_with_payout: boolean;

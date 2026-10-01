@@ -181,7 +181,7 @@ class TestWorkspaceHost(Base):
             h, c = self.host()
             r = c.post("/api/workspace/select", json={"path": str(self.ws_a)})
             self.assertEqual(r.status_code, 409)
-            self.assertIn("another EdgeLab", r.get_json()["error"]["message"])
+            self.assertIn("another Munyun Lab", r.get_json()["error"]["message"])
             self.assertIsNone(c.get("/api/workspace").get_json()["current"])
         finally:
             other.release()
@@ -314,12 +314,12 @@ class TestWorkspaceBrowserFlow(Base):
                 t("ws-select").click()
                 table = t("datasets-table")
                 table.wait_for()
-                self.assertIn(self.a["dataset_id"], table.text_content())          # id under Technical details
+                self.assertIn(self.a["dataset_id"], table.inner_html())            # id in the row's attributes (ids hidden by default)
                 self.assertIn("AI-Backtesting", t("ws-chip").inner_text())
                 pg.locator("[data-testid='nav-strategies']").click()
                 t(f"row-{self.a['strategy_id']}").wait_for()
                 pg.goto(info["url"] + "/#/prop")
-                t("prop-run").wait_for()
+                t("prop-run").wait_for(state="attached")                      # under the collapsed Advanced section
                 self.assertIn(self.a["run_id"], t("prop-run").inner_html())           # option value; the label is in words
                 pg.goto(info["url"] + "/#/settings")
                 self.assertIn(str(self.ws_a.resolve()), t("ws-connected").inner_text())

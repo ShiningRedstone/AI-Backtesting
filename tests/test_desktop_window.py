@@ -138,7 +138,7 @@ class TestNativeWindowLifecycle(unittest.TestCase):
             self.assertTrue(info["url"].startswith("http://127.0.0.1:"))
             self.assertEqual(Path(info["data_root"]), root.resolve())
             w = wv.windows[0]
-            self.assertEqual((w.title, w.url), ("EdgeLab", info["url"]))
+            self.assertEqual((w.title, w.url), ("Munyun Lab", info["url"]))
             self.assertEqual((w.kw["width"], w.kw["height"], w.kw["resizable"]), (dw.SIZE[0], dw.SIZE[1], True))
             self.assertEqual(wv.starts[0]["debug"], False)                 # no developer tooling
             self.assertEqual(wv.starts[0]["private_mode"], False)

@@ -17,9 +17,7 @@ export function RunBacktestPage() {
   const rows = data.filter((r) => !r.archived);
   return (
     <div className="page" data-testid="run-backtest-page">
-      <header className="page-head"><div><h1>Run a backtest</h1>
-        <div className="subtitle small">One strategy on one dataset, through the backtest engine with its causality check. The result is recorded
-          as in-sample and appears under Backtest results.</div></div></header>
+      <header className="page-head"><div><h1>Run a backtest</h1></div></header>
       {!rows.length ? <Empty>No saved strategies yet. <a href={href("/builder?new=1")}>Create one in the builder</a>.</Empty> : <>
         <div className="grid3">
           <Field label="Strategy">

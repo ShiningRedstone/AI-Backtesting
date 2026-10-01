@@ -4,7 +4,7 @@ import { go, href, useRoute } from "../app/router";
 import { useApi } from "../app/context";
 import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, plainProse, statusLabel, strategyLabel, valueLabel } from "../app/labels";
 import { LineageTable, LineageTree, MetricsView, SYNTHETIC_NOTICE, VariationResults } from "../components/strategy";
-import { EquityChart, SCOPE, ScopeBadge } from "../components/strategy/lab";
+import { EquityChart, ScopeBadge } from "../components/strategy/lab";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, ObjectView, TableWrap, TechDetails, fmt, shortTime } from "../components/ui";
 
@@ -40,7 +40,7 @@ function FamilyPage({ id }: { id: string }) {
   return (
     <div className="page" data-testid="family-page">
       <header className="page-head"><div><h1 title={data.family_id}>{familyLabel(data.family_id, data.family.name)}</h1>
-        <div className="subtitle">Strategy family{data.family.category ? <> · {humanize(data.family.category)}</> : null}</div></div></header>
+        </div></header>
       <Card title="Hypothesis">
         <p data-testid="family-hypothesis">{data.family.hypothesis || <span className="muted">No hypothesis recorded.</span>}</p>
         <p className="muted small">A hypothesis to be tested, not a claim. {data.instances.length} instance(s).</p>
@@ -217,7 +217,7 @@ function RunPage({ id }: { id: string }) {
     <div className="page">
       <header className="page-head"><div><h1 title={id}>Run of {r.strategy?.dsl?.name ? strategyLabel(r.strategy.dsl.name) : "a strategy"}
         <span className="muted small"> · {shortTime(r.created_at)}</span></h1>
-        <div className="subtitle"><ScopeBadge status={r.status} /> {SCOPE[r.status]?.note}</div></div>
+        <div className="head-meta"><ScopeBadge status={r.status} /></div></div>
         <div className="actions">
           <Button small onClick={() => go(`/strategies/${r.strategy?.strategy_id}?tab=research`)}>Open strategy in Lab</Button>
           <Button small onClick={() => go(`/compare?source=lineage&id=${r.strategy?.strategy_id}`)}>Compare lineage</Button>

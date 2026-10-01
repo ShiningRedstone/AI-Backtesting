@@ -47,20 +47,16 @@ export function DashboardPage() {
   return (
     <div className="page" data-testid="research-dashboard">
       <header className="page-head">
-        <div><div className="eyebrow">Backtest results</div><h1>Overview</h1>
-          <div className="subtitle small">Every tested strategy at a glance. Descriptive only: related strategies share data, so results are not
-            independent, and a group that looks better here is a question for out-of-sample testing, not an answer.</div></div>
+        <div><h1>Overview</h1></div>
       </header>
       <ResultsOverviewSection onOpen={(id) => setOpen({ kind: "strategy", id })} onOpenControl={(id) => setOpen({ kind: "control", id })} />
       <Drawer open={!!open} onClose={() => setOpen(null)} testId="results-drawer"
         title={open?.kind === "control" ? "Random control" : "Strategy"}
-        subtitle={<>Historical results under stated assumptions; formal acceptance happens only in a protocol holdout evaluation.</>}
         actions={open?.kind === "strategy" ? <Button small onClick={() => go(`/strategies/${open.id}`)}>Open strategy page</Button> : null}>
         {open && (open.kind === "control" ? <ControlPanelView key={open.id} id={open.id} /> : <StrategyPanel key={open.id} id={open.id} />)}
       </Drawer>
       <header className="page-head" style={{ marginTop: 18 }}>
-        <div><h2 style={{ margin: 0 }}>All stored backtests</h2>
-          <div className="subtitle small">Pooled across every stored backtest in the chosen scope.</div></div>
+        <div><h2 style={{ margin: 0 }}>All stored backtests</h2></div>
         <div className="actions">
           <div className="segmented small" role="group" aria-label="scope">
             {[["in_sample", "In-sample"], ["oos", "Out-of-sample"], ["walk_forward", "Walk-forward"], ["any", "All"]].map(([k, l]) =>

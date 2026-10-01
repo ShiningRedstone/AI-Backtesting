@@ -105,7 +105,7 @@ const RECORD_ID = /^(STR|RUN|CTRL|VAL|RP|CMP|FM|AIP|PB|SB|VB|SRCH|JOB|CR)_/;
     "America/New_York" -> "America/New York", "reason END_OF_DATA" -> "reason end of data", dotted rule keys
     ("evaluation.drawdown.mode") -> "Evaluation · drawdown · mode". Record ids (STR_…, RUN_…) and file names are kept. */
 export function plainProse(t: unknown): string {
-  return String(t ?? "")
+  return String(t ?? "").replace(/\bEdgeLab\b/g, "Munyun Lab")
     .replace(/\b[a-z][a-z0-9_]{2,}(?:\.[a-z][a-z0-9_]{1,})+\b/g, (m) => /\.(json|ya?ml|md|csv|py|txt|exe|zip)$/.test(m) ? m
       : m.split(".").map((x, i) => (i ? humanize(x).replace(/^[A-Z][a-z]/, (c) => c.toLowerCase()) : humanize(x))).join(" · "))
     .replace(/\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b/g, (m) => {

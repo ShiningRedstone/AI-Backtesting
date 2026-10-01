@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import type { Issue } from "../../api/types";
 import { plainProse } from "../../app/labels";
+import { useApp } from "../../app/context";
 
 export function Button({ children, onClick, kind = "secondary", busy, busyLabel, disabled, title, type = "button", small, testId }: {
   children?: ReactNode; onClick?: () => void; kind?: "primary" | "secondary" | "danger" | "ghost";
@@ -203,8 +204,25 @@ export function Empty({ children }: { children?: ReactNode }) {
   return <div className="empty"><IconTile /><div className="empty-text">{children}</div></div>;
 }
 
-export function Loading({ label }: { label: string }) {
-  return <div className="loading" role="status"><Spinner />{label}</div>;
+/** Skeleton placeholders shown while data loads (shape only; never values). */
+export function Skeleton({ kind = "lines", rows = 4 }: { kind?: "lines" | "kpis" | "table" | "chart"; rows?: number }) {
+  if (kind === "kpis") return <div className="kpis skel-kpis" aria-hidden="true">{Array.from({ length: rows }, (_, i) =>
+    <div key={i} className="kpi"><span className="skel skel-line" style={{ width: "45%" }} /><span className="skel skel-num" /></div>)}</div>;
+  if (kind === "table") return <div className="skel-table" aria-hidden="true">{Array.from({ length: rows }, (_, i) =>
+    <span key={i} className="skel skel-row" style={{ opacity: 1 - i * (0.5 / rows) }} />)}</div>;
+  if (kind === "chart") return <span className="skel skel-chart" aria-hidden="true" />;
+  return <div className="skel-lines" aria-hidden="true">{Array.from({ length: rows }, (_, i) =>
+    <span key={i} className="skel skel-line" style={{ width: `${[92, 76, 84, 60, 88, 70][i % 6]}%` }} />)}</div>;
+}
+
+/** Loading state: a skeleton of the coming content plus the label for screen readers. */
+export function Loading({ label, kind = "page" }: { label: string; kind?: "page" | "lines" | "kpis" | "table" | "chart" }) {
+  return (
+    <div className="loading-skel" role="status" aria-label={label}>
+      <span className="sr-only">{label}</span>
+      {kind === "page" ? <><Skeleton kind="kpis" rows={4} /><Skeleton kind="table" rows={5} /></> : <Skeleton kind={kind} />}
+    </div>
+  );
 }
 
 export function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
@@ -219,9 +237,38 @@ export function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
 export function TechDetails({ rows, children, testId, summary = "Technical details" }: {
   rows?: [string, ReactNode][]; children?: ReactNode; testId?: string; summary?: string;
 }) {
+  const { prefs } = useApp();
+  if (!prefs.show_ids) return null;                       // Settings → "Show IDs" (off by default)
   return (
     <details className="tech" data-testid={testId}><summary>{summary}</summary>
       {rows && <KeyValues rows={rows.filter(([, v]) => v !== null && v !== undefined && v !== "")} />}{children}</details>
+  );
+}
+
+/** Shown only with Settings → "Show read-only information" (fixed design, read-only configuration, system panels). */
+export function ReadOnly({ children }: { children?: ReactNode }) {
+  const { prefs } = useApp();
+  return prefs.show_readonly ? <>{children}</> : null;
+}
+
+/** An id shown as text only with Settings → "Show IDs"; otherwise nothing (or the fallback). */
+export function IdText({ id, fallback = null }: { id: string | null | undefined; fallback?: ReactNode }) {
+  const { prefs } = useApp();
+  return prefs.show_ids && id ? <Mono>{id}</Mono> : <>{fallback}</>;
+}
+
+/** Yellow star: favorite a TESTED strategy (display metadata in the workspace; changes no result). */
+export function FavStar({ id, testId }: { id: string; testId?: string }) {
+  const { prefs, tested, toggleFavorite } = useApp();
+  const on = prefs.favorites.includes(id);
+  if (!on && !tested.has(id)) return <span className="fav-star off" title="Only tested strategies can be favorites" aria-hidden="true" />;
+  return (
+    <button type="button" className={`fav-star${on ? " on" : ""}`} aria-pressed={on} data-testid={testId ?? `fav-${id}`}
+      title={on ? "Remove from favorites" : "Add to favorites"} aria-label={on ? "remove from favorites" : "add to favorites"}
+      onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); void toggleFavorite(id); }}>
+      <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"
+        fill={on ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /></svg>
+    </button>
   );
 }
 

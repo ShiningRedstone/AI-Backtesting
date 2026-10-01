@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     from edgelab.web.app import create_app
     app = create_app(root, demo=a.demo, web=web)
-    print(f"EdgeLab running at http://{host}:{port}  (root: {root}{', DEMO' if a.demo else ''})  Ctrl+C to stop")
+    print(f"Munyun Lab running at http://{host}:{port}  (root: {root}{', DEMO' if a.demo else ''})  Ctrl+C to stop")
     from werkzeug.serving import run_simple
     run_simple(host, port, app, threaded=True, use_reloader=False)
     return 0

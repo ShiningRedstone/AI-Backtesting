@@ -1,18 +1,68 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { PropAccountResult, PropConfigRow, PropSimRow, PropSimulation, RunRow } from "../api/types";
+import type { ExplorerResponse, ExplorerRow, PropAccountResult, PropConfigRow, PropSimRow, PropSimulation, RunRow, StrategyPanelData } from "../api/types";
 import { href, useRoute } from "../app/router";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, humanize, keyLabel, plainProse, profileLabel, statusLabel, strategyLabel, valueLabel } from "../app/labels";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Kpi, Loading, Mono, Scope, Select, TableWrap, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, FavStar, Field, KeyValues, Kpi, Loading, Mono, Scope, Select, TableWrap, TechDetails, TextInput, fmt, shortTime,
+  useDebounced } from "../components/ui";
+import { PropRows } from "../components/results";
 import { BarChart, LineChart } from "../components/charts";
 
 /** Phase 6: prop-account rules replayed over a STORED run's trades. The strategy result and the
  *  account result are shown separately; nothing here ranks, scores or promotes a strategy. */
 export function PropPage() {
   const route = useRoute();
-  return route.parts[1] ? <SavedSimulation id={route.parts[1]} /> : <PropWorkspace />;
+  return route.parts[1] ? <SavedSimulation id={route.parts[1]} /> : <PropHome />;
+}
+
+/** The Prop firm simulator: pick a tested strategy (favorites first), see the automatic prop audit of its backtest per
+ *  account (every backtest is checked automatically) and simulate its chance to pass. The manual simulator (custom rule
+ *  sets, several accounts, start dates) is under Advanced. */
+function PropHome() {
+  const route = useRoute();
+  const [q, setQ] = useState("");
+  const dq = useDebounced(q, 300);
+  const [sid, setSid] = useState(route.query.get("strategy") ?? "");
+  const favs = useApi<ExplorerResponse>("/api/explorer/strategies?favorites_only=1&tested_only=1&page_size=200&sort=name&order=asc");
+  const tested = useApi<ExplorerResponse>(`/api/explorer/strategies?tested_only=1&page_size=200&sort=name&order=asc${dq ? `&q=${encodeURIComponent(dq)}` : ""}`, [dq]);
+  const panel = useApi<StrategyPanelData>(sid ? `/api/results-view/strategies/${sid}` : null, [sid]);
+  const favRows = favs.data?.rows ?? [];
+  const favIds = new Set(favRows.map((x) => x.strategy_id));
+  const others = (tested.data?.rows ?? []).filter((x) => !favIds.has(x.strategy_id));
+  const label = (x: ExplorerRow) => `${strategyLabel(x.name)} · ${facetLabel("timeframe", x.timeframe)}${x.synthetic ? " · synthetic" : ""}`;
+  return (
+    <div className="page" data-testid="prop-page">
+      <header className="page-head"><div><h1>Prop firm simulator</h1></div></header>
+      <Card title="Strategy" testId="prop-strategy-card">
+        <div className="inline">
+          <input className="input" style={{ width: 240 }} placeholder="Search tested strategies…" value={q} aria-label="search tested strategies"
+            onChange={(e: { target: HTMLInputElement }) => setQ(e.target.value)} />
+          <select className="input" style={{ minWidth: 320 }} value={sid} aria-label="strategy" data-testid="prop-strategy"
+            onChange={(e: { target: HTMLSelectElement }) => setSid(e.target.value)}>
+            <option value="">Choose a tested strategy…</option>
+            {favRows.length > 0 && <optgroup label="★ Favorites">{favRows.map((x) => <option key={x.strategy_id} value={x.strategy_id}>★ {label(x)}</option>)}</optgroup>}
+            <optgroup label="Tested strategies">{others.map((x) => <option key={x.strategy_id} value={x.strategy_id}>{label(x)}</option>)}</optgroup>
+          </select>
+          {(favs.loading || tested.loading) && <span className="spinner" />}
+        </div>
+        {tested.data && tested.data.total > tested.data.rows.length && <p className="small muted">Showing the first {tested.data.rows.length} of
+          {" "}{tested.data.total.toLocaleString()} tested strategies; search to narrow the list.</p>}
+        {tested.data && !tested.data.total && !dq && <Empty>No tested strategies yet. Run a backtest first.</Empty>}
+      </Card>
+      {sid && (panel.error ? <ErrorPanel error={panel.error} /> : !panel.data || panel.data.strategy_id !== sid ? <Loading label="Loading the prop results…" kind="table" /> : (
+        !panel.data.tested || !panel.data.run_id ? <Empty>This strategy has no backtest with trades yet.</Empty> : (
+          <Card title={<>{panel.data.display_name} <span className="labels"><Scope kind="sim" />{panel.data.synthetic && <Scope kind="synthetic" />}</span></>}
+            testId="prop-strategy-result-card" actions={<FavStar id={sid} />}>
+            {panel.data.prop?.length ? <PropRows rows={panel.data.prop} runId={panel.data.run_id} /> : <Empty>No prop audit stored with this backtest.</Empty>}
+          </Card>)))}
+      <details className="advanced" data-testid="prop-advanced" open={!!route.query.get("run")}>
+        <summary>Advanced: manual simulation (custom rule sets, several accounts, start dates)</summary>
+        <PropWorkspace />
+      </details>
+    </div>
+  );
 }
 
 interface AccountDraft { account_id: string; config: string; start: string }
@@ -21,7 +71,7 @@ const yes = (b: boolean | null | undefined) => b == null ? "—" : b ? "yes" : "
 const usd = (v: unknown) => typeof v === "number" ? v.toFixed(2) : fmt(v);
 /** Backend prose that mentions rule / config keys ("min_trading_days", "evaluation.drawdown.mode") with the keys as words. */
 const prose = plainProse;
-const runLabel = (id: string | null | undefined) => (id ? humanize(id) : "—");
+const runLabel = (id: string | null | undefined) => (id ? "Open the backtest" : "—");
 /** Machine ids behind the rows above, in the collapsed Technical details block. */
 const IdTable = ({ head, rows }: { head: string[]; rows: (string | null | undefined)[][] }) => (
   <TechDetails><TableWrap><table className="dense"><thead><tr>{head.map((h) => <th key={h}>{h}</th>)}</tr></thead>
@@ -31,7 +81,7 @@ const COL_LABEL: Record<string, string> = { trade_no: "Trade", day: "Day", entry
   drawdown_floor: "Drawdown floor", drawdown_headroom: "Drawdown headroom", target_progress: "Target progress" };
 
 function PropWorkspace() {
-  const { toast } = useApp();
+  const { toast, prefs } = useApp();
   const runs = useApi<RunRow[]>("/api/results");
   const cfgs = useApi<PropConfigRow[]>("/api/prop/configs");
   const sims = useApi<PropSimRow[]>("/api/prop/simulations");
@@ -59,8 +109,7 @@ function PropWorkspace() {
   };
   const ready = runId && accounts.every((a) => a.config && (a.config !== "__custom__" || custom.trim()));
   return (
-    <div className="page" data-testid="prop-page">
-      <header className="page-head"><h1>Prop Simulation</h1></header>
+    <div className="advanced-body" data-testid="prop-manual">
       <Banner tone="info">Applies account rules to the <b>recorded trades</b> of a stored backtest. The backtest itself is read
         only and never changed. A passed evaluation here is a description of that trade sequence under those rules — not evidence
         that the strategy is profitable or deployable. No broker routing, no live trading.</Banner>
@@ -69,7 +118,8 @@ function PropWorkspace() {
           or <ChooseWorkspaceLink /> that holds your runs.</Banner>}
         <Field label="Source result (stored run)" hint="Results page lists every stored run with its status and dataset.">
           <Select value={runId} onChange={setRunId} testId="prop-run" placeholder="Choose a run…"
-            options={runs.data.map((r) => ({ value: r.run_id, label: `${runLabel(r.run_id)} · ${r.strategy_name ? strategyLabel(r.strategy_name) : "Unnamed strategy"} · ${datasetLabel(r.dataset_id)} · ${statusLabel(r.status)}${r.synthetic ? " · SYNTHETIC" : ""}` }))} />
+            options={[...runs.data].sort((a, b) => Number(prefs.favorites.includes(b.strategy_id)) - Number(prefs.favorites.includes(a.strategy_id)))
+              .map((r) => ({ value: r.run_id, label: `${prefs.favorites.includes(r.strategy_id) ? "★ " : ""}${shortTime(r.created_at)} · ${r.strategy_name ? strategyLabel(r.strategy_name) : "Unnamed strategy"} · ${datasetLabel(r.dataset_id)} · ${statusLabel(r.status)}${r.synthetic ? " · SYNTHETIC" : ""}` }))} />
         </Field>
         <TableWrap testId="prop-accounts"><table>
           <thead><tr><th>Account</th><th>Rule set</th><th>Start (UTC, optional)</th><th /></tr></thead>
@@ -132,8 +182,7 @@ function SavedSimulation({ id }: { id: string }) {
   const { data, error } = useApi<PropSimulation>(`/api/prop/simulations/${id}`, [id]);
   if (error) return <ErrorPanel error={error} />;
   if (!data) return <Loading label="Loading simulation…" />;
-  return <div className="page"><header className="page-head"><div><h1>Prop simulation</h1>
-    <div className="subtitle small">Recorded {shortTime(data.created_at)}</div></div></header>
+  return <div className="page"><header className="page-head"><div><h1>Prop simulation · {shortTime(data.created_at)}</h1></div></header>
     <p><a href={href("/prop")}>Back to prop simulation</a></p><SimulationView sim={data} /></div>;
 }
 

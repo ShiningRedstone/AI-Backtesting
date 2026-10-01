@@ -66,11 +66,11 @@ def unsafe_reason(install: Path, protected: list[Path] | None = None) -> str | N
     """Why this folder must NOT be replaced (or None when it is a plain packaged app folder)."""
     install = install.resolve()
     if not looks_like_install(install):
-        return f"{install} is not a packaged EdgeLab folder ({exe_name()} + {MANIFEST_FILE})"
+        return f"{install} is not a packaged Munyun Lab folder ({exe_name()} + {MANIFEST_FILE})"
     for m in WORKSPACE_MARKERS:
         if (install / m).exists():
             return (f"{install} contains research data ({m}); the updater never replaces a folder that holds a "
-                    "workspace. Install EdgeLab in its own folder (e.g. %LOCALAPPDATA%\\Programs\\EdgeLab).")
+                    "workspace. Install Munyun Lab in its own folder (e.g. %LOCALAPPDATA%\\Programs\\EdgeLab).")
     for p in protected or []:
         try:
             p = Path(p).resolve()
@@ -216,12 +216,12 @@ def apply_update(target: str | Path, staged: str | Path, version: str, *, wait_p
     _log(logp, event="update_started", version=version, target=str(target), staged=str(staged), wait_pid=wait_pid,
          helper_pid=os.getpid())
     if not wait_for_exit(wait_pid, exit_timeout):
-        return fail("wait", f"EdgeLab (pid {wait_pid}) did not exit within {exit_timeout:.0f}s; nothing changed")
+        return fail("wait", f"Munyun Lab (pid {wait_pid}) did not exit within {exit_timeout:.0f}s; nothing changed")
     reason = unsafe_reason(target, [Path(p) for p in (protected or [])])
     if reason:
         return fail("preflight", reason + "; nothing changed", relaunch=True)
     if _manifest_version(staged) != version or not (staged / exe_name()).is_file():
-        return fail("preflight", f"the staged build is not EdgeLab {version}; nothing changed", relaunch=True)
+        return fail("preflight", f"the staged build is not Munyun Lab {version}; nothing changed", relaunch=True)
     if build and _manifest_build(staged) != build:
         return fail("preflight", f"the staged build is not build {build}; nothing changed", relaunch=True)
     try:
@@ -318,13 +318,13 @@ def main(argv: list[str] | None = None) -> int:
     res = apply_update(a.target, a.staged, a.version, wait_pid=a.wait_pid or None, restart_cmd=restart,
                        log=a.log, protected=a.protect, ready_timeout=a.ready_timeout, build=a.build or None)
     if not res["ok"]:
-        msg = f"EdgeLab could not be updated to {a.version}:\n{res.get('error')}"
+        msg = f"Munyun Lab could not be updated to {a.version}:\n{res.get('error')}"
         print(msg, file=sys.stderr)
         # EDGELAB_UPDATER_QUIET: unattended tests (packaging/smoke_update.py); the log still records everything
         if sys.platform == "win32" and getattr(sys, "frozen", False) and not os.environ.get("EDGELAB_UPDATER_QUIET"):
             try:
                 import ctypes
-                ctypes.windll.user32.MessageBoxW(None, msg, "EdgeLab update", 0x30)
+                ctypes.windll.user32.MessageBoxW(None, msg, "Munyun Lab update", 0x30)
             except Exception:                                  # noqa: BLE001
                 pass
         return 1

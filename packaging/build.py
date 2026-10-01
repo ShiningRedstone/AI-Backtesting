@@ -38,8 +38,8 @@ def version_resource(version: str, build_id: str, build_number: int = 0) -> str:
     carries the CI build number, modulo the 16-bit limit of that field)."""
     a, b, c = (int(x) for x in version.split("."))
     d = int(build_number) % 65536
-    fields = {"CompanyName": "EdgeLab", "FileDescription": "EdgeLab research application",
-              "FileVersion": version, "InternalName": "EdgeLab", "ProductName": "EdgeLab",
+    fields = {"CompanyName": "Munyun Lab", "FileDescription": "Munyun Lab research application",
+              "FileVersion": version, "InternalName": "EdgeLab", "ProductName": "Munyun Lab",
               "ProductVersion": version, "Comments": f"build {build_id}"}
     strings = ",\n            ".join(f"StringStruct('{k}', '{v}')" for k, v in fields.items())
     return f"""VSVersionInfo(

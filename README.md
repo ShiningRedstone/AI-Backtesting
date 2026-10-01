@@ -1,4 +1,6 @@
-# edgelab: prop-firm strategy research engine
+# Munyun Lab: prop-firm strategy research engine
+
+(Formerly EdgeLab; the Python package and program files keep the internal name `edgelab` / `EdgeLab.exe`.)
 
 > Is there a repeatable statistical edge here, does it survive realistic costs and unseen
 > data, and can it operate within a prop firm's rules?

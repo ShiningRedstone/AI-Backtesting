@@ -122,7 +122,7 @@ class MockProvider:
     kind = "mock"
 
     def describe(self) -> dict:
-        return {"kind": "mock", "name": "EdgeLab deterministic mock provider", "model": None,
+        return {"kind": "mock", "name": "Munyun Lab deterministic mock provider", "model": None,
                 "provider_version": "mock-1", "configured": True, "external": False}
 
     def generate_proposals(self, request: Mapping, context: Mapping) -> ProviderOutput:
@@ -276,7 +276,7 @@ def provider_status(environ: Mapping[str, str] | None = None, user_settings: Map
             "api_key_present": s["api_key_present"], "problem": problem, "available": ["mock"] +
             (["anthropic"] if configured and s["kind"] == "anthropic" else []),
             "offline_notice": None if configured else
-            "No AI provider is configured - EdgeLab is offline. The deterministic mock provider is available "
+            "No AI provider is configured - Munyun Lab is offline. The deterministic mock provider is available "
             "to exercise the pipeline; it is not an AI. Configure one with environment variables "
             f"({PROVIDER_ENV}, {MODEL_ENV}, {KEY_ENV}); see WEB_UI.md."}
 

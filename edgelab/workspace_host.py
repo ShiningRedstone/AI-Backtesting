@@ -84,12 +84,12 @@ class WorkspaceHost:
             if problems:
                 if lock is not None:
                     lock.release()
-                raise WorkspaceError(422, "This folder is not a usable EdgeLab research workspace: "
+                raise WorkspaceError(422, "This folder is not a usable Munyun Lab research workspace: "
                                      + "; ".join(problems), info)
             if lock is None:
                 lock = self.lock_factory(root)
                 if not lock.acquire():
-                    raise WorkspaceError(409, f"{root} is open in another EdgeLab window; close it there first.", info)
+                    raise WorkspaceError(409, f"{root} is open in another Munyun Lab window; close it there first.", info)
             try:
                 runtime.init_workspace(root)                    # existing configs/data untouched; adds logs/ etc.
                 app = self.app_factory(root)

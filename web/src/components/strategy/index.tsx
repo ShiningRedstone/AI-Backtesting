@@ -195,7 +195,7 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
       )}
       {ready.datasets.filter((d) => d.asset_type === "CFD" && d.cost.status === "unconfigured").length > 0 && (
         <Banner tone="warn" testId="cfd-unavailable"><b>CFD backtest unavailable.</b> Reason: Broker/provider cost profile is unconfigured.
-          Configure verified costs (configs/costs.yaml) before running research. EdgeLab never assumes CFD spreads, commissions or slippage.</Banner>)}
+          Configure verified costs (configs/costs.yaml) before running research. Munyun Lab never assumes CFD spreads, commissions or slippage.</Banner>)}
       {sel && (
         <div className="bt-confirm">
           <h3>Run on</h3>

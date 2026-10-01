@@ -388,6 +388,26 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def set_risk_per_trade():
         return jsonify(call(svc.set_risk_per_trade, body().get("risk_per_trade_usd")))
 
+    @app.get("/api/preferences/ui")
+    def ui_preferences():
+        return jsonify({**call(svc.ui_preferences), "profile_choices": call(svc.prop_profile_choices)})
+
+    @app.post("/api/preferences/ui")
+    def set_ui_preferences():
+        return jsonify(call(svc.set_ui_preferences, body()))
+
+    @app.get("/api/favorites")
+    def favorites():
+        return jsonify(call(svc.favorites_info))
+
+    @app.post("/api/favorites/<sid>")
+    def set_favorite(sid):
+        return jsonify(call(svc.set_favorite, _id(sid, STRATEGY_ID, "strategy id"), body().get("favorite")))
+
+    @app.post("/api/workspace/reset")
+    def reset_workspace():
+        return jsonify(call(svc.reset_workspace, body().get("confirm")))
+
     @app.get("/api/preferences/research-dataset")
     def preferred_dataset():
         return jsonify(call(svc.preferred_dataset))
@@ -786,11 +806,20 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             "q", "strategy_id", "family_id", "timeframe", "session", "direction", "entry_type", "stop_type",
             "target_type", "source", "instrument", "state", "protocol", "scope", "min_trades",
             "max_trades_per_week", "tested_only", "sort", "order", "page", "page_size", "survivors_only", "trailing",
-            "signal_exit"))))
+            "signal_exit", "favorites_only", "prop", "campaign_run"))))
 
     @app.get("/api/results-view/overview")
     def results_view_overview():
-        return jsonify(call(svc.results_overview, _params(("scope", "basis", "controls"))))
+        return jsonify(call(svc.results_overview, _params(("scope", "basis", "controls", "campaign_run"))))
+
+    @app.get("/api/results-view/runs")
+    def results_view_runs():
+        return jsonify(call(svc.research_runs))
+
+    @app.post("/api/campaigns/<cid>/runs/<rid>/name")
+    def rename_campaign_run(cid, rid):
+        return jsonify(call(svc.rename_campaign_run, _id(cid, CAMPAIGN_ID, "campaign id"),
+                            _id(rid, RUN_RECORD_ID, "run record id"), body().get("name")))
 
     @app.get("/api/results-view/strategies/<sid>")
     def results_view_strategy(sid):

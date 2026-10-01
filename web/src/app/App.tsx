@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { LibraryRow, ProtocolRecordRow } from "../api/types";
+import type { ProtocolRecordRow } from "../api/types";
 import { AppProvider, useApp } from "./context";
-import { RouteContext, go, href, useHashRoute, useRoute } from "./router";
+import { RouteContext, href, useHashRoute, useRoute } from "./router";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
 import { Badge, Icon } from "../components/ui";
-import { familyLabel, strategyLabel } from "./labels";
 import { BuilderPage } from "../pages/Builder";
 import { LibraryPage, StrategyPage } from "../pages/Strategies";
 import { FamiliesPage, ResultsPage, VariationsPage } from "../pages/Research";
@@ -64,41 +63,6 @@ function SubNav({ head }: { head: string }) {
         <a key={s.path} href={href(s.path)} className={`tab${s.head === head ? " active" : ""}`} data-testid={`subnav-${s.head}`}
           aria-current={s.head === head ? "page" : undefined}>{s.label}</a>))}
     </nav>
-  );
-}
-
-function Search() {
-  const [q, setQ] = useState("");
-  const [rows, setRows] = useState<LibraryRow[] | null>(null);
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
-  const hits = (rows ?? []).filter((r) => q && `${r.name} ${r.strategy_id} ${r.family_id}`.toLowerCase().includes(q.toLowerCase())).slice(0, 8);
-  return (
-    <div className="search" ref={box}>
-      <input className="input" type="search" placeholder="Search strategies…" aria-label="search strategies" value={q}
-        data-testid="global-search"
-        onFocus={() => { setOpen(true); api.get<LibraryRow[]>("/api/strategies").then(setRows).catch(() => setRows([])); }}
-        onChange={(e: { target: HTMLInputElement }) => { setQ(e.target.value); setOpen(true); }}
-        onKeyDown={(e: KeyboardEvent) => {
-          if (e.key !== "Enter") return;
-          if (hits[0]) go(`/strategies/${hits[0].strategy_id}`); else if (q) go(`/explorer?q=${encodeURIComponent(q)}`);
-          setOpen(false); setQ("");
-        }} />
-      {open && q && (
-        <ul className="search-results" role="listbox">
-          {hits.length ? hits.map((h) => (
-            <li key={h.strategy_id}><a href={href(`/strategies/${h.strategy_id}`)} onClick={() => { setOpen(false); setQ(""); }}>
-              <span>{strategyLabel(h.name)}</span> <span className="muted small">{familyLabel(h.family_id)}</span></a></li>))
-            : <li className="muted">{rows ? "No matches" : "Searching…"}</li>}
-          {q && <li><a href={href(`/explorer?q=${encodeURIComponent(q)}`)} onClick={() => { setOpen(false); setQ(""); }}>
-            <span>Search “{q}” in all strategies</span><span className="muted small">all fields ›</span></a></li>}
-        </ul>)}
-    </div>
   );
 }
 
@@ -179,10 +143,11 @@ const BrandMark = () => (
 );
 
 function ShellBody() {
-  const { demo } = useApp();
+  const { demo, reloadPrefs } = useApp();
   const route = useRoute();
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [route.parts.join("/")]);
+  useEffect(reloadPrefs, [route.parts[0]]);                // favorites / tested strategies stay current across pages
   const active = route.parts[0] ?? "";
   const ws = useApi<WorkspaceState>("/api/workspace");
   const firstRun = !!ws.data && ws.data.switchable && !ws.data.current && active !== "settings";
@@ -191,9 +156,8 @@ function ShellBody() {
     <div className={`shell${menu ? " menu-open" : ""}`}>
       <header className="topbar">
         <button className="hamburger" aria-label="menu" aria-expanded={menu} onClick={() => setMenu(!menu)} data-testid="menu-toggle">☰</button>
-        <a className="brand" href={href("/")}><BrandMark />EdgeLab<span className="brand-sub">research terminal</span></a>
+        <a className="brand" href={href("/")}><BrandMark />MUNYUN LAB</a>
         {demo && <Badge tone="demo">DEMO</Badge>}
-        <Search />
         <span className="spacer" />
         {ws.data?.current && <ProtocolChip />}
         {ws.data && <a className="chip" href={href("/settings")} data-testid="ws-chip"

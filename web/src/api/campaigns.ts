@@ -17,7 +17,7 @@ export interface CampaignProtocol {
   family_size_rule: string; holdout_looks_budget: number;
 }
 export interface CampaignRunRecord {
-  run_record_id: string; campaign_id: string; source: string; search_id: string; protocol_id: string;
+  run_record_id: string; campaign_id: string; source: string; search_id: string; protocol_id: string; name?: string | null;
   protocol_version: number; manifest_id: string; families: string[]; all_families: boolean | null; n_scope: number;
   scope_kind: "all" | "families" | "strategies" | null; scope_file: string | null;
   created_at: string; started_at: string | null; finished_at: string | null; updated_at: string | null;
@@ -95,6 +95,7 @@ export const campaigns = {
   job: (jid: string) => api.get<CampaignJob>(`/api/campaigns/jobs/${enc(jid)}`),
   cancel: (jid: string) => api.post<CampaignJob>(`/api/campaigns/jobs/${enc(jid)}/cancel`),
   active: () => api.get<{ job: CampaignJob | null }>("/api/campaigns/active-job"),
+  rename: (cid: string, rid: string, name: string) => api.post<{ name: string | null }>(`/api/campaigns/${enc(cid)}/runs/${enc(rid)}/name`, { name }),
   runScope: (cid: string, rid: string) => api.get<{ strategy_ids: string[] }>(`/api/campaigns/${enc(cid)}/runs/${enc(rid)}/scope`),
 };
 export const CAMPAIGN_JOB_FINAL = new Set(["completed", "failed", "cancelled"]);

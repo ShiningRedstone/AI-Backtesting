@@ -5,7 +5,7 @@ import { href } from "../app/router";
 import { humanize } from "../app/labels";
 import { Badge, Banner, Button, Card, ErrorPanel, KeyValues, Mono, TechDetails, TextInput } from "./ui";
 
-/** Research Workspace: which folder (configs/ + data/) EdgeLab works on. Choosing one is a pointer
+/** Research Workspace: which folder (configs/ + data/) Munyun Lab works on. Choosing one is a pointer
  *  change: the backend validates it read-only and never copies, migrates, imports or deletes data. */
 const storeLabel = (b: string) => (b === "sqlite" ? "SQLite store" : b === "duckdb" ? "DuckDB store" : `${humanize(b)} store`);
 /** How the workspace was chosen ("--data-root", an environment variable, "saved selection") in words. */
@@ -60,7 +60,7 @@ export function WorkspacePanel({ state, welcome }: { state: WorkspaceState; welc
       {!state.switchable ? <p className="muted small">Development server: the workspace is the root folder the server was started with.
         Restart it with another root folder to change it; the desktop app switches workspaces here.</p> : <>
         <h3>{welcome ? "Open an existing workspace" : "Open another workspace"}</h3>
-        <p className="muted small">An EdgeLab workspace is a folder with <code>configs/</code> and <code>data/</code> — for example your
+        <p className="muted small">An Munyun Lab workspace is a folder with <code>configs/</code> and <code>data/</code> — for example your
           development folder (<code>…\AI-Backtesting</code>). Its datasets, strategies, runs, feature cache and prop simulations are used where
           they are: nothing is copied, imported, migrated or deleted, and both workspaces stay unchanged.</p>
         <div className="inline">
@@ -84,7 +84,7 @@ export function WorkspacePanel({ state, welcome }: { state: WorkspaceState; welc
           <p className="small"><Mono>{d.path}</Mono> — {d.info.valid ? `${d.info.datasets} datasets, ${d.info.runs} runs` : "not created yet"}</p>
           <Button onClick={() => (d.info.valid ? select(d.path) : create(d.path))} busy={busy === "select" || busy === "create"} testId="ws-default">
             {d.info.valid ? "Open default workspace" : "Create default workspace"}</Button></>}
-        {state.settings_path && <><p className="muted small">Your choice is remembered in this computer's EdgeLab settings file (not inside any workspace).</p>
+        {state.settings_path && <><p className="muted small">Your choice is remembered in this computer's Munyun Lab settings file (not inside any workspace).</p>
           <TechDetails rows={[["Settings file", <Mono>{state.settings_path}</Mono>]]} /></>}
       </>}
       <ErrorPanel error={err} title="The workspace was not changed" testId="ws-error" />
@@ -95,7 +95,7 @@ export function WorkspacePanel({ state, welcome }: { state: WorkspaceState; welc
 export function WelcomePage({ state }: { state: WorkspaceState }) {
   return (
     <div className="page" data-testid="welcome-page">
-      <header className="page-head"><h1>Welcome to EdgeLab</h1></header>
+      <header className="page-head"><h1>Welcome to Munyun Lab</h1></header>
       <p>Choose where your research workspace should live. Open an existing workspace (for example the folder that already holds your
         datasets and research runs), or create a new one.</p>
       <Card title="Research Workspace"><WorkspacePanel state={state} welcome /></Card>

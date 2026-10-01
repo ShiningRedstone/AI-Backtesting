@@ -26,7 +26,14 @@ BE_GRID = [round(x, 3) for x in np.linspace(0.02, 0.98, 49)]
 MAX_RR = 20.0
 WEEK = pd.Timedelta(days=7)
 SURVIVOR_RULE = ("Survivor: positive net R per trade AND the recorded trade sequence passes an evaluation and reaches the "
-                 "first payout under at least one prop rule profile (chronological audit stored with the run).")
+                 "first payout under the prop account chosen in Settings (chronological audit stored with the run).")
+
+
+def survivor_rule(svc) -> str:
+    pid = ov.criteria_profile(svc)
+    name = profile_names(svc).get(pid, pid) if pid else "any prop account"
+    return (f"Survivor means positive net R per trade AND the recorded trade sequence passes the evaluation and reaches the "
+            f"first payout under {name} (the account chosen in Settings; chronological audit stored with each backtest).")
 
 
 def _median(v):
@@ -65,8 +72,11 @@ def gross_stats(svc) -> dict[str, dict]:
 
 
 # ------------------------------------------------------------------------------ helpers
-def _latest_scoped(svc, scope: str) -> tuple[list[dict], dict[str, list[dict]]]:
+def _latest_scoped(svc, scope: str, campaign_run: Any = None) -> tuple[list[dict], dict[str, list[dict]]]:
     facets = ov.library_facets(svc)
+    in_run = ov.campaign_run_scope(svc, campaign_run)
+    if in_run is not None:
+        facets = [f for f in facets if f["strategy_id"] in in_run]
     by: dict[str, list[dict]] = {}
     for r in ov.run_records(svc):
         by.setdefault(r["strategy_id"], []).append(r)
@@ -126,7 +136,7 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
     basis = str(params.get("basis") or "net")
     if basis not in ("net", "gross"):
         raise ValueError("basis must be net or gross")
-    rows, _ = _latest_scoped(svc, scope)
+    rows, _ = _latest_scoped(svc, scope, params.get("campaign_run"))
     gs = gross_stats(svc) if basis == "gross" else {}
     tested = [x for x in rows if x["ref"] and x["ref"]["trade_count"] > 0]
     points = []
@@ -181,7 +191,8 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
                                 "label": "Median expectancy per strategy: exit on the opposite signal vs a fixed "
                                          "risk-multiple target (no signal exit)"},
             "eval_summary": eval_summary(svc, survivors),
-            "survivor_rule": SURVIVOR_RULE, "note": ov.DESCRIPTIVE}
+            "survivor_rule": survivor_rule(svc), "criteria_profile": ov.criteria_profile(svc),
+            "campaign_run": params.get("campaign_run") or None, "note": ov.DESCRIPTIVE}
 
 
 def eval_summary(svc, survivors: list[dict]) -> dict:
@@ -334,7 +345,8 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     risk = svc.risk_per_trade()["risk_per_trade_usd"]
     out = {"strategy_id": strategy_id, "display_name": pres["display_name"], "explanation": pres["explanation"],
            "family_id": f["family_id"], "family_name": f.get("family_name"), "facets": f, "scope": scope,
-           "risk_per_trade_usd": risk, "survivor_rule": SURVIVOR_RULE,
+           "risk_per_trade_usd": risk, "survivor_rule": survivor_rule(svc), "favorite": strategy_id in _favorites(svc),
+           "criteria_profile": ov.criteria_profile(svc),
            "technical": {"strategy_id": strategy_id, "logic_hash": doc.get("logic_hash"),
                          "definition_hash": doc.get("definition_hash"), "machine_name": pres.get("machine_name")}}
     if not ref or not ref["trade_count"]:
@@ -393,6 +405,31 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
         dataset={"instrument": ref["instrument"], "provider": ref["provider"], "timeframe": ref["timeframe"],
                  "start": ref["start"], "end": ref["end"]})
     return out
+
+
+def _favorites(svc) -> set[str]:
+    try:
+        return set(svc.ui_preferences()["favorites"])
+    except Exception:                                        # noqa: BLE001
+        return set()
+
+
+def research_runs(svc) -> list[dict]:
+    """Every research run of every frozen campaign, newest first, with its user-given name (display metadata kept beside
+    the run records; the records themselves are never rewritten here). For the Backtest results run picker."""
+    from edgelab.research import campaign as C
+    out = []
+    for c in C.list_campaigns(svc):
+        if c.get("error"):
+            continue
+        names = svc.campaign_run_names(c["campaign_id"])
+        for r in C.run_records(svc, c["campaign_id"]):
+            rid = r["run_record_id"]
+            out.append({"ref": f"{c['campaign_id']}/{rid}", "campaign_id": c["campaign_id"], "run_record_id": rid,
+                        "name": names.get(rid), "created_at": r.get("created_at"), "status": r.get("status"),
+                        "n_scope": r.get("n_scope"), "scope_kind": r.get("scope_kind"),
+                        "completed_this_run": (r.get("counts") or {}).get("completed_this_run")})
+    return sorted(out, key=lambda x: x["created_at"] or "", reverse=True)
 
 
 def control_panel(svc, control_id: str) -> dict:
