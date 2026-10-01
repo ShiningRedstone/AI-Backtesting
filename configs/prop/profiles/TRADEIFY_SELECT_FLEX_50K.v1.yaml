@@ -1,0 +1,82 @@
+# EdgeLab prop rule profile (ADR-64). UNVERIFIED: no official evidence recorded -> the lifecycle simulator fails
+# closed for this profile. Never edit a registered file: add a NEW version (new file + registry entry).
+kind: edgelab.prop_profile
+schema_version: 1
+profile_id: TRADEIFY_SELECT_FLEX_50K
+version: 1
+provider: Tradeify
+product: Select Flex
+account_size: 50000
+currency: USD
+stages:
+- evaluation
+- funded
+effective_date: null
+description: 'Tradeify Select 50K evaluation -> Select FLEX funded path (separate from Select Daily and from Growth). All
+  rule values unknown: no official documentation could be read.'
+trading_day:
+  timezone: America/New_York
+  reset_time: null
+evaluation:
+  starting_balance: null
+  target_profit: null
+  mll:
+    amount: null
+    type: null
+    lock_at_offset: null
+    breach_comparison: null
+  breach_detection: null
+  daily_loss:
+    amount: null
+    action: null
+  consistency: null
+  min_trading_days: null
+  max_contracts: null
+funded:
+  starting_balance: null
+  carry_evaluation_profit: null
+  mll:
+    amount: null
+    type: null
+    lock_at_offset: null
+    breach_comparison: null
+  breach_detection: null
+  daily_loss:
+    amount: null
+    action: null
+  consistency: null
+  max_contracts: null
+  scaling: null
+payout:
+  policy: null
+  profit_split_trader: null
+  min_winning_days: null
+  min_daily_profit: null
+  require_positive_cycle_profit: null
+  min_payout: null
+  max_payout:
+    share_of_profit: null
+    cap: null
+    profit_basis: null
+  max_payouts: null
+  after_payout:
+    floor: null
+live_transition:
+  after_payouts: null
+conventions:
+  on_oversize: terminate_violation
+  payout_request: max_allowed
+  funded_starts: next_trading_day
+  pass_checked: end_of_trading_day
+verification:
+  status: unverified
+  verified_on: null
+  sources: []
+  evidence: {}
+  missing_note: The official provider documentation could not be reached from the authoring environment (network egress to
+    the provider's help-centre host was blocked), so NO rule has been verified. Every rule value below is a draft or null;
+    record each official quote in verification.evidence and publish a new version.
+  unofficial_corroboration:
+  - 'UNOFFICIAL search-result snippets mention: end-of-day $2,000 drawdown, no daily loss limit, no funded consistency, five
+    winning days above $150 per payout cycle, payout of half the profit up to a hard cap, drawdown locking slightly above
+    the starting balance. Not official; NOT evidence; numbers deliberately not copied into the rule values.'

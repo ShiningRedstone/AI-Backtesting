@@ -182,7 +182,7 @@ python -m edgelab.cli strategy backtest $F/ema_crossover.yaml <DATASET_ID> # one
 - A strategy is data. It compiles into the Phase 1/2 interfaces, and every indicator comes from the
   feature cache (no math in the compiler).
 - Signals use three-valued logic: warm-up NaNs never fire, even under `not`.
-- Unsupported engine concepts (trailing stops, partial exits, pyramiding, exit-based cooldown) are
+- Unsupported engine concepts (partial exits, pyramiding, exit-based cooldown; trailing stops only via `exit.trailing`) are
   refused by name, never approximated.
 - Identity is a hash of the resolved logic. Key order, formatting, names and `a < b` vs `b > a` do not
   change it; any rule, parameter, session-window or sizing change does.

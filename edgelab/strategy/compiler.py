@@ -23,7 +23,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from edgelab.data.schema import BarArrays, timeframe_minutes
-from edgelab.engine.signals import OrderSpec, SignalSet
+from edgelab.engine.signals import OrderSpec, SignalSet, TrailSpec
 from edgelab.features.engine import FeatureFrame
 from edgelab.features.sessions import SessionWindow
 from edgelab.features.spec import FeatureSpec
@@ -117,14 +117,23 @@ def compile_definition(doc: Any, sessions: Mapping[str, SessionWindow],
                       time_exit_bars=ex["time_stop_bars"], max_hold_bars=ex["max_hold_bars"],
                       entry_expiry_bars=ent["order"].get("expiry_bars", 1))
     sz = logic["sizing"]
-    sizing = ({"mode": "fixed", "contracts": sz["quantity"]} if sz["mode"] == "fixed" else
-              {"mode": "risk", "risk_usd": sz["risk_usd"], "max_contracts": sz.get("max_quantity")})
+    if sz["mode"] == "fixed":
+        sizing = {"mode": "fixed", "contracts": sz["quantity"]}
+    elif sz["mode"] == "equity_risk":
+        sizing = {"mode": "equity_risk", "risk_pct": sz["risk_pct"], "max_contracts": sz.get("max_quantity")}
+    else:
+        sizing = {"mode": "risk", "risk_usd": sz["risk_usd"], "max_contracts": sz.get("max_quantity")}
+    if sz.get("contract"):
+        sizing["contract"] = sz["contract"]
     specs: dict[FeatureSpec, None] = {}
     for o in _walk_operands({"entry": ent, "exit": ex}, []):
         specs[_feature_spec(o)] = None
     for part in (stop, tgt):
         if part["type"] == "atr":
             specs[_atr_spec(part)] = None
+    atr_p = (ex.get("trailing") or {}).get("atr_period") or (ex.get("no_progress") or {}).get("atr_period")
+    if atr_p:
+        specs[_atr_spec({"period": atr_p})] = None
     if ent.get("session"):
         specs[_session_spec(ent["session"])] = None
     if ent.get("trading_weekdays"):
@@ -250,7 +259,7 @@ class DSLStrategy(FeatureStrategy):
             raise StrategyCompileError(
                 f"strategy {c.identity.strategy_id} is defined on {c.tf_minutes}m bars; dataset "
                 f"{ds.manifest.dataset_id} is {ds.bars.tf_minutes}m (use or derive a {c.tf_minutes}m dataset)")
-        if c.sizing["mode"] == "fixed":
+        if c.sizing["mode"] == "fixed" and not c.sizing.get("contract"):      # a named contract is checked by the engine
             q, inst = c.sizing["contracts"], ds.instrument
             steps = q / inst.size_step
             if q < inst.min_size or abs(steps - round(steps)) > 1e-9:
@@ -380,9 +389,42 @@ class DSLStrategy(FeatureStrategy):
         if sx:
             sig.exit_long = ev.true(sx.get("long")) if sx.get("long") is not None else np.zeros(n, bool)
             sig.exit_short = ev.true(sx.get("short")) if sx.get("short") is not None else np.zeros(n, bool)
+        tr, npg = ex.get("trailing"), ex.get("no_progress")
+        if tr or npg:
+            sig.trail = _trail_spec(tr, npg)
+            period = (tr or {}).get("atr_period") or (npg or {}).get("atr_period")
+            if period:
+                sig.trail_atr = np.asarray(ev.f.get_output(_atr_spec({"period": period}), "atr"), float)
+            for side in ("long", "short"):
+                if side in ((tr or {}).get("level") or {}):
+                    setattr(sig, f"trail_level_{side}", np.asarray(ev.operand(tr["level"][side]), float))
+        sig.max_trades_per_day = ent.get("max_trades_per_day")
+        re_ = ent.get("reentry") or {}
+        sig.exit_cooldown_bars = int(re_.get("cooldown_bars", 0))
+        sig.block_after = re_.get("block_day_after")
         diag["signals"] = int(ok.sum())
         self.last_diagnostics = diag
         return sig
+
+
+def _trail_spec(tr: Mapping | None, npg: Mapping | None = None) -> TrailSpec:
+    """Canonical exit.trailing / exit.no_progress -> the engine's TrailSpec (no logic of its own)."""
+    if tr is None:
+        return TrailSpec(mode="none", np_bars=npg["bars"], np_kind=npg["type"], np_value=npg["value"])
+    kw: dict = {"mode": tr["mode"]}
+    if npg:
+        kw.update(np_bars=npg["bars"], np_kind=npg["type"], np_value=npg["value"])
+    if tr["mode"] == "distance":
+        kw.update(distance_kind=tr["distance"]["type"],
+                  distance=tr["distance"].get("points", tr["distance"].get("multiple")))
+    if tr["mode"] != "breakeven":
+        a, u = tr["activation"], tr["update"]
+        kw.update(activation_kind=a["type"], activation=a.get("value", 0.0), every_bars=u["every_bars"],
+                  only_new_extreme=u["only_new_extreme"], min_step=u["min_step_points"])
+    if tr.get("breakeven"):
+        b = tr["breakeven"]
+        kw.update(be_kind=b["trigger"]["type"], be_trigger=b["trigger"]["value"], be_offset=b["offset_points"])
+    return TrailSpec(**kw)
 
 
 # ------------------------------------------------------------------------------- preview
@@ -440,6 +482,14 @@ def explain(compiled: CompiledDefinition) -> str:
             if price:
                 lines.append(f"  entry order price: {_op_text(price)}")
     lines.append(f"Stop: {x['stop']}")
+    if x.get("trailing"):
+        lines.append(f"Trailing: {x['trailing']}")
+    if x.get("no_progress"):
+        lines.append(f"No-progress exit: {x['no_progress']}")
+    if e.get("max_trades_per_day"):
+        lines.append(f"At most {e['max_trades_per_day']} executed trade(s) per trading date")
+    if e.get("reentry"):
+        lines.append(f"Re-entry: {e['reentry']}")
     lines.append(f"Target: {x['target']}")
     if x.get("time_stop_bars"):
         lines.append(f"Time stop: close of bar {x['time_stop_bars']} after entry")

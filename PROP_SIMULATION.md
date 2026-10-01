@@ -190,3 +190,38 @@ python prop_smoke_real.py [--run-id RUN_...]   # local read-only smoke test on a
 - Trades carry the backtest's cost model. A firm's own commissions or fees are not re-applied.
 - One source run per simulation. Several datasets (e.g. years) are simulated one run at a time and
   are never concatenated.
+
+## Lifecycle layer (ADR-64)
+
+`edgelab/prop/lifecycle.py` + versioned profiles (`configs/prop/profiles/`) simulate evaluation -> funded -> payouts ->
+live-transition for every backtest automatically (`run["prop"]`; `prop profiles|lifecycle` CLI; `/api/prop/profiles`,
+`/api/prop/lifecycle/<run>`). A profile without per-rule evidence reports `RULES NOT VERIFIED` and claims nothing. This layer
+never ranks or selects strategies.
+
+## Configurable rulebook (ADR-65)
+
+Every rule is a field of a versioned profile `configs/prop/profiles/<ID>.v<N>.yaml` (schema 2). To change a rule, edit the
+value in `scripts/prop_default_profiles.py` (or copy a YAML file), bump `VERSION`, run the script: a new version is registered
+and old results stay reproducible from their recorded profile hash. The simulator code does not change.
+
+| Block | Fields |
+|---|---|
+| top | `account_size`, `quantity_unit` (MNQ), `purchase_date`, `trading_day.{timezone, reset_time}` |
+| `evaluation` | `starting_balance`, `profit_target`, `minimum_trading_days`, `max_micros`, `drawdown`, `dll`, `consistency`, `scaling` |
+| `funded` | `starting_balance`, `carry_evaluation_profit`, `max_micros`, `drawdown`, `dll`, `consistency`, `scaling` |
+| `drawdown` | `max_loss`, `mode` (eod_trailing / static), `update_frequency`, `lock_trigger_offset`, `locked_floor_offset`, `breach_comparison`, `enforcement` |
+| `dll` | `enabled`, `amount`, `behavior` (soft_breach / hard_breach), `detection` |
+| `consistency` | `enabled`, `percent`, `applies_to`, `window`, `cushion.{amount_usd, percent_points}` |
+| `scaling` | `enabled`, `basis`, `update` (end_of_session), `persist`, `start_micros`, `tiers[{min_profit, micros}]` |
+| `payout` | `frequency.{mode, winning_days}`, `winning_day_threshold`, `require_positive_cycle_profit`, `min_balance_to_request`, `buffer_offset`, `formula.{mode, share, multiple, profit_basis}`, `minimum`, `cap.{mode, amount, schedule, table}`, `split_trader`, `count_limit`, `cycle_reset`, `after_payout_drawdown`, `request` |
+| `live_transition` | `rule`, `payout_count` |
+| `basis` | `status` (user_specified / official_verified), `source`, `modelling_choices` |
+
+## Rule-basis model (ADR-66, schema 3)
+
+Schema 3 replaces the nested schema-2 blocks with a flat `rules:` map: every key of `edgelab.prop.profiles.RULE_SPEC`
+(`account.*`, `evaluation.*`, `funded.*` including `*.day_boundary.*`, `*.drawdown.measurement`, `*.dll.measurement`,
+`*.consistency.cushion_*`, `*.scaling.effective`, `payout.*`, `live_transition.*`) is `{value, status, basis}` with
+status VERIFIED, ASSUMED_DEFAULT or CUSTOM and no null value. `edgelab.prop.profiles.customize(profile, {rule: value}, basis)`
+produces a CUSTOM new version; register it with `register_profile`. Every result reports the verified / assumed / custom
+counts and names the assumed rules; outcomes read "UNDER DEFAULT ASSUMED RULES" whenever an assumed rule is active.

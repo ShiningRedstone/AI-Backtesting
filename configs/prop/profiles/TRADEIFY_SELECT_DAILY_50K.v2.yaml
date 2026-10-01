@@ -1,0 +1,174 @@
+# EdgeLab prop rule profile, schema 2 (ADR-65). Rules as SUPPLIED BY THE USER on 2026-09-30 (basis: user_specified);
+# not independently verified. Never edit a registered file: bump the version (scripts/prop_default_profiles.py).
+kind: edgelab.prop_profile
+schema_version: 2
+profile_id: TRADEIFY_SELECT_DAILY_50K
+version: 2
+provider: Tradeify
+product: Select Daily
+path: Tradeify Select 50K evaluation -> Select Daily 50K funded -> Select Daily payouts
+account_size: 50000
+currency: USD
+quantity_unit: MNQ
+purchase_date: '2026-10-01'
+effective_date: '2026-09-30'
+description: Select evaluation, Select Daily funded branch.
+trading_day:
+  timezone: America/New_York
+  reset_time: '18:00'
+conventions:
+  on_oversize: fail_incompatible
+  funded_starts: next_trading_day
+  pass_checked: end_of_trading_day
+  payout_checked: end_of_trading_day
+evaluation:
+  starting_balance: 50000
+  profit_target: 3000
+  minimum_trading_days: 3
+  max_micros: 40
+  drawdown:
+    max_loss: 2000
+    mode: eod_trailing
+    update_frequency: end_of_day
+    lock_trigger_offset: 2100
+    locked_floor_offset: 100
+    breach_comparison: at_or_below
+    enforcement: intratrade_bound
+  dll:
+    enabled: false
+    amount: null
+    behavior: null
+    detection: closed_trade
+  consistency:
+    enabled: true
+    percent: 40
+    applies_to: evaluation_pass
+    window: account
+    cushion:
+      amount_usd: 0
+      percent_points: 0
+      note: no cushion
+  scaling:
+    enabled: false
+    basis: null
+    update: null
+    persist: null
+    start_micros: null
+    tiers: null
+funded:
+  starting_balance: 50000
+  carry_evaluation_profit: false
+  max_micros: 40
+  drawdown:
+    max_loss: 2000
+    mode: eod_trailing
+    update_frequency: end_of_day
+    lock_trigger_offset: 2100
+    locked_floor_offset: 100
+    breach_comparison: at_or_below
+    enforcement: intratrade_bound
+  dll:
+    enabled: true
+    amount: 1000
+    behavior: soft_breach
+    detection: closed_trade
+  consistency:
+    enabled: false
+    percent: null
+    applies_to: null
+    window: null
+    cushion: null
+  scaling:
+    enabled: true
+    basis: balance_above_stage_start
+    update: end_of_session
+    persist: false
+    start_micros: 20
+    tiers:
+    - min_profit: 1500
+      micros: 30
+    - min_profit: 2000
+      micros: 40
+payout:
+  enabled: true
+  frequency:
+    mode: daily
+    winning_days: null
+  winning_day_threshold: null
+  require_positive_cycle_profit: true
+  min_balance_to_request: null
+  buffer_offset: 2100
+  formula:
+    mode: cycle_profit_multiple
+    share: null
+    multiple: 2
+    profit_basis: cycle_net_profit
+  minimum: 250
+  cap:
+    mode: by_purchase_date
+    amount: null
+    schedule: null
+    table:
+    - purchased_on_or_after: '2026-09-01'
+      amount: 1250
+  split_trader: 0.9
+  count_limit: null
+  cycle_reset: after_payout
+  after_payout_drawdown: unchanged
+  request: max_allowed
+live_transition:
+  rule: none
+  payout_count: null
+  note: no live-transition rule configured
+basis:
+  status: user_specified
+  specified_on: '2026-09-30'
+  source:
+    id: USER_CANONICAL_DEFAULTS_2026_09_30
+    kind: user_specified
+    title: Canonical default prop rule profiles supplied by the user in the EdgeLab task of 2026-09-30
+    provided_on: '2026-09-30'
+    note: Values as stated by the user. NOT independently verified against provider documentation by EdgeLab.
+  modelling_choices:
+  - path: trading_day.reset_time
+    value: '18:00'
+    note: trading day = CME session ending 18:00 America/New_York (not in the supplied rules)
+  - path: '*.drawdown.breach_comparison'
+    value: at_or_below
+    note: touching the floor counts as a breach
+  - path: '*.drawdown.enforcement'
+    value: intratrade_bound
+    note: '''enforced in real time'': the worst equity inside each trade (balance - MAE, bar resolution) is compared with
+      the floor; this is a conservative bound, not a tick path'
+  - path: '*.dll.detection'
+    value: closed_trade
+    note: a DLL is detected on closed-trade day P&L (bar-resolution limitation)
+  - path: funded.carry_evaluation_profit
+    value: false
+    note: the funded account starts at its own starting_balance
+  - path: payout.request
+    value: max_allowed
+    note: each payout requests the maximum permitted amount
+  - path: payout.after_payout_drawdown
+    value: unchanged
+    note: a payout does not move the drawdown floor
+  - path: '*.drawdown.lock_trigger_offset'
+    value: 2100
+    note: the Tradeify EOD drawdown lock level was not supplied; EdgeLab uses the same structure as the supplied LucidFlex
+      model (lock when the highest EOD balance reaches start + 2,100; locked floor start + 100). Without a lock the floor
+      would trail every payout. CONFIRM or change lock_trigger_offset / locked_floor_offset
+  - path: funded.scaling.persist
+    value: false
+    note: tiers are recalculated each session end from balance above start
+  - path: funded.dll.behavior
+    value: soft_breach
+    note: 'the Select Daily DLL hard/soft behaviour was not supplied: soft (stop for the day) is the default here; set hard_breach
+      to fail the account instead'
+  - path: payout.buffer_offset
+    value: 2100
+    note: a payout never takes the balance below starting_balance + 2,100
+  - path: payout.cap.table
+    value: post-2026-09-01 only
+    note: 'earlier purchase-date caps were not supplied: refused'
+  sources: []
+  evidence: {}

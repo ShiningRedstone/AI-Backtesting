@@ -36,7 +36,8 @@ def check_feature_causality(engine: FeatureEngine, spec: FeatureSpec, n_cuts: in
                             ) -> FeatureCausalityReport:
     n = len(engine.bars)
     full = FeatureEngine(engine.bars, engine.calendar, engine.sessions, engine.volume_type,
-                         engine.tick_size, engine.dataset_id, engine.dataset_hash, cache=None).compute(spec)
+                         engine.tick_size, engine.dataset_id, engine.dataset_hash, cache=None,
+                         volume_refusal=engine.volume_refusal).compute(spec)
     if cuts is None:
         rng = np.random.default_rng(seed)
         lo = min(max(min_bars, n // 20), n - 1)
@@ -44,7 +45,7 @@ def check_feature_causality(engine: FeatureEngine, spec: FeatureSpec, n_cuts: in
     for k in cuts:
         part_eng = FeatureEngine(engine.bars.head(k), engine.calendar, engine.sessions,
                                  engine.volume_type, engine.tick_size, f"{engine.dataset_id}#cut{k}",
-                                 cache=None)
+                                 cache=None, volume_refusal=engine.volume_refusal)
         part = part_eng.compute(spec)
         for name, a_full in full.arrays.items():
             same = _same(a_full[:k], part.arrays[name])

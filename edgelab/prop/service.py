@@ -26,6 +26,113 @@ SYNTHETIC_RULES_LABEL = ("SYNTHETIC TEST-ONLY RULES: at least one account uses a
                          "does not describe any real prop firm or program.")
 
 
+# ---------------------------------------------------------------------------- lifecycle (ADR-64)
+_PROFILE_CACHE: dict = {}
+
+
+def default_profiles(root: Path | str) -> list[dict]:
+    """The registered rule profiles (latest version of each), cached per (root, registry mtime)."""
+    from edgelab.prop.profiles import _registry_path, load_default_profiles, profiles_dir
+    reg = _registry_path(profiles_dir(root))
+    key = (str(Path(root).resolve()), reg.stat().st_mtime_ns if reg.exists() else None)
+    if key not in _PROFILE_CACHE:
+        _PROFILE_CACHE.clear()
+        _PROFILE_CACHE[key] = load_default_profiles(root)
+    return _PROFILE_CACHE[key]
+
+
+def profile_status(root: Path | str) -> dict:
+    """Every registered (latest) profile: identity, rule-basis counts and each ASSUMED_DEFAULT / CUSTOM rule."""
+    from edgelab.prop.profiles import check_registry, profile_identity, profiles_dir, rule_basis
+    rows = []
+    for p in default_profiles(root):
+        row = profile_identity(p)
+        if p.get("schema_version") == 3:
+            rb = rule_basis(p)
+            row.update(assumed_rules=rb["assumed_rules"], custom_rules=rb["custom_rules"])
+        rows.append(row)
+    d = profiles_dir(root)
+    return {"profiles": rows, "registry_problems": check_registry(d) if d.is_dir() else ["profiles directory missing"]}
+
+
+def base_result(trades) -> dict:
+    """The BASE strategy result the prop layer audits (the full research period; never shortened by a prop failure)."""
+    import numpy as np
+    from edgelab.prop.lifecycle import quantity_stats
+    q = quantity_stats(trades)
+    n = 0 if trades is None else int(len(trades))
+    if n == 0:
+        return {"trade_count": 0, "net_pnl": 0.0, "expectancy": None, "profit_factor": None, "max_drawdown": 0.0,
+                "gross_profit": 0.0, "gross_loss": 0.0, "total_costs": 0.0, "max_contracts": None,
+                "average_contracts": None, "quantity": q}
+    net = trades["net_usd"].astype(float).to_numpy()
+    eq = np.concatenate([[0.0], np.cumsum(net)])
+    gains, losses = float(net[net > 0].sum()), float(-net[net < 0].sum())
+    return {"trade_count": n, "net_pnl": round(float(net.sum()), 6), "expectancy": round(float(net.mean()), 6),
+            "profit_factor": round(gains / losses, 6) if losses > 0 else None,
+            "max_drawdown": round(float((np.maximum.accumulate(eq) - eq).max()), 6),
+            "gross_profit": round(gains, 6), "gross_loss": round(losses, 6),
+            "total_costs": round(float(trades["cost_usd"].astype(float).sum()), 6) if "cost_usd" in trades.columns else None,
+            "max_contracts": q["max"], "average_contracts": q["mean"], "quantity": q,
+            "units": "USD (net P&L after costs; drawdown on the closed-trade equity path)"}
+
+
+def outcomes(root: Path | str, trades, *, account: Mapping | None = None, assumptions: Mapping | None = None,
+             detail: bool = False) -> dict:
+    """The mandatory prop result of one backtest (ADR-64/65): the BASE result plus one INDEPENDENT lifecycle result per rule
+    profile, all from the same chronological trades (the backtest is never re-run per profile). No combined score, no
+    ranking. ``account`` = the research account that SIZED the run; ``assumptions`` = the run's assumptions (the traded
+    contract decides whether micro-contract limits apply)."""
+    from edgelab.engine.sizing import DEFAULT_RESEARCH_ACCOUNT
+    from edgelab.prop.lifecycle import LIFECYCLE_VERSION, compact, simulate_lifecycle
+    acct = dict(account or DEFAULT_RESEARCH_ACCOUNT)
+    contract = ((assumptions or {}).get("execution_contract") or {}).get("contract")
+    results = []
+    for p in default_profiles(root):
+        unit = p["rules"]["account.quantity_unit"]["value"] if p.get("schema_version") == 3 else p.get("quantity_unit")
+        if unit and contract != unit:
+            ident = {"profile_id": p["profile_id"], "version": p["version"], "profile_hash": _profile_hash(p)}
+            msg = (f"NOT APPLICABLE - the rule profile limits {unit} contracts but this run's trades are sized in "
+                   f"{contract or 'dataset units (no execution contract declared)'}")
+            out = {"profile": ident, "status": "NOT_APPLICABLE", "final_status": msg, "headline": [msg],
+                   "summary": {"rule_profile_id": p["profile_id"], "rule_profile_version": p["version"],
+                               "lifecycle_status": "NOT_APPLICABLE", "evaluation_status": "NOT_APPLICABLE",
+                               "funded_status": "NOT_APPLICABLE", "final_status": msg}}
+        else:
+            try:
+                r = simulate_lifecycle(trades, p)
+                out = r if detail else compact(r)
+            except PropDataError as exc:                      # never silently skipped
+                msg = f"NOT_APPLICABLE - the trade records cannot be simulated under this profile: {exc}"
+                out = {"profile": {"profile_id": p["profile_id"], "version": p["version"]}, "status": "NOT_APPLICABLE",
+                       "final_status": msg, "error": str(exc), "headline": [msg]}
+        size = p["rules"]["account.size"]["value"] if p.get("schema_version") == 3 else p["account_size"]
+        out = {**out, "account_size": size, "sizing_account_matches_profile": float(acct["starting_equity"]) == float(size)}
+        results.append(out)
+    return {"simulator_version": LIFECYCLE_VERSION, "research_account": acct, "execution_contract": contract,
+            "base": base_result(trades), "profiles": results,
+            "note": "prop results are a downstream audit of the strategy's recorded trades under each stated rule profile; "
+                    "they never select, rank or alter the strategy, its trades or the strategy universe"}
+
+
+def _profile_hash(p: Mapping) -> str:
+    from edgelab.prop.profiles import profile_hash
+    return profile_hash(p)
+
+
+def lifecycle_for_run(svc, run_id: str, profile_ids: Sequence[str] | None = None) -> dict:
+    """Full-detail lifecycle re-simulation of a STORED run (read-only; refuses if the stored trades changed)."""
+    rec, trades = svc.store.load_run(run_id)
+    stored, recomputed = rec.get("trades_hash"), _stored_trades_hash(trades)
+    if stored and recomputed != stored:
+        raise PropDataError(f"stored trades of {run_id} do not match the run's trades_hash; refusing to simulate")
+    full = outcomes(svc.root, trades, assumptions=rec.get("assumptions"), detail=True)
+    if profile_ids:
+        full["profiles"] = [r for r in full["profiles"] if r["profile"]["profile_id"] in set(profile_ids)]
+    return {"run_id": run_id, "strategy_id": rec["strategy"]["strategy_id"], "trades_hash": stored,
+            "n_trades": int(len(trades)), **full}
+
+
 def config_dir(root: Path) -> Path:
     return Path(root) / "configs" / "prop"
 

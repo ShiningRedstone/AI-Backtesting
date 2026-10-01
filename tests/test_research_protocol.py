@@ -110,7 +110,7 @@ class TestProtocolRecord(ProtocolBase):
         self.assertEqual(mat["source_dataset"]["content_hash"], self.content_hash)
         self.assertEqual((mat["execution"]["spread_source"], mat["execution"]["quote_model"]), ("quotes", "directional_bid_ask"))
         self.assertEqual((mat["trial_budget"]["max_unique_trials"], mat["holdout_budget"]["max_unique_candidate_evaluations"]),
-                         (2000, 10))
+                         (10000, 10))
         ac = mat["acceptance_criteria"]
         self.assertEqual((ac["min_oos_sample_label"], ac["min_oos_expectancy_r_exclusive"], ac["min_profit_factor_exclusive"],
                           ac["cost_stress"]["multipliers"], ac["in_sample_rank_sufficient"], ac["single_oos_pass_sufficient"]),
@@ -239,7 +239,8 @@ class TestHoldoutLock(ProtocolBase):
         self.assertIn(out["outcome"], ("HOLDOUT_CRITERIA_MET", "HOLDOUT_CRITERIA_NOT_MET"))
         self.assertEqual(set(out["criteria"]), {"sample", "expectancy", "adjusted_confidence", "profit_factor",
                                                 "random_control", "cost_stress"})
-        self.assertEqual(out["multiple_testing"]["family_size"], n_trials)
+        self.assertEqual(out["multiple_testing"]["family_size"], 10_000)                       # declared, not counted
+        self.assertLess(n_trials, 10_000)
         rec, _ = s.store.load_run(out["run_id"])
         self.assertEqual((rec["status"], pd.Timestamp(rec["dataset"]["start"]), pd.Timestamp(rec["dataset"]["end"])),
                          ("OUT_OF_SAMPLE", pd.Timestamp(h["first_bar"]), pd.Timestamp(h["last_bar"])))

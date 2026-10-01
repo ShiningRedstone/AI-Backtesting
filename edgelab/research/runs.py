@@ -27,10 +27,11 @@ STATUSES = ("UNTESTED", "IN_SAMPLE", "VALIDATION", "OUT_OF_SAMPLE", "WALK_FORWAR
 def build_run_record(cfg: Mapping, result: BacktestResult, metrics: Mapping,
                      seed: int | None = None, status: str = "IN_SAMPLE",
                      notes: str = "", ai_hypotheses: list | None = None,
-                     parent_strategy_id: str | None = None, mutation: str | None = None) -> dict[str, Any]:
+                     parent_strategy_id: str | None = None, mutation: str | None = None,
+                     prop: Mapping | None = None) -> dict[str, Any]:
     if status not in STATUSES:
         raise ValueError(f"status must be one of {STATUSES}")
-    return {
+    rec = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
         "strategy": {"strategy_id": result.strategy_id, **result.strategy_spec,
@@ -53,6 +54,9 @@ def build_run_record(cfg: Mapping, result: BacktestResult, metrics: Mapping,
         "notes": notes,
         "disclaimer": "Historical result under the stated assumptions; not a forecast.",
     }
+    if prop is not None:                 # ADR-64: the mandatory prop-lifecycle outcome (per rule profile, never a score)
+        rec["prop"] = dict(prop)
+    return rec
 
 
 def record_run(store: ResultStore, cfg: Mapping, result: BacktestResult, metrics: Mapping,

@@ -119,7 +119,7 @@ class TestResearchTerminal(ProtocolBase):
         self.assertEqual(ex["quote_sides"], {"long_entry": "ASK", "long_exit": "BID", "short_entry": "BID", "short_exit": "ASK"})
         self.assertIn("Nothing here labels a strategy profitable", ov["note"])
         protos = c.get("/api/protocols").get_json()
-        self.assertEqual(protos[0]["protocol_version"], 2)
+        self.assertEqual(protos[0]["protocol_version"], 3)
 
     def test_run_analytics_breakdowns_are_consistent(self):
         c, svc = self.client()

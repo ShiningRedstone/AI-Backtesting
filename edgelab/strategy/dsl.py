@@ -41,30 +41,33 @@ DIRECTIONS = ("long", "short", "both")
 ENTRY_ORDER_TYPES = ("market", "stop", "limit")
 STOP_TYPES = ("points", "atr", "price")
 TARGET_TYPES = ("none", "points", "atr", "price", "risk_reward")
-SIZING_MODES = ("fixed", "risk")
+SIZING_MODES = ("fixed", "risk", "equity_risk")
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Concepts the numerical engine cannot execute. Named explicitly so users get a precise
 # refusal instead of a generic "unknown key" (and so nobody fakes them in the compiler).
 UNSUPPORTED = {
-    "trailing_stop": "trailing stops are not supported by the backtest engine (stops are fixed at entry)",
-    "trailing": "trailing stops are not supported by the backtest engine (stops are fixed at entry)",
-    "breakeven": "moving the stop to breakeven is not supported (stops are fixed at entry)",
+    "trailing_stop": "trailing stops are not supported under 'trailing_stop'; declare them in exit.trailing (mode distance | level | breakeven)",
+    "breakeven": "breakeven is not supported as a top-level key; declare it inside exit.trailing.breakeven",
     "partial_exits": "partial exits / scaling out are not supported (one fill in, one fill out)",
     "scale_out": "partial exits / scaling out are not supported (one fill in, one fill out)",
     "pyramiding": "pyramiding / scaling in is not supported (one position at a time)",
     "scale_in": "pyramiding / scaling in is not supported (one position at a time)",
-    "cooldown_after_exit": "a cooldown measured from trade EXITS is not supported: exits are only known "
-                           "inside the backtest. Use entry.cooldown_bars (measured between signals).",
+    "cooldown_after_exit": "a top-level cooldown_after_exit is not supported; use entry.cooldown_bars (measured "
+                           "between signals) or entry.reentry (measured from the trade exit inside the backtest).",
     "lead": "leads / negative lags would use future bars (non-causal)",
     "future": "future references are not allowed (non-causal)",
 }
 
 TOP_KEYS = {"dsl_version", "name", "description", "family", "timeframe", "sessions", "parameters",
             "entry", "exit", "sizing"}
-ENTRY_KEYS = {"direction", "order", "long", "short", "session", "trading_weekdays", "cooldown_bars"}
-EXIT_KEYS = {"stop", "target", "time_stop_bars", "max_hold_bars", "signal"}
+ENTRY_KEYS = {"direction", "order", "long", "short", "session", "trading_weekdays", "cooldown_bars",
+              "max_trades_per_day", "reentry"}
+EXIT_KEYS = {"stop", "target", "time_stop_bars", "max_hold_bars", "signal", "trailing", "no_progress"}
+TRAIL_MODES = ("distance", "level", "breakeven")
+TRAIL_ACTIVATIONS = ("immediate", "points", "r", "atr")
+TRAIL_TRIGGERS = ("points", "r", "atr")
 
 
 # =============================================================================== errors
@@ -295,7 +298,7 @@ class _Checker:
 
     def unknown_keys(self, node: Mapping, allowed: set, path: str):
         for k in node:
-            if k in UNSUPPORTED:
+            if k in UNSUPPORTED and k not in allowed:
                 self.err(f"{path}.{k}" if path else k, UNSUPPORTED[k])
             elif k not in allowed:
                 self.err(f"{path}.{k}" if path else k, f"unknown key {k!r}", _suggest(k, allowed))
@@ -511,6 +514,22 @@ def _validate_resolved(ck: _Checker, r: Mapping) -> None:
     cd = entry.get("cooldown_bars", 0)
     if not isinstance(cd, int) or isinstance(cd, bool) or cd < 0:
         ck.err("entry.cooldown_bars", "cooldown_bars must be an integer >= 0")
+    mt = entry.get("max_trades_per_day")
+    if mt is not None and (not isinstance(mt, int) or isinstance(mt, bool) or mt < 1):
+        ck.err("entry.max_trades_per_day", "max_trades_per_day must be an integer >= 1 (executed trades per trading date)")
+    ree = entry.get("reentry")
+    if ree is not None:
+        if not isinstance(ree, Mapping) or not ree:
+            ck.err("entry.reentry", "reentry must be a non-empty mapping")
+        else:
+            ck.unknown_keys(ree, {"cooldown_bars", "block_day_after"}, "entry.reentry")
+            rc = ree.get("cooldown_bars", 0)
+            if not isinstance(rc, int) or isinstance(rc, bool) or rc < 0:
+                ck.err("entry.reentry.cooldown_bars", "cooldown_bars must be an integer >= 0 (bars after a trade exit)")
+            if ree.get("block_day_after") not in (None, "stop", "target", "any"):
+                ck.err("entry.reentry.block_day_after", "must be stop | target | any")
+            if not rc and ree.get("block_day_after") is None:
+                ck.err("entry.reentry", "reentry needs cooldown_bars > 0 and/or block_day_after")
     # exit
     ex = r.get("exit")
     if not isinstance(ex, Mapping):
@@ -535,6 +554,10 @@ def _validate_resolved(ck: _Checker, r: Mapping) -> None:
     if isinstance(ex.get("time_stop_bars"), int) and isinstance(ex.get("max_hold_bars"), int) \
             and ex["max_hold_bars"] >= ex["time_stop_bars"]:
         ck.warn("exit.max_hold_bars", "max_hold_bars >= time_stop_bars never binds")
+    if ex.get("trailing") is not None:
+        _validate_trailing(ck, ex["trailing"], sides, stop)
+    if ex.get("no_progress") is not None:
+        _validate_no_progress(ck, ex["no_progress"], ex.get("trailing"))
     sig = ex.get("signal")
     if sig is not None:
         if not isinstance(sig, Mapping):
@@ -557,19 +580,173 @@ def _validate_resolved(ck: _Checker, r: Mapping) -> None:
         ck.err("sizing", "sizing must be a mapping")
         return
     mode = sz.get("mode")
+    _validate_contract(ck, sz)
     if mode not in SIZING_MODES:
         ck.err("sizing.mode", f"unsupported sizing mode {mode!r}", f"supported: {SIZING_MODES}")
     elif mode == "fixed":
-        ck.unknown_keys(sz, {"mode", "quantity"}, "sizing")
+        ck.unknown_keys(sz, {"mode", "quantity", "contract"}, "sizing")
         if not _num(sz.get("quantity")) or sz["quantity"] <= 0:
             ck.err("sizing.quantity", "fixed sizing needs quantity > 0 (contracts or CFD units)")
+    elif mode == "equity_risk":
+        ck.unknown_keys(sz, {"mode", "risk_pct", "max_quantity", "contract"}, "sizing")
+        if "starting_equity" in sz:
+            ck.err("sizing.starting_equity", "the account size is a run/evaluation parameter, not part of a strategy "
+                                             "(its identity must not depend on the account)")
+        if not _num(sz.get("risk_pct")) or not 0 < sz["risk_pct"] <= 10:
+            ck.err("sizing.risk_pct", "equity_risk needs risk_pct in (0, 10] (percent of the run account's equity at the signal)")
+        mq = sz.get("max_quantity")
+        if mq is not None and (not isinstance(mq, int) or isinstance(mq, bool) or mq < 1):
+            ck.err("sizing.max_quantity", "max_quantity must be an integer >= 1")
     else:
-        ck.unknown_keys(sz, {"mode", "risk_usd", "max_quantity"}, "sizing")
+        ck.unknown_keys(sz, {"mode", "risk_usd", "max_quantity", "contract"}, "sizing")
         if not _num(sz.get("risk_usd")) or sz["risk_usd"] <= 0:
             ck.err("sizing.risk_usd", "risk sizing needs risk_usd > 0 (your risk budget per trade)")
         mq = sz.get("max_quantity")
         if mq is not None and (not isinstance(mq, int) or isinstance(mq, bool) or mq < 1):
             ck.err("sizing.max_quantity", "max_quantity must be an integer >= 1")
+
+
+def _posnum(v) -> bool:
+    return _num(v) and v > 0
+
+
+def _validate_trailing(ck: _Checker, tr: Any, sides: tuple, stop: Mapping) -> None:
+    """exit.trailing (ADR-61). Semantics live in engine/fills.py; this only checks the declaration."""
+    p = "exit.trailing"
+    if not isinstance(tr, Mapping):
+        ck.err(p, "trailing must be a mapping")
+        return
+    ck.unknown_keys(tr, {"mode", "distance", "level", "activation", "breakeven", "atr_period", "update"}, p)
+    mode = tr.get("mode")
+    if mode not in TRAIL_MODES:
+        ck.err(f"{p}.mode", f"invalid trailing mode {mode!r}", f"one of {TRAIL_MODES}")
+        return
+    if stop.get("type") is None:
+        ck.err(p, "trailing needs a protective initial stop (exit.stop)")
+    uses_atr = False
+    dist = tr.get("distance")
+    if mode == "distance":
+        if not isinstance(dist, Mapping) or dist.get("type") not in ("points", "atr"):
+            ck.err(f"{p}.distance", "distance trailing needs distance: {type: points|atr, points|multiple: > 0}")
+        else:
+            ck.unknown_keys(dist, {"type", "points" if dist["type"] == "points" else "multiple"}, f"{p}.distance")
+            key = "points" if dist["type"] == "points" else "multiple"
+            if not _posnum(dist.get(key)):
+                ck.err(f"{p}.distance.{key}", f"{key} must be > 0")
+            uses_atr |= dist["type"] == "atr"
+    elif dist is not None:
+        ck.err(f"{p}.distance", f"distance applies to mode 'distance' only (mode is {mode!r})")
+    lv = tr.get("level")
+    if mode == "level":
+        if not isinstance(lv, Mapping):
+            ck.err(f"{p}.level", "level trailing needs level: {long: operand, short: operand}")
+        else:
+            ck.unknown_keys(lv, {"long", "short"}, f"{p}.level")
+            for side in ("long", "short"):
+                if side in sides and side not in lv:
+                    ck.err(f"{p}.level.{side}", f"level trailing needs a '{side}' operand")
+                elif side in lv and side not in sides:
+                    ck.err(f"{p}.level.{side}", f"level for {side} positions, but direction does not trade {side}")
+                elif side in lv:
+                    ck.operand(lv[side], f"{p}.level.{side}")
+    elif lv is not None:
+        ck.err(f"{p}.level", f"level applies to mode 'level' only (mode is {mode!r})")
+    act = tr.get("activation", {"type": "immediate"})
+    if mode == "breakeven" and "activation" not in tr:
+        pass
+    elif not isinstance(act, Mapping) or act.get("type") not in TRAIL_ACTIVATIONS:
+        ck.err(f"{p}.activation", "activation needs type immediate | points | r | atr")
+    else:
+        ck.unknown_keys(act, {"type", "value"}, f"{p}.activation")
+        if mode == "breakeven":
+            ck.err(f"{p}.activation", "breakeven mode has no trailing activation (use breakeven.trigger)")
+        elif act["type"] == "immediate":
+            if "value" in act:
+                ck.err(f"{p}.activation.value", "an immediate activation takes no value")
+        elif not _posnum(act.get("value")):
+            ck.err(f"{p}.activation.value", "a triggered activation needs value > 0")
+        uses_atr |= act.get("type") == "atr"
+    be = tr.get("breakeven")
+    if be is None:
+        if mode == "breakeven":
+            ck.err(f"{p}.breakeven", "mode 'breakeven' needs a breakeven block")
+    elif not isinstance(be, Mapping):
+        ck.err(f"{p}.breakeven", "breakeven must be a mapping")
+    else:
+        ck.unknown_keys(be, {"trigger", "offset_points"}, f"{p}.breakeven")
+        trg = be.get("trigger")
+        if not isinstance(trg, Mapping) or trg.get("type") not in TRAIL_TRIGGERS or not _posnum(trg.get("value")):
+            ck.err(f"{p}.breakeven.trigger", "trigger needs {type: points|r|atr, value: > 0}")
+        else:
+            ck.unknown_keys(trg, {"type", "value"}, f"{p}.breakeven.trigger")
+            uses_atr |= trg["type"] == "atr"
+        off = be.get("offset_points", 0)
+        if not _num(off) or off < 0:
+            ck.err(f"{p}.breakeven.offset_points", "offset_points must be a number >= 0")
+    ap = tr.get("atr_period", 14)
+    if not isinstance(ap, int) or isinstance(ap, bool) or ap < 1:
+        ck.err(f"{p}.atr_period", "atr_period must be an integer >= 1")
+    elif "atr_period" in tr and not uses_atr:
+        ck.err(f"{p}.atr_period", "atr_period is given but no ATR-based distance, activation or trigger uses it")
+    up = tr.get("update", {})
+    if not isinstance(up, Mapping):
+        ck.err(f"{p}.update", "update must be a mapping")
+    else:
+        ck.unknown_keys(up, {"every_bars", "only_new_extreme", "min_step_points"}, f"{p}.update")
+        eb = up.get("every_bars", 1)
+        if not isinstance(eb, int) or isinstance(eb, bool) or eb < 1:
+            ck.err(f"{p}.update.every_bars", "every_bars must be an integer >= 1")
+        if not isinstance(up.get("only_new_extreme", False), bool):
+            ck.err(f"{p}.update.only_new_extreme", "only_new_extreme must be true/false")
+        ms = up.get("min_step_points", 0)
+        if not _num(ms) or ms < 0:
+            ck.err(f"{p}.update.min_step_points", "min_step_points must be a number >= 0")
+        if mode == "breakeven" and up:
+            ck.err(f"{p}.update", "breakeven mode has no trailing update rule")
+
+
+def _validate_contract(ck: _Checker, sz: Mapping) -> None:
+    """sizing.contract (ADR-63): the execution contract (a symbol in configs/instruments.yaml, e.g. MNQ). A named
+    contract trades WHOLE contracts: a fixed quantity and any cap must be integers."""
+    c = sz.get("contract")
+    if c is None:
+        return
+    if not isinstance(c, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", c):
+        ck.err("sizing.contract", "contract must be an instrument symbol such as MNQ")
+        return
+    q = sz.get("quantity")
+    if sz.get("mode") == "fixed" and _num(q) and not float(q).is_integer():
+        ck.err("sizing.quantity", f"a named contract ({c}) trades whole contracts; {q!r} is fractional")
+
+
+def _validate_no_progress(ck: _Checker, npg: Any, trailing: Any) -> None:
+    """exit.no_progress (ADR-62): exit at the close of bar N if the favorable excursion is still below a threshold."""
+    p = "exit.no_progress"
+    if not isinstance(npg, Mapping):
+        ck.err(p, "no_progress must be a mapping")
+        return
+    ck.unknown_keys(npg, {"bars", "min_progress", "atr_period"}, p)
+    b = npg.get("bars")
+    if not isinstance(b, int) or isinstance(b, bool) or b < 2:
+        ck.err(f"{p}.bars", "bars must be an integer >= 2 (checked at the close of bar N since entry; entry bar = 1)")
+    mp = npg.get("min_progress")
+    if not isinstance(mp, Mapping) or mp.get("type") not in TRAIL_TRIGGERS or not _posnum(mp.get("value")):
+        ck.err(f"{p}.min_progress", "min_progress needs {type: points|r|atr, value: > 0}")
+        return
+    ck.unknown_keys(mp, {"type", "value"}, f"{p}.min_progress")
+    ap = npg.get("atr_period", 14)
+    if not isinstance(ap, int) or isinstance(ap, bool) or ap < 1:
+        ck.err(f"{p}.atr_period", "atr_period must be an integer >= 1")
+    elif "atr_period" in npg and mp["type"] != "atr":
+        ck.err(f"{p}.atr_period", "atr_period is given but min_progress is not ATR-based")
+    elif mp["type"] == "atr" and isinstance(trailing, Mapping) and trailing.get("atr_period", 14) != ap \
+            and _trail_uses_atr(trailing):
+        ck.err(f"{p}.atr_period", "trailing and no_progress must use the same atr_period (one ATR series per strategy)")
+
+
+def _trail_uses_atr(tr: Mapping) -> bool:
+    d, a, b = tr.get("distance"), tr.get("activation"), (tr.get("breakeven") or {}).get("trigger")
+    return any(isinstance(x, Mapping) and x.get("type") == "atr" for x in (d, a, b))
 
 
 def _stop_or_target(ck: _Checker, d: Mapping, path: str, types: tuple, sides: tuple) -> None:
@@ -740,6 +917,35 @@ def _canonical_exit_part(d: Mapping) -> dict:
     return dict(sorted(d.items()))
 
 
+def canonical_trailing(tr: Mapping) -> dict:
+    """Normal form: defaults filled, irrelevant keys dropped, numbers as floats (no cosmetic variants)."""
+    mode = tr["mode"]
+    f = lambda v: float(v)
+    out: dict = {"mode": mode}
+    uses_atr = False
+    if mode == "distance":
+        d = tr["distance"]
+        key = "points" if d["type"] == "points" else "multiple"
+        out["distance"] = {"type": d["type"], key: f(d[key])}
+        uses_atr |= d["type"] == "atr"
+    if mode == "level":
+        out["level"] = {k: canonical_operand(v) for k, v in sorted(tr["level"].items())}
+    if mode != "breakeven":
+        a = tr.get("activation") or {"type": "immediate"}
+        out["activation"] = {"type": a["type"]} if a["type"] == "immediate" else {"type": a["type"], "value": f(a["value"])}
+        uses_atr |= a["type"] == "atr"
+        u = tr.get("update") or {}
+        out["update"] = {"every_bars": int(u.get("every_bars", 1)), "only_new_extreme": bool(u.get("only_new_extreme", False)),
+                         "min_step_points": f(u.get("min_step_points", 0))}
+    if tr.get("breakeven"):
+        b = tr["breakeven"]
+        out["breakeven"] = {"trigger": {"type": b["trigger"]["type"], "value": f(b["trigger"]["value"])},
+                            "offset_points": f(b.get("offset_points", 0))}
+        uses_atr |= b["trigger"]["type"] == "atr"
+    out["atr_period"] = int(tr.get("atr_period", 14)) if uses_atr else None
+    return out
+
+
 def _canonical_body(r: Mapping) -> dict:
     entry = dict(r.get("entry") or {})
     order = dict(entry.get("order") or {"type": "market"})
@@ -757,6 +963,11 @@ def _canonical_body(r: Mapping) -> dict:
                                       key=WEEKDAY_NAMES.index) if entry.get("trading_weekdays") and
                                not _is_ref(entry["trading_weekdays"]) else entry.get("trading_weekdays")),
           "cooldown_bars": entry.get("cooldown_bars", 0)}
+    if entry.get("max_trades_per_day") is not None:          # only when declared: other identities are unchanged
+        ce["max_trades_per_day"] = int(entry["max_trades_per_day"])
+    if entry.get("reentry"):
+        ce["reentry"] = {"cooldown_bars": int(entry["reentry"].get("cooldown_bars", 0)),
+                         "block_day_after": entry["reentry"].get("block_day_after")}
     ex = dict(r.get("exit") or {})
     sig = ex.get("signal")
     cx = {"stop": _canonical_exit_part(ex.get("stop") or {}),
@@ -765,9 +976,18 @@ def _canonical_body(r: Mapping) -> dict:
           "signal": None if not sig else {s: canonical_condition(sig[s]) if sig.get(s) is not None else None
                                           for s in ("long", "short")}}
     sz = dict(r.get("sizing") or {"mode": "fixed", "quantity": 1})
-    for k in ("quantity", "risk_usd"):
+    if sz.get("contract") is None:
+        sz.pop("contract", None)                 # absent stays absent: identities without a contract are unchanged
+    for k in ("quantity", "risk_usd", "risk_pct"):
         if _num(sz.get(k)):
             sz[k] = float(sz[k])
+    if ex.get("trailing"):               # only when declared: identities of strategies without it are unchanged
+        cx["trailing"] = canonical_trailing(ex["trailing"])
+    if ex.get("no_progress"):
+        npg = ex["no_progress"]
+        cx["no_progress"] = {"bars": int(npg["bars"]), "type": npg["min_progress"]["type"],
+                             "value": float(npg["min_progress"]["value"]),
+                             "atr_period": int(npg.get("atr_period", 14)) if npg["min_progress"]["type"] == "atr" else None}
     tf = r.get("timeframe")
     try:
         tf = f"{timeframe_minutes(str(tf))}m" if not _is_ref(tf) else tf

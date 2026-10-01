@@ -75,11 +75,15 @@ class FeatureFrame(Mapping):
 class FeatureEngine:
     def __init__(self, bars: BarArrays, calendar: SessionCalendar,
                  sessions: Mapping[str, SessionWindow], volume_type: str, tick_size: float,
-                 dataset_id: str, dataset_hash: str | None = None, cache: FeatureCache | None = None):
+                 dataset_id: str, dataset_hash: str | None = None, cache: FeatureCache | None = None,
+                 volume_refusal: str | None = None):
         self.bars = bars
         self.calendar = calendar
         self.sessions = dict(sessions)
         self.volume_type = volume_type
+        # ADR-62: an instrument whose volume is provider-defined (e.g. Dukascopy decimal volume, NOT CME
+        # exchange-traded volume) never feeds volume-weighted features. Not part of any cache key.
+        self.volume_refusal = volume_refusal
         self.tick_size = tick_size
         self.dataset_id = dataset_id
         self.dataset_hash = dataset_hash or bars.content_hash()
@@ -94,7 +98,8 @@ class FeatureEngine:
                     cache: FeatureCache | None = None) -> "FeatureEngine":
         ds.verify_unchanged()
         return cls(ds.bars, ds.calendar, sessions, ds.manifest.volume_type, ds.instrument.tick_size,
-                   ds.manifest.dataset_id, ds.manifest.content_hash, cache)
+                   ds.manifest.dataset_id, ds.manifest.content_hash, cache,
+                   volume_refusal=(ds.instrument.extra or {}).get("volume_semantics"))
 
     # ------------------------------------------------------------------ contexts
     def _context(self, tf: int) -> tuple[BarArrays, np.ndarray]:
@@ -177,6 +182,9 @@ class FeatureEngine:
     def _check_requirements(self, spec: FeatureSpec) -> None:
         fd = spec.definition
         if "volume" in fd.requires:
+            if self.volume_refusal:
+                raise FeatureUnavailable(f"{spec.label} needs exchange volume; refused for this instrument: "
+                                         f"{self.volume_refusal}")
             if self.volume_type not in VOLUME_OK:
                 raise FeatureUnavailable(f"{spec.label} needs volume; dataset volume_type="
                                          f"{self.volume_type!r}")

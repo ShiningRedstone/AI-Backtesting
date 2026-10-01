@@ -1,0 +1,167 @@
+# EdgeLab prop rule profile, schema 2 (ADR-65). Rules as SUPPLIED BY THE USER on 2026-09-30 (basis: user_specified);
+# not independently verified. Never edit a registered file: bump the version (scripts/prop_default_profiles.py).
+kind: edgelab.prop_profile
+schema_version: 2
+profile_id: LUCID_LUCIDFLEX_50K
+version: 2
+provider: Lucid Trading
+product: LucidFlex
+path: LucidFlex 50K evaluation -> LucidFlex 50K funded -> LucidFlex payouts -> live-transition eligibility
+account_size: 50000
+currency: USD
+quantity_unit: MNQ
+purchase_date: null
+effective_date: '2026-09-30'
+description: LucidFlex only (NOT LucidPro, NOT LucidDaily).
+trading_day:
+  timezone: America/New_York
+  reset_time: '18:00'
+conventions:
+  on_oversize: fail_incompatible
+  funded_starts: next_trading_day
+  pass_checked: end_of_trading_day
+  payout_checked: end_of_trading_day
+evaluation:
+  starting_balance: 50000
+  profit_target: 3000
+  minimum_trading_days: null
+  max_micros: 40
+  drawdown:
+    max_loss: 2000
+    mode: eod_trailing
+    update_frequency: end_of_day
+    lock_trigger_offset: 2100
+    locked_floor_offset: 100
+    breach_comparison: at_or_below
+    enforcement: intratrade_bound
+  dll:
+    enabled: false
+    amount: null
+    behavior: null
+    detection: closed_trade
+  consistency:
+    enabled: true
+    percent: 50
+    applies_to: evaluation_pass
+    window: account
+    cushion:
+      amount_usd: 0
+      percent_points: 0
+      note: 'LucidFlex published consistency cushion: the magnitude was not supplied, so it is 0 (the normal 50% rule applies
+        exactly). Set amount_usd / percent_points to model it; results report the normal rule and the cushioned rule separately.'
+  scaling:
+    enabled: false
+    basis: null
+    update: null
+    persist: null
+    start_micros: null
+    tiers: null
+funded:
+  starting_balance: 50000
+  carry_evaluation_profit: false
+  max_micros: 40
+  drawdown:
+    max_loss: 2000
+    mode: eod_trailing
+    update_frequency: end_of_day
+    lock_trigger_offset: 2100
+    locked_floor_offset: 100
+    breach_comparison: at_or_below
+    enforcement: intratrade_bound
+  dll:
+    enabled: false
+    amount: null
+    behavior: null
+    detection: closed_trade
+  consistency:
+    enabled: false
+    percent: null
+    applies_to: null
+    window: null
+    cushion: null
+  scaling:
+    enabled: true
+    basis: balance_above_stage_start
+    update: end_of_session
+    persist: false
+    start_micros: 20
+    tiers:
+    - min_profit: 1000
+      micros: 30
+    - min_profit: 2000
+      micros: 40
+payout:
+  enabled: true
+  frequency:
+    mode: winning_days
+    winning_days: 5
+  winning_day_threshold: 150
+  require_positive_cycle_profit: true
+  min_balance_to_request: null
+  buffer_offset: 0
+  formula:
+    mode: share_of_profit
+    share: 0.5
+    multiple: null
+    profit_basis: balance_above_stage_start
+  minimum: 500
+  cap:
+    mode: fixed
+    amount: 2000
+    schedule: null
+    table: null
+  split_trader: 0.9
+  count_limit: 5
+  cycle_reset: after_payout
+  after_payout_drawdown: unchanged
+  request: max_allowed
+live_transition:
+  rule: after_payout_count
+  payout_count: 5
+  note: eligibility per the configured rule only; a transition is not guaranteed and live-account rules are not simulated
+basis:
+  status: user_specified
+  specified_on: '2026-09-30'
+  source:
+    id: USER_CANONICAL_DEFAULTS_2026_09_30
+    kind: user_specified
+    title: Canonical default prop rule profiles supplied by the user in the EdgeLab task of 2026-09-30
+    provided_on: '2026-09-30'
+    note: Values as stated by the user. NOT independently verified against provider documentation by EdgeLab.
+  modelling_choices:
+  - path: trading_day.reset_time
+    value: '18:00'
+    note: trading day = CME session ending 18:00 America/New_York (not in the supplied rules)
+  - path: '*.drawdown.breach_comparison'
+    value: at_or_below
+    note: touching the floor counts as a breach
+  - path: '*.drawdown.enforcement'
+    value: intratrade_bound
+    note: '''enforced in real time'': the worst equity inside each trade (balance - MAE, bar resolution) is compared with
+      the floor; this is a conservative bound, not a tick path'
+  - path: '*.dll.detection'
+    value: closed_trade
+    note: a DLL is detected on closed-trade day P&L (bar-resolution limitation)
+  - path: funded.carry_evaluation_profit
+    value: false
+    note: the funded account starts at its own starting_balance
+  - path: payout.request
+    value: max_allowed
+    note: each payout requests the maximum permitted amount
+  - path: payout.after_payout_drawdown
+    value: unchanged
+    note: a payout does not move the drawdown floor
+  - path: evaluation.minimum_trading_days
+    value: null
+    note: 'no minimum was supplied for LucidFlex: none applied'
+  - path: evaluation.drawdown.lock_trigger_offset
+    value: 2100
+    note: the supplied 52,100 / 50,100 lock is applied to the evaluation too
+  - path: payout.formula.profit_basis
+    value: balance_above_stage_start
+    note: '''50% of profit'' = 50% of balance above the funded start'
+  - path: payout.buffer_offset
+    value: 0
+    note: 'payout_buffer = 0: a payout never takes the balance below the funded start'
+  sources: []
+  evidence: {}

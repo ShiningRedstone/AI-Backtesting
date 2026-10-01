@@ -114,6 +114,10 @@ entry:
   session: NY_AM                # trading window: the signal bar must OPEN inside it
   trading_weekdays: [mon, tue]  # weekday of the TRADING DATE (Sunday-evening CME bars = Monday)
   cooldown_bars: 6              # at least N bars between consecutive SIGNALS
+  max_trades_per_day: 2         # optional (ADR-62): executed trades per trading date (min with the config cap)
+  reentry:                      # optional (ADR-62): decided from trade EXITS that have already happened
+    cooldown_bars: 3            #   no new signal for N bars after an exit (signal bar - exit bar < N)
+    block_day_after: stop       #   stop | target | any: no further entry that trading date after such an exit
 ```
 
 Timing is inherited from Phase 1: a signal at bar `t` is decided at the close of `t` from bars
@@ -150,8 +154,57 @@ side of the reference is dropped and counted (`invalid_stop` / `invalid_target`)
 - **Precedence:** a stop, target, session or time exit that happens earlier wins.
 - **Gaps:** if the open of `k+1` gaps through the stop or target, the resting order fills there (`STOP_GAP` / `TARGET_GAP`, existing gap policy).
 
-Stops are fixed at entry. Trailing stops, breakeven moves and partial exits are **not
-supported** (section 10).
+The initial stop is fixed at entry. An optional `exit.trailing` block (section 6.1) moves it in the favorable
+direction only. Partial exits are **not supported** (section 10).
+
+### 6.0 No-progress exit (`exit.no_progress`, ADR-62)
+
+```yaml
+exit:
+  no_progress: {bars: 6, min_progress: {type: r, value: 0.5}}   # type: points | r | atr ; atr_period: 14 if atr
+```
+
+At the close of bar `N` since entry (entry bar = 1) the trade exits at that close (`NO_PROGRESS`) if the favorable excursion
+from the fill (exit-side extreme including bar `N`) is still below the threshold. A stop/target touch on bar `N` and the
+forced / time / max-hold closes take precedence. Combines with `exit.trailing` (one ATR series: equal `atr_period`).
+
+### 6.1 Trailing / breakeven stops (`exit.trailing`, ADR-61)
+
+```yaml
+exit:
+  stop: {type: atr, multiple: 2.0}
+  trailing:
+    mode: distance            # distance | level | breakeven
+    distance: {type: atr, multiple: 2.0}     # distance mode: {type: points, points: N} | {type: atr, multiple: N}
+    # level: {long: <operand>, short: <operand>}   # level mode: the strategy's per-bar candidate stop
+    activation: {type: r, value: 1.0}        # immediate (default) | points | r | atr : favorable excursion from the fill
+    breakeven: {trigger: {type: r, value: 0.5}, offset_points: 0}   # optional; breakeven-only when mode: breakeven
+    atr_period: 14            # only when an ATR distance / activation / trigger is used
+    update: {every_bars: 1, only_new_extreme: false, min_step_points: 0}
+```
+
+Exact semantics (engine/fills.py `simulate_exit_trailing`; every rule is tested):
+
+- **Decided at a bar close, effective next bar.** The stop that applies on bar `k` was fixed before bar `k` opened;
+  bar `k`'s own extreme cannot raise the stop it is tested against.
+- **Favorable extreme** = highest high (short: lowest low) since the fill on the *exit side* of the quote model
+  (long: BID, short: ASK); a stop/limit *level* fill starts the extreme at the fill price, a market/gap-open fill
+  includes the whole entry bar. Activation measures `extreme - fill`.
+- **distance:** candidate = extreme -/+ distance (points, or `multiple x ATR` at that bar). **level:** candidate =
+  the operand evaluated at that bar's close (swing, previous bar low, moving average, channel, chandelier ...).
+  **breakeven:** once the excursion reaches the trigger, candidate = fill +/- `offset_points`.
+- **Ratchet:** the stop only moves in the favorable direction (and by at least `min_step_points` for a trail).
+  A candidate not strictly on the protective side of the bar's close is ignored, never applied.
+- **Update rules:** `every_bars: n` updates only on bars whose count since entry (entry bar = 1) is a multiple of n;
+  `only_new_extreme` updates only on bars that set a new favorable extreme. Breakeven updates are not throttled.
+- **Execution:** each bar is resolved like a fixed stop: an open gapping through the stop exits at the open,
+  a touch exits at the stop, a stop/target touch on one bar follows the conflict policy (incl. intrabar replay).
+  Exit reasons are `TRAIL_STOP` / `TRAIL_STOP_GAP` when the stop had moved, else `STOP` / `STOP_GAP`.
+- **Unchanged:** the take-profit is fixed; forced session close, `time_stop_bars`, `max_hold_bars`, end of data and
+  signal exits keep their precedence. Trailing only adds earlier stop exits, so same-date and holding-time
+  limits cannot be weakened. `risk_points` / R stay relative to the *initial* stop.
+- Identity: `exit.trailing` is part of the canonical logic only when declared (strategies without it keep
+  their logic hash). Defaults are filled in the canonical form, so cosmetic variants share one identity.
 
 ## 7. Sizing
 
@@ -159,6 +212,20 @@ supported** (section 10).
 |---|---|
 | `{mode: fixed, quantity: 1}` | `{mode: fixed, contracts: 1}`: contracts (futures) or units (CFD) |
 | `{mode: risk, risk_usd: 500, max_quantity: 5}` | `{mode: risk, risk_usd: 500, max_contracts: 5}`: floor(budget / risk per unit) on the instrument's size step |
+
+| `{mode: equity_risk, risk_pct: 0.5, max_quantity: 20}` | `{mode: equity_risk, ...}`: budget = `risk_pct`% of the **equity at the signal**, then as `risk` |
+
+`equity_risk` (ADR-62): equity = the **research account** (run parameter `account=`, default `DEFAULT_RESEARCH_ACCOUNT` = 50,000 USD, ADR-64; NOT part of the definition or identity) + the net P&L (after costs) of trades that have already **exited**. The engine runs
+one position at a time, so no open or future trade is visible; the quantity comes from the planned initial stop, rounded
+down (0 = trade rejected), with the optional cap. Sizes are path-dependent within one run (a different window or start
+gives different sizes); R-based metrics are unaffected. A `starting_equity` key in a definition is refused. The account is recorded in the run assumptions only.
+
+**Execution contract (ADR-63).** An optional `sizing.contract: MNQ` names the contract that is traded (its specification is the
+instrument of that name in `configs/instruments.yaml`). The data series stays the research proxy; the contract supplies the
+point value ($2 per index point for MNQ), minimum size and size step (whole contracts). A named contract requires whole-number
+quantities and caps (validation and engine), every risk mode converts dollars to contracts with the same floor-only rule
+`floor(budget / (planned stop points x point value))` (0 = trade rejected, never rounded up), and a run without the contract's
+specification, or MNQ on another futures series, is refused. The key is part of the strategy's identity only when present.
 
 A fixed quantity must satisfy the instrument's `min_size`/`size_step`. This is checked when the
 strategy is bound to a dataset: 0.5 NQ is refused, while 0.5 units of a CFD with step 0.01 is fine.
@@ -206,10 +273,10 @@ entry.long.right.lag:
 
 | Concept | Reason |
 |---|---|
-| `trailing_stop`, `trailing`, `breakeven` | the engine fixes the stop at entry |
+| top-level `trailing_stop`, `breakeven` | declare trailing in `exit.trailing` (section 6.1) |
 | `partial_exits`, `scale_out` | one fill in, one fill out |
 | `pyramiding`, `scale_in` | one position at a time |
-| `cooldown_after_exit` | exits exist only inside the backtest; `cooldown_bars` is measured between signals |
+| top-level `cooldown_after_exit` | use `entry.cooldown_bars` (between signals) or `entry.reentry` (from trade exits, ADR-62) |
 | `lead`, `future`, negative `lag` | non-causal |
 
 These are extension points: adding any of them requires an engine change first, then a DSL key.
@@ -256,7 +323,8 @@ the shared cache, and the `spec` property carries the DSL identity into run reco
 
 - `lag` counts strategy-timeframe bars. On an HTF operand, `lag: 1` means one base bar earlier,
   not the previous HTF bar.
-- Stops and targets are fixed when the signal is generated (no trailing).
+- Targets are fixed when the signal is generated; the stop can only be trailed through `exit.trailing`
+  (no target trailing, no partial exits).
 - On bid-based CFD feeds, the ask-side trigger of a short's stop is not modelled (Phase 2 limitation, unchanged).
 - A signal exit executes at the next open even when the condition is evaluated on an HTF operand.
 - No expression language beyond `add`/`sub`/`mul`/`div`: rolling functions, max/min of

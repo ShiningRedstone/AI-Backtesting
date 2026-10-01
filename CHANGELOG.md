@@ -25,6 +25,98 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Packaged Windows build + update on Windows | NOT VERIFIED HERE (must be built and exercised on Windows) |
 | Publishing a GitHub Release | NOT DONE (maintainer action) |
 | Code signing, delta updates, installer | NOT IMPLEMENTED |
+## Pre-campaign governance (ADR-67)
+
+| Item | Status |
+|---|---|
+| Research protocol version 3: 10,000 unique trials, Bonferroni family = declared budget (alpha 5e-6), bootstrap replicates 5,000,000, independent holdout-look budget | IMPLEMENTED, TESTED (synthetic ledger) |
+| `create_protocol(supersedes=)` for an unused protocol + `scripts/protocol_supersede.py` (check / `--apply`) | IMPLEMENTED, TESTED |
+| Supersede the user's ACTIVE `RP_C7E98B2A03BD` (v2, 2,000-trial default) in the user workspace | PENDING (Windows command; zero trials / looks required) |
+| Prop profiles v4: metadata-only correction (VERIFIED vs ASSUMED_DEFAULT) | IMPLEMENTED, TESTED |
+| Hand-computed successful end-to-end lifecycle fixtures for LucidFlex, Growth, Select Flex, Select Daily; profile independence | TESTED |
+| Manifest FM_3B0B01CFC81AB15E re-verified (10,000 unique, 30 quotas, all MNQ whole contracts, account-free) | VERIFIED (not regenerated) |
+
+## Prop rule-basis model (ADR-66)
+
+| Item | Status |
+|---|---|
+| Schema-3 profiles: every rule `{value, status: VERIFIED / ASSUMED_DEFAULT / CUSTOM, basis}`, no nulls; v3 defaults for LucidFlex 50K, Tradeify Growth 50K, Select 50K -> Flex / Daily | IMPLEMENTED, TESTED |
+| ASSUMED_DEFAULT rules are active (locks, day boundary 18:00 NY per stage, DLL measurement, intratrade drawdown measurement, Select Daily soft DLL, Growth payout formula / count / scaling, LucidFlex cushion 0) | IMPLEMENTED, TESTED |
+| States PASS / FAIL / INCOMPATIBLE / NOT_APPLICABLE, RULE_ASSUMED basis, rule-basis counts and "UNDER DEFAULT ASSUMED RULES" labels on every result; base result fields extended | IMPLEMENTED, TESTED |
+| `profiles.customize` (CUSTOM rules as a new version) | IMPLEMENTED, TESTED |
+| Checking any rule against provider documentation | NOT DONE (by instruction) |
+
+## Configurable prop rulebook, user-supplied defaults (ADR-65)
+
+| Item | Status |
+|---|---|
+| Profile schema 2: every prop rule a variable (see ADR-65); append-only v2 profiles registered, v1 drafts kept | IMPLEMENTED, TESTED |
+| LucidFlex 50K, Tradeify Growth 50K, Select 50K -> Flex, Select 50K -> Daily defaults as supplied by the user (2026-09-30), `scripts/prop_default_profiles.py` | IMPLEMENTED, TESTED (known-answer) |
+| Chronological lifecycle v2: drawdown lock, soft/hard DLL, consistency + cushion, min days, scaling at session end, INCOMPATIBLE on oversize, payout formulas / caps / buffer / split, live-transition eligibility | IMPLEMENTED, TESTED |
+| Base result + per-profile summary with every backtest (`run["prop"]`, `backtest_strategy()["prop"]`) | IMPLEMENTED, TESTED |
+| Independent verification against provider documents | NOT DONE (basis user_specified) |
+| Values not supplied (Tradeify lock level, Select Daily DLL hard/soft, Growth payout formula, trading-day reset) | EdgeLab modelling choices, listed in each profile; CONFIRM |
+
+## $50,000 research account + automatic prop lifecycle (ADR-64)
+
+| Item | Status |
+|---|---|
+| Default research account 50,000 USD as a RUN parameter (`account=`, `DEFAULT_RESEARCH_ACCOUNT`); not in strategy identity; `starting_equity` in a definition refused | IMPLEMENTED, TESTED |
+| Factory `edgelab-strategy-factory/5`, space `edgelab-dt-space/5` (fixed 1/5/10; risk 125/250/500 and equity 0.25/0.5/1.0 % capped at 40; all `contract: MNQ`); manifest regenerated and verified reproducible (10,000) | IMPLEMENTED, TESTED |
+| Versioned, hashed, append-only prop rule profiles (`edgelab/prop/profiles.py`, `configs/prop/profiles/`): LucidFlex 50K, Tradeify Growth 50K, Select Flex 50K, Select Daily 50K. Status derives from per-rule evidence; none verified | IMPLEMENTED, TESTED |
+| Lifecycle simulator evaluation -> funded -> payouts -> live-transition (`edgelab/prop/lifecycle.py`); runs automatically with every backtest, stored in `run["prop"]`; read-only `/api/prop/profiles`, `/api/prop/lifecycle/<run>`; CLI `prop profiles|lifecycle` | IMPLEMENTED, TESTED (known-answer, synthetic) |
+| Official LucidFlex / Tradeify rule values | NOT VERIFIED: official hosts were unreachable (egress blocked). Every profile reports "RULES NOT VERIFIED"; no pass/fail/payout is claimed |
+| Tradeify rule values, Select Daily payout formula | NOT IMPLEMENTED (no verified source) |
+| Quantity cap 40 for risk-based sizing | UNVERIFIED research cap, not a firm rule |
+
+## MNQ whole-contract execution model (ADR-63)
+
+| Item | Status |
+|---|---|
+| One authoritative MNQ spec (configs/instruments.yaml, unchanged); dataset identity stays the Dukascopy index-CFD proxy; `execution_view`, `contract_for` | IMPLEMENTED, TESTED |
+| `sizing.contract` in the DSL (identity only when present); every factory strategy trades MNQ; factory/space `/4` | IMPLEMENTED, TESTED |
+| One exact, floor-only whole-contract conversion for `risk` and `equity_risk`; integer guards; zero contracts reject; hard cap | IMPLEMENTED, TESTED (property sweep of 4,000 budgets, mutation-checked) |
+| Quote-aware long/short execution and R-invariance under the contract model | TESTED |
+| An instrument-level quantity cap; MNQ on other futures series | NOT IMPLEMENTED / refused by name |
+| Numerical evaluation | NOT DONE: no trials, no holdout looks |
+
+## Capability audit (ADR-62)
+
+| Item | Status |
+|---|---|
+| Capability matrix as data, evidence resolved by test, FACTORY_CAPABILITIES.md generated and drift-tested | IMPLEMENTED, TESTED |
+| Equity-based risk sizing (`equity_risk`): realised-equity at the signal, no future leakage, deterministic cap | IMPLEMENTED, TESTED (hand-computed sizes, leakage proofs) |
+| No-progress exit, per-strategy trade cap, exit-based re-entry (`entry.reentry`) | IMPLEMENTED, TESTED |
+| Feature engine refuses volume-weighted features on provider-defined volume (Dukascopy) | IMPLEMENTED, TESTED |
+| Factory `/3`: new real dimensions (equity sizing, no-progress, cap, re-entry, `htf_breakout`, `prior_day_nr`); `atr_normalized` label removed | IMPLEMENTED, TESTED |
+| VWAP/volume levels, event/news filters | EXCLUDED (canonical data cannot support them) |
+| One-direction-per-session, partial exits, scaling, target trailing, tier tables | NOT IMPLEMENTED (declared, refused by name) |
+| Numerical evaluation | NOT DONE: no trials, no holdout looks |
+
+## Trailing stops and 30-family catalog completion (ADR-61)
+
+| Item | Status |
+|---|---|
+| Real trailing / breakeven stops in the execution kernel (`simulate_exit_trailing`), DSL `exit.trailing`, compiler, backtester; ratchet-only, bar-close decisions effective next bar, exit-side quote extremes, reasons `TRAIL_STOP`/`TRAIL_STOP_GAP` | IMPLEMENTED, TESTED (hand-computed bars; differential test vs the legacy kernel; directional quotes; causality; day-trading invariants) |
+| Phase 1 demo output unchanged; logic hashes of strategies without trailing unchanged | TESTED |
+| New causal features `order_block` (+ breaker), `daily_nr` | IMPLEMENTED, TESTED (known answers + truncation) |
+| ICT family 30: eight setups incl. Order Block, Breaker Block, Opening Range / Initial Balance sweep; NR7 bar + day scope; ROC ATR + percent units | IMPLEMENTED, TESTED |
+| Factory `/2`: trailing is a real variation dimension; `zone` stop; family/catalog hashes in lineage | IMPLEMENTED, TESTED |
+| Partial exits, target trailing | NOT IMPLEMENTED. Equity sizing, no-progress, caps, re-entry: implemented in ADR-62; VWAP/volume and events excluded for data reasons |
+| Numerical evaluation of the generated universe | NOT DONE: no trials, no holdout looks |
+
+## Day-trading strategy factory (ADR-60, generation only)
+
+| Item | Status |
+|---|---|
+| 30-family universe (`strategy/factory_space.py`), frozen allocation summing to exactly 10,000 (min 200/family), deterministic hash-based sampling | IMPLEMENTED, TESTED |
+| 12-stage validation with machine-readable rejection codes; global logic-hash de-duplication; loud failure on an under-filled family | IMPLEMENTED, TESTED |
+| Central day-trading policy (`strategy/daytrading.py`): strategy flat window + <23 h max-hold guard + engine-config check; DST-probed NY trading-date check | IMPLEMENTED, TESTED (synthetic backtest with engine flatten disabled) |
+| Manifest (`strategies/rejections/duplicates.jsonl`, `manifest.json`, content-derived `FM_` id), `verify` regeneration, Explorer query/summary via Services, CLI `factory`, read-only `/api/factory/*` | IMPLEMENTED, TESTED |
+| New causal features `macd`, `adx`, `stoch`, `bollinger`, `donchian`, `narrow_range`, `atr_regime` | IMPLEMENTED, TESTED (registry-wide truncation test) |
+| Equity-based sizing, VWAP/volume levels, event filters, no-progress exits, per-strategy trade caps, exit-based re-entry rules | NOT IMPLEMENTED (declared, refused by name). Trailing/breakeven: implemented later in ADR-61 |
+| Explorer web page | NOT IMPLEMENTED (backend only) |
+| Evaluation of the 10,000-variant universe | NOT IMPLEMENTED - needs a dedicated research protocol; no trials or holdout looks consumed |
 
 ## Robust acceptance statistics, protocol version 2 (ADR-57)
 

@@ -845,6 +845,148 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
 - **Minor additive change:** `Services.list_protocols` rows add `protocol_version`. Ad-hoc random-entry controls stay
   descriptive (a rank, no p-value; `test_random_control`); the UI shows an exact Monte-Carlo p-value only where the
   protocol stored one (holdout evaluations). No HTTP route creates, edits or retires a protocol or resets a ledger.
+### ADR-63 MNQ whole-contract execution model (sizing audit)
+- **Problem:** the engine sized and computed USD P&L on the DATASET's instrument. For the canonical Dukascopy index-CFD
+  proxy that is a fractional "unit" model (point value 1, step 0.01), not whole Micro E-mini Nasdaq-100 contracts, and
+  nothing tied the research target (MNQ, whole contracts) to the sizing.
+- **Single specification:** the `MNQ` entry of `configs/instruments.yaml` (tick 0.25, tick value $0.50, point value $2 =
+  tick value / tick size, min size 1, size step 1, i.e. whole contracts). It is the only place these numbers exist (a test scans
+  the source tree). The file is unchanged by this ADR: editing it would change the research-config hash the active protocol
+  is bound to. No instrument-level quantity cap is defined (none invented); the cap is the strategy's `max_quantity`.
+- **Dataset vs contract:** the dataset identity stays `NQ_DUKASCOPY` (Dukascopy USATECH.IDX/USD, an index-CFD research
+  proxy, never CME MNQ). A strategy declares `sizing.contract: MNQ` (strategy logic, part of its identity; strategies without it
+  run exactly as before). The backtester builds an *execution view*: the data series' price grid, calendar and identity,
+  with the contract's point value, minimum size and size step. Translation: 1 index point of the research series = 1 point of
+  the contract = $2 per contract; prices are not snapped to the contract tick; P&L, risk and cost USD use that point value
+  (the frozen Dukascopy cost scenario is per point / per notional, so it scales consistently). R-multiples, MFE/MAE in R
+  and cost-in-R are independent of the contract, which is tested (quote-aware, long and short). No futures volume is
+  derived from the Dukascopy volume field. A contract named without its spec, a different contract, or MNQ on another
+  *futures* series (whose cost profile describes another contract) is refused, never silently sized on the data series.
+- **One conversion for every risk mode:** `engine/sizing.contracts_for_risk` is the only place a dollar budget becomes a
+  quantity: `contracts = floor(budget / (planned stop points x point value) / size_step) x size_step`, in exact decimal
+  arithmetic (dollars at 1e-9: float noise such as 499.99999999999994 is removed, real shortfalls are not). It never rounds up
+  (`contracts x risk per contract <= budget`), is maximal, returns 0 (trade rejected) when one contract does not fit, and
+  applies the optional hard cap. `risk` (budget = `risk_usd`) and `equity_risk` (budget = `risk_pct`% of realised equity at
+  the signal, ADR-62) both call it. Fixed contracts for a named contract must be whole (DSL and engine refuse fractions);
+  `check_quantity` is a last guard before execution. Whole contracts are therefore guaranteed for every MNQ strategy.
+- **Planned vs realised risk:** sizing happens at the signal and cannot know the fill, so the budget guarantee is for the
+  PLANNED initial stop distance (signal-bar close or the order level to the stop). The realised initial risk at the fill (`risk_usd`)
+  can differ by the entry gap (next open versus signal close). Contract runs add `planned_risk_usd` to each trade and disclose
+  this in the run assumptions.
+- **Factory:** every generated strategy declares the contract (`factory_space.EXECUTION_CONTRACT`); factory and space are `/4`.
+- **Found by the tests:** process workers run cells through a lightweight context, not `Services`, so the contract resolver is
+  a plain function `instruments.contract_for(cfg, sizing)`.
+
+### ADR-62 Capability audit: equity-based risk, no-progress exit, trade caps, exit-based re-entry, volume gate
+- **Problem:** before the research space is frozen, every dimension the factory varies must be shown to be executed by
+  the numerical engine. The audit (`edgelab/strategy/capabilities.py`, rendered to FACTORY_CAPABILITIES.md, drift- and
+  evidence-tested) found four dimensions that were declared "not executable" although they are mechanical and part of
+  the requested space, and one structural hole: the feature engine accepted volume-weighted features on Dukascopy data
+  (`volume_type: unknown` is in `VOLUME_OK`), i.e. it could silently treat provider-defined decimal volume as exchange volume.
+- **Decisions:**
+  - **Equity-based risk (implemented):** `sizing.mode: equity_risk` (`risk_pct`, `starting_equity`, optional cap). The backtester keeps
+    `equity = starting_equity + net P&L of trades already exited`; it is updated after a trade's costs are known and read
+    only by LATER signals (positions are sequential, so every earlier trade has exited). The size is decided at the signal
+    from the planned initial stop, rounded down, 0 = rejected, cap deterministic. Quote-aware sizing is unchanged
+    (planned entry on the entry-side series). Trade rows gain `equity_before` (equity-sized runs only). Known answers and
+    "future outcomes cannot change earlier sizes" are tested. Path dependence within a run is disclosed in the run assumptions.
+  - **No-progress exit (implemented):** in the managed-exit kernel (`TrailSpec.np_*`, DSL `exit.no_progress`); semantics in STRATEGY_DSL.md 6.0.
+  - **Per-strategy trade cap and exit-based re-entry (implemented):** `entry.max_trades_per_day`, `entry.reentry`
+    (`SignalSet.max_trades_per_day / exit_cooldown_bars / block_after`). They count executed trades and use only exits
+    that have already happened, so they are causal by construction and need no extra signal-layer state. The top-level
+    `cooldown_after_exit` key remains refused by name (use `entry.reentry`).
+  - **Volume gate (implemented):** the feature engine refuses `vwap`, `volume_stats` and `rvol_tod` for any instrument that declares
+    `volume_semantics` (Dukascopy: "NOT CME exchange-traded volume"). Not part of any cache key; existing caches are valid.
+  - **Excluded, with reasons (capability matrix):** VWAP/volume levels and event/news filters (canonical data cannot support
+    them), one-direction-per-session (needs per-session path state), partial exits / scaling / target trailing / tier tables.
+- **Factory:** factory `/3`, space `/3`. New dimensions: equity-risk sizing variants, no-progress exit, per-strategy cap,
+  re-entry, `htf_breakout` MTF filter, `prior_day_nr` regime. The misleading `(atr_normalized)` label was removed (every risk
+  mode scales with the stop). Redundant combinations are refused (cap 1 with any re-entry rule, re-entry on a target that
+  does not exist, a no-progress check after the window ends, ...). The allocation numbers/version are unchanged.
+- **Manifest impact:** the factory and space versions changed, so the previous manifest is superseded; the new manifest id
+  records `capability_sha256` and embeds the matrix.
+
+### ADR-61 Trailing / breakeven stops and completion of the 30-family catalog
+- **Problem:** the execution kernel fixed the stop at entry, so trailing was only a declared, refused dimension
+  in the factory. The catalog also lacked Order Block, Breaker Block and ICT Opening Range setups, the
+  session-level NR7, and the percentage form of rate-of-change momentum.
+- **Trailing decision:** a separate kernel function `engine/fills.py::simulate_exit_trailing` used only when a
+  strategy carries a `TrailSpec` (`engine/signals.py`); `simulate_exit` and every non-trailing path are untouched.
+  A differential test proves a trail that never moves equals the legacy kernel on random data (all exit kinds,
+  both directions), and the Phase 1 demo output is unchanged. Semantics (documented in full in STRATEGY_DSL.md 6.1):
+  - **When/what activates:** `immediate`, or once the favorable excursion from the fill reaches N points, N x R
+    (R = |fill - initial stop|) or N x ATR(signal bar). An optional breakeven trigger can fire first.
+  - **Update frequency:** a decision at every bar close, optionally every N bars since entry and/or only on a new
+    favorable extreme, with an optional minimum step. Effective from the next bar: no same-bar use of the bar's own
+    extreme and no future information.
+  - **New level:** distance mode = extreme -/+ points or ATR multiple (ATR at that bar's close); level mode = the
+    strategy's own causal per-bar operand (swing, previous bar, moving average, channel, chandelier). Breakeven =
+    fill +/- offset.
+  - **Ratchet:** never loosens; a candidate not strictly protective of the bar's close is ignored.
+  - **Execution:** each bar is resolved with the existing `resolve_bar` using the current stop (gap at the open,
+    touch at the stop, conflict policy incl. intrabar replay). Exit-side quote arrays drive both the extreme and the
+    touches (long: BID, short: ASK); level fills do not count the entry bar's pre-fill extreme.
+  - **Other exits:** target fixed; forced session close, time stop, max hold, end of data and signal exits keep
+    their precedence, so the same-trading-date and <23 h guarantees hold by construction and are tested.
+  - **Causality:** the per-bar trailing arrays are compared by the existing truncation test (`check_causality`).
+  - **Identity:** `exit.trailing` enters the canonical logic only when present; existing logic hashes are unchanged.
+    R, `risk_points` and sizing stay relative to the initial stop; trade rows gain `final_stop_price` and
+    `trail_updates` (trailing strategies only) and the run assumptions disclose the rules.
+- **Catalog completion:** new causal features `order_block` (order block + breaker block) and `daily_nr`
+  (`features/library/smc.py`); ICT family 30 now carries eight setups (liquidity sweep reversal, liquidity raid
+  reversal, FVG reaction, kill-zone momentum, OTE, order-block reaction, breaker block, opening-range/initial-balance
+  sweep); NR7 has bar and trading-date scopes; ROC has ATR-scaled and percentage units. The repository held no earlier
+  definitions of the ICT concepts, so each is defined mechanically here (FEATURES.md): e.g. an order block is the last
+  opposite candle before a displacement that also breaks structure, consumed by its first touch or invalidated by a
+  close through its far edge; a breaker is a failed block with flipped polarity; the opening-range setup is a
+  sweep-and-reclaim of the completed NY opening range (30 min) or initial balance (60 min), distinct from family 17's
+  breakout. No discretionary rule is used.
+- **Factory:** factory `/2`, space `/2`. Trailing is a sampled dimension (kind, activation, update rules, step,
+  breakeven-before-trail) with redundancy rules (an activation the target always precedes, a throttle longer than the
+  window, `only_new_extreme` on a distance trail, ...). A `zone` stop is added for the ICT setups. The manifest pins
+  each family's declarative definition (`family_spec_sha256`, `catalog_sha256`). The allocation numbers and version
+  are unchanged and use no results.
+- **Capability gaps:** superseded by the ADR-62 audit (FACTORY_CAPABILITIES.md). Equity sizing, no-progress exits,
+  per-strategy trade caps and exit-based re-entry are implemented there; VWAP/volume levels and event/news filters are
+  excluded for data reasons. The trailing candidate of a short on a BID-based feature series is evaluated against ASK
+  touches (as for every price stop): the ask-side level is not modelled.
+
+### ADR-60 Day-trading strategy factory (generation only)
+- **Problem:** a future high-budget search needs ~10,000 distinct, mechanically valid day-trading
+  strategies from 30 predefined families. They must be reproducible, honestly de-duplicated and
+  generated WITHOUT any numerical evaluation. Mode A varies one base's declared parameters only.
+- **Decision:** `strategy/factory_space.py` holds the frozen space (30 families, sessions,
+  shared dimensions, allocation). `strategy/factory.py` samples, validates, compiles and writes the
+  manifest. `strategy/daytrading.py` holds the central day-trading policy.
+  - Families are DSL templates. The compiler, identity (logic hash) and feature registry are unchanged.
+  - Sampling: `sha256(seed|family|candidate_seq|dimension)` per draw. Platform- and order-independent.
+  - Allocation (`edgelab-dt-allocation/1`): fixed group totals (technical 4200, price action 4000,
+    SMC 800, ICT 1000). Each family gets 200, plus a share of the rest by a predeclared structural
+    score. No results are used. `allocate()` is pinned by a test.
+  - Validation: 12 named stages, machine-readable codes, never repaired. Duplicate logic (global logic
+    hash) is recorded, not counted. An under-filled family fails loudly.
+  - Behaviour-equivalent forms are refused (points target with points stop == risk_reward, cooldown
+    >= entry window == one per window, non-binding time exits / early flat, pinned inactive parameters).
+- **Day-trading invariant:** `validate_day_trading` inspects the DSL document itself. It requires:
+  - strategy-local ENTRY and HOLD windows;
+  - a top-level `session(HOLD).in_session == 0` exit on every traded side, so the position is flat by
+    `HOLD.end + tf`, checked under four DST regimes to lie inside one NY trading date by 16:00 NY;
+  - `max_hold_bars x tf < 23 h`, and resting orders that expire inside HOLD.
+  `check_engine_config` refuses `hold_overnight` / no daily flatten / late flatten.
+  The policy is not a variation dimension.
+- **Not executable, declared and refused by name:** equity-based sizing, VWAP/volume levels
+  (Dukascopy volume is not exchange volume), event filters, no-progress exits, per-strategy
+  max-trades-per-day, and exit-based re-entry rules. Trailing stops were first declared here as not
+  executable; ADR-61 implements them in the engine and the factory varies them for real.
+- **Earlier-phase changes (additive):**
+  - 7 new registered causal features (`features/library/indicators.py`: `macd`, `adx`, `stoch`,
+    `bollinger`, `donchian`, `narrow_range`, `atr_regime`); FEATURES.md is regenerated. The
+    registry-wide truncation test covers them. Existing feature implementations and cache keys are unchanged.
+  - Lineage method `factory_variant`.
+  - Read-only Services / CLI (`factory ...`) / HTTP (`/api/factory/...`) Explorer foundation.
+- **Separation:** the factory reads no market data. It does not backtest, and does not touch
+  protocols, trial ledgers or holdouts (tested with those entry points mocked to fail). The manifest
+  is input for a future dedicated protocol. The active protocol is not modified.
 
 ### ADR-57 Robust acceptance statistics (research protocol version 2)
 - **Problem:** the v1 OOS confidence criterion was the normal bound `mean - z*se` at the Bonferroni
@@ -1199,8 +1341,8 @@ PROP_SIMULATION.md, DESKTOP_PACKAGING.md
   HTF bar.
 - `entry.cooldown_bars` is measured between signals, not from trade exits (exits exist only inside the
   backtest).
-- Stops and targets are fixed at signal time. There are no trailing stops, breakeven, partial exits or pyramiding
-  (refused by name).
+- Targets are fixed at signal time and the initial stop is fixed at entry; it can only be trailed or moved to
+  breakeven through `exit.trailing` (ADR-61). There are no partial exits or pyramiding (refused by name).
 - The bid/ask trigger asymmetry on bid-based CFD feeds remains unmodelled (Phase 2).
 - Canonical equivalence is syntactic plus a few algebraic rules; logically equivalent but
   differently written conditions can hash differently.
@@ -1433,3 +1575,69 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   restrict the handoff backtest, which runs the whole dataset as before.
 - **Lineage:** random-entry control realizations are not stored, so they do not appear in AI
   lineage.
+
+### ADR-64 Research account and automatic prop lifecycle
+- **Account is an evaluation environment, not a strategy property.** `run_backtest(..., account=)` (default 50,000 USD) seeds
+  `equity_risk`; definitions and `logic_hash` never contain it. All sizing goes through the single floor-only
+  `contracts_for_risk` on the MNQ spec (ADR-63).
+- **Layers kept separate:** dataset identity, MNQ spec, execution/cost, account, each firm's rules (versioned profiles).
+- **Profiles:** `configs/prop/profiles/<ID>.v<N>.yaml` + `REGISTRY.json` (append-only, content hash, never overwritten).
+  A profile is VERIFIED only when every required rule value carries evidence `{source, quote, value}`; a flag alone never
+  verifies. Unverified profiles produce `RULES NOT VERIFIED` and no pass/fail/payout (fail closed). Outside the research
+  config hash.
+- **Lifecycle:** `simulate_lifecycle` is a pure function of (trades, profile): evaluation (MLL, daily loss, consistency,
+  min days, size limit) -> funded on the next trading day (scaling tiers update at session end only; oversize =
+  violation, never clipped) -> payout cycles -> live-transition eligibility. Deterministic payout convention is explicit.
+- **Automatic:** `Services._run_cell` computes `prop` for every run; it is stored on the run record. It is read-only
+  reporting: it never ranks, selects, or alters the factory manifest, protocol, trial ledger or holdout.
+- **Known gaps:** no official rule was verifiable (hosts blocked); Tradeify values null; RISK_QUANTITY_CAP=40 is a research cap.
+
+### ADR-65 Configurable prop rulebook (schema 2) with user-supplied canonical defaults
+- **Rules are data.** Profile schema 2 (`edgelab/prop/profiles.py::_validate_v2`) makes every rule a variable: account size,
+  starting balances, target, drawdown (max_loss, mode, end-of-day update, lock trigger / locked floor offsets, breach comparison,
+  enforcement), DLL (enabled, amount, soft/hard), consistency (percent, window, separate cushion), minimum trading days,
+  max micros, funded scaling (start micros, tiers, end-of-session update, basis, persist), payout (frequency, winning-day
+  threshold, positive cycle profit, balance requirement, buffer, formula, minimum, cap fixed / by payout number / by purchase
+  date, split, count limit, cycle reset, post-payout drawdown, request convention), live-transition rule, purchase date.
+  `lifecycle.py` contains no provider number (tested).
+- **Defaults:** v2 profiles for LucidFlex 50K, Tradeify Growth 50K, Select 50K -> Flex, Select 50K -> Daily, generated by
+  `scripts/prop_default_profiles.py` from the values the user supplied on 2026-09-30 (`basis.status: user_specified`,
+  simulated, labelled "not independently verified"). Values the user did not supply are listed in
+  `basis.modelling_choices` and on every result. v1 drafts stay registered (history) and still claim nothing.
+- **Audit, not a filter:** the lifecycle runs on the SAME chronological trades after every backtest (never a re-run per
+  profile), never resizes a trade (oversize = FAILED / INCOMPATIBLE with requested / permitted / rule), and never feeds the
+  factory, selection or manifest. The base result covers the whole research period regardless of prop failures.
+- **Applicability:** micro limits apply only to runs whose execution contract is the profile's `quantity_unit` (MNQ);
+  other runs report NOT_APPLICABLE rather than comparing dataset units with micros.
+
+### ADR-66 Rule-basis model: every prop rule has a value, a status and a basis
+- **Schema 3** (`edgelab/prop/profiles.py::RULE_SPEC`, 89 rules): a flat `rules` map, each rule `{value, status, basis}`.
+  No rule may be null; a profile is always runnable. Status: VERIFIED (supplied by the user / authoritative project
+  evidence), ASSUMED_DEFAULT (EdgeLab fallback, an ACTIVE rule the simulator checks), CUSTOM (a user change; created by
+  `profiles.customize`, which writes a NEW version). Rules switched off by a gate (e.g. DLL amount when the DLL is disabled)
+  are counted as inactive, not in the verified/assumed/custom counts.
+- **Defaults** v3 (`scripts/prop_default_profiles.py`): LucidFlex 50K, Tradeify Growth 50K, Select 50K -> Flex / Daily. v1/v2
+  stay registered as history and now report NOT_APPLICABLE (superseded schema, no claim).
+- **Per-stage day boundaries**, configurable drawdown measurement (closed balance / worst executable price inside the trade)
+  and DLL measurement (closed trades / unrealized / intraday worst price, bar-resolution bound).
+- **States:** PASS, FAIL, INCOMPATIBLE, NOT_APPLICABLE per stage and overall; `rule_basis_state` RULE_ASSUMED whenever an
+  active rule is ASSUMED_DEFAULT, and every outcome is labelled "UNDER DEFAULT ASSUMED RULES" (never a provider pass).
+  IN_PROGRESS is internal only: an evaluation not passed when the data ends is FAIL (NOT_PASSED_BY_END_OF_DATA); a funded
+  account not breached when the data ends is PASS (ACTIVE_AT_END_OF_DATA).
+
+### ADR-67 Pre-campaign governance: 10,000-trial protocol version 3, corrected prop metadata
+- **Capacity.** Protocol version 3: `DEFAULT_TRIAL_BUDGET = 10_000` (the declared factory universe); holdout looks stay an
+  independent budget (default 10). The budget is enforced by the unchanged ledger checks (`_protocol_gate` per evaluation,
+  `_protocol_budget_check` per search plan): trial 10,000 is permitted, 10,001 refused.
+- **Declared multiplicity family.** `multiple_testing.family_size_rule: declared_max_unique_trials`: Bonferroni per-test alpha
+  = 0.05 / 10,000 = 5e-6 at EVERY holdout look (not the growing counted-trial family of version 2, which made early looks
+  easier). The bootstrap-t replicate count is derived from the declared family: ceil(25 x 10,000 / 0.05) = 5,000,000
+  (>= 25 replicates beyond the tail). Version-1/2 records keep their own rules.
+- **Supersession, never mutation.** `create_protocol(..., supersedes=<id>)` replaces the ACTIVE protocol of the scope only if
+  it has zero trial events and zero holdout accesses; the new record is fully built and checked first, then the old one is
+  retired (material unchanged) and the new material records `supersedes`. `scripts/protocol_supersede.py` (check by default,
+  `--apply` to supersede) keeps the dataset, trading-date windows, exposure and holdout-look budget.
+- **Prop metadata.** Profiles v4 correct v3's statuses (values identical, simulation identical, tested): an EdgeLab
+  interpretation is never VERIFIED (funded start timing, Growth funded contract limit, Select trailing interpretation of
+  "EOD", unsupplied balance requirements); the LucidFlex consistency ratio definition is VERIFIED; the Select Daily winning-day
+  threshold is inactive in daily mode.

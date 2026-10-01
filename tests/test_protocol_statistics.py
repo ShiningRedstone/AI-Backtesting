@@ -14,7 +14,7 @@ import numpy as np
 from edgelab.research import protocol as rp
 
 SPEC = rp.DEFAULT_ACCEPTANCE["oos_confidence"]
-MT = rp.DEFAULT_MULTIPLE_TESTING
+MT = {k: v for k, v in rp.DEFAULT_MULTIPLE_TESTING.items() if k != "family_size_rule"}   # version-2 rule: counted family
 
 
 def pennies(n, seed=3):
@@ -154,7 +154,7 @@ class TestProtocolMigration(unittest.TestCase):
         v1 = rp.make_record(v1_mat, {"code_version": "test"})
         s.store.save_protocol(v1, s._scope_key("NQ_DUKASCOPY", "DUKASCOPY"))
         self.assertNotEqual(v1["protocol_id"], v2["protocol_id"])                                # material change
-        self.assertEqual(v2["material"]["protocol_version"], 2)
+        self.assertEqual(v2["material"]["protocol_version"], 3)
         self.assertEqual(v2["material"]["acceptance_criteria"]["oos_confidence"]["method_id"], "min_normal_bootstrap_t_v1")
         s.retire_protocol(v1["protocol_id"])                                                      # zero trials: retire
         for forged in ({**v1, "material": {**v1["material"], "name": "edited"}},           # stale hashes

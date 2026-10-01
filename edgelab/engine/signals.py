@@ -51,6 +51,59 @@ class OrderSpec:
                 raise ValueError(f"{k} must be >= 1")
 
 
+TRAIL_MODES = ("none", "distance", "level", "breakeven")          # "none": only a no-progress exit
+TRAIL_TRIGGER_KINDS = ("points", "r", "atr")
+
+
+@dataclass(frozen=True)
+class TrailSpec:
+    """Trailing / breakeven stop management (ADR-61). Semantics are documented in engine/fills.py
+    (``simulate_exit_trailing``). Everything is decided at a bar CLOSE and takes effect from the next bar.
+
+    mode "distance": candidate stop = favorable extreme since entry -/+ distance (points, or ``distance`` x ATR).
+    mode "level":    candidate stop = the strategy's per-bar level (SignalSet.trail_level_long/short).
+    mode "breakeven": only the breakeven rule below.
+    The stop only ever moves in the favorable direction (ratchet); it is never loosened."""
+    mode: str = "distance"
+    distance_kind: str = "points"          # distance mode: points | atr
+    distance: float = 0.0                  # points, or an ATR multiple
+    activation_kind: str = "immediate"     # immediate | points | r | atr (favorable excursion from the fill)
+    activation: float = 0.0
+    be_kind: str | None = None             # optional breakeven trigger: points | r | atr
+    be_trigger: float = 0.0
+    be_offset: float = 0.0                 # points locked beyond the fill once breakeven triggers (>= 0)
+    every_bars: int = 1                    # update only on bars whose count since entry (entry bar = 1) % n == 0
+    only_new_extreme: bool = False         # update only on bars that set a new favorable extreme
+    min_step: float = 0.0                  # a trailing candidate must improve the stop by >= this many points
+    np_bars: int = 0                       # no-progress exit: 0 = off; else check at the close of bar N since entry
+    np_kind: str = "points"                # points | r | atr : the favorable excursion required by then
+    np_value: float = 0.0
+
+    def __post_init__(self):
+        if self.mode not in TRAIL_MODES:
+            raise ValueError(f"trail mode must be one of {TRAIL_MODES}")
+        if self.distance_kind not in ("points", "atr"):
+            raise ValueError("distance_kind must be points or atr")
+        if self.activation_kind not in ("immediate",) + TRAIL_TRIGGER_KINDS:
+            raise ValueError("invalid activation_kind")
+        if self.be_kind is not None and self.be_kind not in TRAIL_TRIGGER_KINDS:
+            raise ValueError("invalid be_kind")
+        if self.mode == "distance" and not self.distance > 0:
+            raise ValueError("distance trailing needs distance > 0")
+        if self.mode == "breakeven" and self.be_kind is None:
+            raise ValueError("breakeven mode needs a breakeven trigger")
+        if self.np_bars < 0 or self.np_kind not in TRAIL_TRIGGER_KINDS or (self.np_bars and not self.np_value > 0):
+            raise ValueError("no-progress exit needs np_bars >= 0 and, when on, np_kind points|r|atr and np_value > 0")
+        if self.mode == "none" and not self.np_bars:
+            raise ValueError("mode 'none' is only valid together with a no-progress exit")
+        if self.every_bars < 1 or self.min_step < 0 or self.be_offset < 0:
+            raise ValueError("every_bars >= 1, min_step >= 0 and be_offset >= 0 are required")
+        if self.activation_kind != "immediate" and not self.activation > 0:
+            raise ValueError("a triggered activation needs activation > 0")
+        if self.be_kind is not None and not self.be_trigger > 0:
+            raise ValueError("breakeven needs be_trigger > 0")
+
+
 @dataclass
 class SignalSet:
     """Per-bar arrays (length = number of bars). direction: +1 long, -1 short, 0 none.
@@ -64,6 +117,16 @@ class SignalSet:
     # entries). None = no signal exits (Phase 1 behaviour, unchanged).
     exit_long: np.ndarray | None = None
     exit_short: np.ndarray | None = None
+    # ADR-61 (optional): trailing management. All arrays are per-bar values KNOWN AT THAT BAR'S CLOSE.
+    trail: "TrailSpec | None" = None
+    trail_atr: np.ndarray | None = None          # ATR at each bar (atr distance / atr activation)
+    trail_level_long: np.ndarray | None = None   # level mode: candidate stop for a long held after this bar
+    trail_level_short: np.ndarray | None = None
+    # ADR-62 (optional, strategy-level trade management; all scalars, fixed per strategy)
+    max_trades_per_day: int | None = None        # executed trades per trading date (min with the config cap)
+    exit_cooldown_bars: int = 0                  # no new signal for N bars after a trade EXIT (signal bar - exit bar < N)
+    block_after: str | None = None               # "stop" | "target" | "any": no further entry that trading date
+    # after an exit of that class (stop: STOP/STOP_GAP/TRAIL_STOP*; target: TARGET/TARGET_GAP)
 
     @classmethod
     def empty(cls, n: int) -> "SignalSet":
@@ -79,6 +142,10 @@ class SignalSet:
     def exit_arrays(self) -> dict[str, np.ndarray]:
         return {k: v for k, v in (("exit_long", self.exit_long), ("exit_short", self.exit_short))
                 if v is not None}
+
+    def trail_arrays(self) -> dict[str, np.ndarray]:
+        return {k: v for k, v in (("trail_atr", self.trail_atr), ("trail_level_long", self.trail_level_long),
+                                  ("trail_level_short", self.trail_level_short)) if v is not None}
 
 
 class Strategy(ABC):
@@ -111,6 +178,22 @@ def validate_signals(sig: SignalSet, n: int, order: OrderSpec) -> None:
     for name, a in sig.exit_arrays().items():
         if len(a) != n or a.dtype != np.bool_:
             raise ValueError(f"{name} must be a bool array of length {n}")
+    for name, a in sig.trail_arrays().items():
+        if len(a) != n or a.dtype.kind != "f":
+            raise ValueError(f"{name} must be a float array of length {n}")
+    if sig.trail is not None:
+        if sig.trail.mode == "level" and (sig.trail_level_long is None and sig.trail_level_short is None):
+            raise ValueError("level trailing needs trail_level arrays")
+        if "atr" in (sig.trail.distance_kind if sig.trail.mode == "distance" else None,
+                     sig.trail.activation_kind if sig.trail.mode not in ("none", "breakeven") else None,
+                     sig.trail.be_kind, sig.trail.np_kind if sig.trail.np_bars else None) and sig.trail_atr is None:
+            raise ValueError("ATR-based trailing needs the trail_atr array")
+    elif sig.trail_arrays():
+        raise ValueError("trail arrays without a TrailSpec")
+    if sig.block_after not in (None, "stop", "target", "any"):
+        raise ValueError("block_after must be None, stop, target or any")
+    if sig.exit_cooldown_bars < 0 or (sig.max_trades_per_day is not None and sig.max_trades_per_day < 1):
+        raise ValueError("exit_cooldown_bars >= 0 and max_trades_per_day >= 1 are required")
     if not np.isin(sig.direction, (-1, 0, 1)).all():
         raise ValueError("direction must be in {-1, 0, 1}")
     active = sig.direction != 0
@@ -150,6 +233,21 @@ def check_causality(strategy: Strategy, bars: BarArrays, n_cuts: int = 20,
                 return CausalityReport(False, cuts, bad, k,
                                        f"'{name}' at bar {bad} changes when history is cut at {k}: "
                                        "the strategy uses information from after the decision bar")
+        if (full.max_trades_per_day, full.exit_cooldown_bars, full.block_after) != \
+                (part.max_trades_per_day, part.exit_cooldown_bars, part.block_after):
+            return CausalityReport(False, cuts, None, k, "trade-management parameters differ on truncated history")
+        if full.trail != part.trail:
+            return CausalityReport(False, cuts, None, k, "trail spec differs on truncated history")
+        ft, pt = full.trail_arrays(), part.trail_arrays()
+        if set(ft) != set(pt):
+            return CausalityReport(False, cuts, None, k, "trail arrays present/absent inconsistently")
+        for name in ft:
+            a, b = ft[name][:k], pt[name]
+            if len(b) != k or not np.all((a == b) | (np.isnan(a) & np.isnan(b))):
+                bad = 0 if len(b) != k else int(np.flatnonzero(~((a == b) | (np.isnan(a) & np.isnan(b))))[0])
+                return CausalityReport(False, cuts, bad, k,
+                                       f"'{name}' at bar {bad} changes when history is cut at {k}: "
+                                       "the trailing rule uses information from after the decision bar")
         fx, px = full.exit_arrays(), part.exit_arrays()
         if set(fx) != set(px):
             return CausalityReport(False, cuts, None, k, "exit arrays present/absent inconsistently")

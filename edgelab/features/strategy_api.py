@@ -37,7 +37,8 @@ class FeatureContext:
         # Any other bars (e.g. causality truncations): fresh engine, never cached, never mixed.
         return FeatureEngine(bars, self.dataset.calendar, self.sessions,
                              self.dataset.manifest.volume_type, self.dataset.instrument.tick_size,
-                             f"{self.dataset.manifest.dataset_id}#view", cache=None)
+                             f"{self.dataset.manifest.dataset_id}#view", cache=None,
+                             volume_refusal=self.engine.volume_refusal)
 
 
 class FeatureStrategy(Strategy):

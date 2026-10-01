@@ -28,6 +28,7 @@ here judges strategies: backtest results are returned with their sample-size lab
 from __future__ import annotations
 
 import math
+import re
 import threading
 from contextlib import nullcontext
 from pathlib import Path
@@ -44,7 +45,7 @@ from edgelab.features.cache import FeatureCache
 from edgelab.features.engine import FeatureEngine
 from edgelab.features.sessions import load_sessions
 from edgelab.features.spec import FeatureSpec, all_defs, get_def
-from edgelab.instruments import load_instruments
+from edgelab.instruments import contract_for, load_instruments
 
 
 def _jsonable(x: Any) -> Any:
@@ -368,6 +369,61 @@ class Services:
                           "ancestry": self.library.ancestry(strategy_id),
                           "children": self.library.children(strategy_id)})
 
+    # ------------------------------------------------------------ prop lifecycle (ADR-64)
+    def prop_profiles(self) -> dict:
+        from edgelab.prop.service import profile_status
+        return _jsonable(profile_status(self.root))
+
+    def prop_lifecycle(self, run_id: str, profile_ids=None) -> dict:
+        from edgelab.prop.service import lifecycle_for_run
+        return _jsonable(lifecycle_for_run(self, run_id, profile_ids))
+
+    # ------------------------------------------------------------ strategy factory (ADR-60)
+    # Generation only: no data, no backtests, no protocol / trial ledger / holdout access.
+    @property
+    def factory_dir(self) -> Path:
+        return self.data_root / "strategy_factory"
+
+    def _factory_manifest_dir(self, manifest_id: str) -> Path:
+        if not re.fullmatch(r"FM_[0-9A-F]{16}", str(manifest_id)):
+            raise ValueError(f"invalid manifest id {manifest_id!r}")
+        d = self.factory_dir / manifest_id
+        if not (d / "manifest.json").exists():
+            raise KeyError(f"unknown factory manifest {manifest_id}")
+        return d
+
+    def factory_generate(self, seed: int | None = None, quotas: Mapping[str, int] | None = None) -> dict:
+        from edgelab.strategy import factory
+        res = factory.generate(factory.DEFAULT_SEED if seed is None else int(seed), quotas)
+        d = factory.write_manifest(res, self.factory_dir / res.manifest_id)
+        return _jsonable({"manifest_id": res.manifest_id, "path": str(d), "counts": res.header["counts"]})
+
+    def factory_manifests(self) -> list[dict]:
+        from edgelab.strategy import factory
+        out = []
+        for d in sorted(self.factory_dir.glob("FM_*")) if self.factory_dir.exists() else []:
+            if (d / "manifest.json").exists():
+                h = factory.read_header(d)
+                out.append({"manifest_id": h["manifest_id"], "seed": h["identity"]["seed"],
+                            "factory_version": h["identity"]["factory_version"],
+                            "full_allocation": h["identity"]["full_allocation"],
+                            "valid_unique": h["counts"]["valid_unique"]})
+        return out
+
+    def factory_summary(self, manifest_id: str) -> dict:
+        from edgelab.strategy import factory
+        return _jsonable(factory.summary(self._factory_manifest_dir(manifest_id)))
+
+    def factory_query(self, manifest_id: str, filters: Mapping | None = None, limit: int = 100,
+                      offset: int = 0) -> dict:
+        from edgelab.strategy import factory
+        return _jsonable(factory.query(self._factory_manifest_dir(manifest_id), filters,
+                                       max(1, min(int(limit), 1000)), max(0, int(offset))))
+
+    def factory_verify(self, manifest_id: str) -> dict:
+        from edgelab.strategy import factory
+        return _jsonable(factory.verify(self._factory_manifest_dir(manifest_id)))
+
     def generate_variations(self, base: Any, spec: Any, save: bool = True) -> dict:
         from edgelab.strategy.variations import generate_variations
         raw = self._definition(base)
@@ -498,22 +554,29 @@ class Services:
         check_identity(ds.instrument)           # provisional source identity: economics not interpretable
         costs = cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
-        res = run_backtest(ds, bound, costs, self.cfg["backtest"], sizing=strat.sizing)
+        res = run_backtest(ds, bound, costs, self.cfg["backtest"], sizing=strat.sizing,
+                           contract=contract_for(self.cfg, strat.sizing))
         met = compute_metrics(res.trades, sample_thresholds=self.cfg.get("sample_size"))
         synthetic = self._is_synthetic(ds.manifest)
+        # ADR-64: EVERY backtest runs the prop lifecycle layer (pure function of the trades; worker processes have no
+        # profiles and leave it to the parent's record step, which computes it from the same trades)
+        prop = None
+        if hasattr(self, "root"):
+            from edgelab.prop.service import outcomes as prop_outcomes
+            prop = prop_outcomes(self.root, res.trades, assumptions=res.assumptions)
         run_id = None
         if record:
             run_id = self._record_cell(res, met, synthetic, notes=notes, parent_strategy_id=parent_strategy_id,
-                                       mutation=mutation, lock=lock, status=status)
+                                       mutation=mutation, lock=lock, status=status, prop=prop)
         if pctx is not None and pctx["stage"] == "discovery" and entry_point != "search_cell":
             with guard:                                  # search cells are recorded by the search runner
                 pctx["counted"] = self._protocol_record(pctx, res.dataset, run_id, entry_point)
         return {"ds": ds, "strategy": strat, "bound": bound, "costs": costs, "result": res,
-                "metrics": met, "synthetic": synthetic, "run_id": run_id, "protocol": pctx}
+                "metrics": met, "synthetic": synthetic, "run_id": run_id, "protocol": pctx, "prop": prop}
 
     def _record_cell(self, res, met: Mapping, synthetic: bool, *, notes: str | None = None,
                      parent_strategy_id: str | None = None, mutation: str | None = None, lock=None,
-                     status: str = "IN_SAMPLE") -> str:
+                     status: str = "IN_SAMPLE", prop: Mapping | None = None) -> str:
         """The run-record step of `_run_cell` (also used by the parallel search parent, which records
         results computed in worker processes). Synthetic data is always labelled first."""
         from edgelab.research.runs import record_run
@@ -522,9 +585,12 @@ class Services:
             notes = label if notes is None else f"{label} | {notes}"
         elif notes is None:
             notes = "single backtest (Strategy Lab)"
+        if prop is None:
+            from edgelab.prop.service import outcomes as prop_outcomes
+            prop = prop_outcomes(self.root, res.trades, assumptions=res.assumptions)
         with (lock if lock is not None else nullcontext()):
             return record_run(self.store, self.cfg, res, met, notes=notes, status=status,
-                              parent_strategy_id=parent_strategy_id, mutation=mutation)
+                              parent_strategy_id=parent_strategy_id, mutation=mutation, prop=prop)
 
     def run_search(self, spec: Any, workers: int | None = None) -> dict:
         """Phase 4: plan and run a strategy x dataset search, storing every cell durably;
@@ -604,6 +670,7 @@ class Services:
                           "dataset": {k: getattr(ds.manifest, k) for k in ("provider", "asset_type", "instrument",
                                                                            "timeframe", "start", "end")},
                           "cost_status": cell["costs"].status, "metrics": met,
+                          "prop": cell["prop"],              # ADR-65: the prop audit, shown with every backtest result
                           "signal_diagnostics": cell["bound"].last_diagnostics,
                           "skipped": dict(res.skipped),
                           "protocol": None if cell["protocol"] is None else
@@ -1021,7 +1088,8 @@ class Services:
                                                           self._config_hash()).compiled, sd).bind(ctx)
             eligible = ctrl.eligible_count(ds.bars)
             ctrl.set_design(min(1.0, n_pre / eligible) if eligible else 0.0, p_long)
-            r = run_backtest(ds, ctrl, costs, self.cfg["backtest"], sizing=cand.sizing)
+            r = run_backtest(ds, ctrl, costs, self.cfg["backtest"], sizing=cand.sizing,
+                             contract=contract_for(self.cfg, cand.sizing))
             reals.append({"index": k, "seed": sd, "control_strategy_id": ctrl.strategy_id,
                           "eligible_bars": eligible, "signal_rate": ctrl.control["signal_rate"],
                           "pre_cooldown_signals": ctrl.pre_cooldown_fires(ds.bars), "signals": r.n_signals, "trades_hash": r.trades_hash,
@@ -1090,10 +1158,14 @@ class Services:
 
     def create_protocol(self, dataset_id: str, discovery: tuple, holdout: tuple, *, name: str = "",
                         pre_protocol_exposure: list | tuple = (), exposure_statement: str = "",
-                        trial_budget: int | None = None, holdout_looks: int | None = None) -> dict:
+                        trial_budget: int | None = None, holdout_looks: int | None = None,
+                        supersedes: str | None = None) -> dict:
         """Create and ACTIVATE a research protocol (immutable; see research/protocol.py). Windows are
         trading dates on the dataset's calendar. `pre_protocol_exposure` lists run ids made before
-        activation (recorded by identity only - never metrics, never re-attributed as trials)."""
+        activation (recorded by identity only - never metrics, never re-attributed as trials).
+        `supersedes` (ADR-67): the ACTIVE protocol of the same scope is replaced by this new one - allowed ONLY
+        while it is unused (zero trial events, zero holdout accesses); it is retired (never edited) and the new
+        material records its id. The new record is fully built and validated before anything is retired."""
         from edgelab.core.identity import code_version, hash_obj
         from edgelab.engine.costs import cost_model_from_config
         from edgelab.research import protocol as rp
@@ -1118,10 +1190,25 @@ class Services:
             dataset_manifest=m, windows=windows, cost_model=cm.to_dict(), backtest_config_hash=hash_obj(self.cfg["backtest"]),
             config_hash=self._config_hash(), pre_protocol_exposure=exposure, exposure_statement=exposure_statement,
             name=name, trial_budget=trial_budget or rp.DEFAULT_TRIAL_BUDGET,
-            holdout_looks=holdout_looks or rp.DEFAULT_HOLDOUT_LOOKS)
+            holdout_looks=holdout_looks or rp.DEFAULT_HOLDOUT_LOOKS, supersedes=supersedes)
         rec = rp.make_record(material, {"code_version": code_version()})
         key = self._scope_key(m.instrument, m.provider)
         active = self.store.list_protocols(key, "ACTIVE")
+        if supersedes is not None:
+            old = self.store.get_protocol(supersedes)                     # KeyError: unknown protocol
+            rp.verify_record(old)
+            if not active or active[0]["protocol_id"] != supersedes:
+                raise rp.ProtocolRefusal("PROTOCOL_SUPERSEDE_INVALID", "only the ACTIVE protocol of this scope can be "
+                                         "superseded", protocol_id=supersedes, scope=key)
+            events = self.store.list_trial_events(supersedes)
+            looks = self.store.list_holdout_access(supersedes)
+            if events or looks:
+                raise rp.ProtocolRefusal("PROTOCOL_IN_USE", "a protocol with recorded trials or holdout accesses is never "
+                                         "superseded; retire it and document the history instead",
+                                         protocol_id=supersedes, trial_events=len(events), holdout_accesses=len(looks))
+            if rec["protocol_id"] == supersedes:
+                raise rp.ProtocolRefusal("PROTOCOL_SUPERSEDE_INVALID", "the new material equals the old one")
+            active = []                                  # retired below, only after every check has passed
         if active and active[0]["protocol_id"] != rec["protocol_id"]:
             raise rp.ProtocolRefusal("PROTOCOL_ALREADY_ACTIVE", f"{active[0]['protocol_id']} is ACTIVE for {key}; "
                                      "retire it explicitly before activating another protocol",
@@ -1132,6 +1219,8 @@ class Services:
                                          protocol_id=rec["protocol_id"])
         except KeyError:
             pass
+        if supersedes is not None:
+            self.store.retire_protocol(supersedes)
         created = self.store.save_protocol(rec, key)
         return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
 
@@ -1166,7 +1255,9 @@ class Services:
         looks = [h for h in ho if h["status"] != "refused"]
         n, budget = len(counted), mat["trial_budget"]["max_unique_trials"]
         hb = mat["holdout_budget"]["max_unique_candidate_evaluations"]
-        mt = bonferroni(mat["multiple_testing"], n)
+        from edgelab.research.protocol import family_size
+        mt = bonferroni(mat["multiple_testing"], family_size(mat, n))
+        declared = mat["multiple_testing"].get("family_size_rule") == "declared_max_unique_trials"
         return _jsonable({
             "protocol_id": protocol_id, "status": p["status"], "scope": mat["scope"],
             "source_dataset": mat["source_dataset"],
@@ -1194,7 +1285,10 @@ class Services:
                    f"{mt['z_one_sided']:.4f} and q_boot the bootstrap-t quantile at the same alpha"
                    if mat['acceptance_criteria']['oos_confidence'].get('method_id') == 'min_normal_bootstrap_t_v1'
                    else f"mean - {mt['z_one_sided']:.4f} * se")
-                + "; alpha shrinks with every counted unique trial (family_size) and is recomputed at evaluation time")},
+                + ("; the family is the DECLARED trial budget, fixed before discovery (it does not change with the "
+                   "counted trials)" if declared else
+                   "; alpha shrinks with every counted unique trial (family_size) and is recomputed at evaluation time"))},
+            "supersedes": mat.get("supersedes"),
             "pre_protocol_exposure": mat["pre_protocol_exposure"]})
 
     def _protocol_gate(self, ds, strat, entry_point: str, holdout_access_id: str | None) -> dict | None:
@@ -1363,7 +1457,8 @@ class Services:
         """THE holdout stage (ADR-56). One look per frozen, shortlisted candidate, within the protocol's
         holdout-look budget: runs the candidate on exactly the locked holdout bars (run status
         OUT_OF_SAMPLE), the protocol's random-entry control and cost stress, and applies the
-        pre-registered criteria with the Bonferroni family size = counted unique trials now.
+        pre-registered criteria with the protocol's Bonferroni family (declared budget for version 3,
+        counted unique trials for version <= 2).
         Every attempt (granted or refused) is written to the holdout ledger first. Never 'accepted'."""
         import json as _json
         from datetime import datetime, timezone

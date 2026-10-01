@@ -38,6 +38,25 @@ certainty becomes two-sided: an exit touch at X after a level fill at L is certa
   (b) (L - entry_side_open) * (X - L) > 0 (the entry side had to pass L to reach X).
 Otherwise the touch is a conflict for the configured policy. This is never more optimistic than the
 single-series rule; it differs only for a limit-entry fill bar's stop touch (now a conflict).
+
+TRAILING / BREAKEVEN STOPS (ADR-61, ``simulate_exit_trailing``; used only when a strategy declares them):
+  * Decisions are taken at a bar's CLOSE from bars <= k and take effect from bar k+1. The stop that
+    applies on bar k was therefore fixed before bar k opened: bar k's own extreme can never raise the
+    stop that bar k is tested against (no lookahead, no same-bar self-rescue).
+  * Each bar is resolved exactly like a fixed stop with ``resolve_bar`` using the CURRENT stop: a gap of the
+    open through the stop exits at the open (worse), a touch exits at the stop, a stop/target touch on one
+    bar is a conflict for the configured policy (incl. intrabar replay with that bar's fixed stop).
+  * The stop is a ratchet: it moves only in the favorable direction, never loosens, and a candidate that is
+    not strictly on the protective side of the bar's close is ignored (it would be an immediate exit).
+  * The favorable extreme is measured on the EXIT side of the quote model (long: BID highs, short: ASK lows),
+    from the fill price; a stop/limit LEVEL fill starts the extreme at the fill price (the entry bar's own
+    extremes may pre-date the fill), a market / gap-open fill includes the whole entry bar.
+  * Take-profit stays fixed. Forced session close, time exit, max hold, end of data and signal exits keep
+    their existing precedence and prices; trailing only adds earlier stop exits, so the same-trading-date
+    and holding-time guarantees cannot be weakened. Reasons: TRAIL_STOP / TRAIL_STOP_GAP when the stop had moved.
+  * NO-PROGRESS exit (ADR-62, same kernel): at the close of bar N since entry (entry bar = 1), if the favorable
+    excursion (same exit-side extreme as above, including bar N) is below the required points / R / ATR, exit at that
+    bar's close (reason NO_PROGRESS). Stop/target touches of bar N and the forced/time/max-hold closes come first.
 """
 from __future__ import annotations
 
@@ -368,3 +387,118 @@ def simulate_exit(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, ent
         mae = max(hi - entry.price, px - entry.price, 0.0)
     return {"exit_bar": int(k), "exit_price_theo": float(px), "exit_reason": reason,
             "conflict_resolution": conflict, "mfe_points": float(mfe), "mae_points": float(mae)}
+
+
+def simulate_exit_trailing(A: MarketArrays, ib: IntrabarData | None, pol: FillPolicy, entry: Entry,
+                           direction: int, stop: float, target: float, time_bars: int | None,
+                           max_hold: int | None, entry_type: str, entry_level: float, trail,
+                           atr: np.ndarray | None, level: np.ndarray | None, signal_bar: int,
+                           signal_exit_bar: int | None = None, ent: MarketArrays | None = None,
+                           ib_ent: IntrabarData | None = None) -> dict:
+    """Exit simulation with a trailing / breakeven stop (module docstring). Parameters as in
+    ``simulate_exit`` plus ``trail`` (engine.signals.TrailSpec), the per-bar ``atr`` and ``level`` arrays of
+    the traded direction (known at each bar's close) and ``signal_bar`` (ATR for R/ATR activation is the
+    value at the decision bar). Returns the ``simulate_exit`` dict plus ``final_stop`` and ``trail_updates``."""
+    d, f, last = direction, entry.bar, A.n - 1
+    time_idx = f + time_bars - 1 if time_bars else last
+    hold_idx = f + max_hold - 1 if max_hold else last
+    limit = min(last, time_idx, hold_idx)
+    sx = signal_exit_bar if (signal_exit_bar is not None and f < signal_exit_bar <= limit) else None
+    if sx is not None:
+        limit = sx - 1
+    fill = entry.price
+    risk0 = d * (fill - stop)
+    atr_sig = float(atr[signal_bar]) if atr is not None else math.nan
+
+    def points(kind: str, v: float) -> float:
+        return v if kind == "points" else v * risk0 if kind == "r" else v * atr_sig
+
+    act_pts = points(trail.activation_kind, trail.activation) if trail.activation_kind != "immediate" else 0.0
+    be_pts = points(trail.be_kind, trail.be_trigger) if trail.be_kind else math.nan
+    np_pts = points(trail.np_kind, trail.np_value) if trail.np_bars else math.nan
+    extreme = fill
+    if entry.kind == "open":
+        extreme = max(fill, float(A.h[f])) if d > 0 else min(fill, float(A.l[f]))
+    new_extreme = extreme != fill
+    active = trail.mode in ("distance", "level") and trail.activation_kind == "immediate"
+    be_on = False
+    cur, updates, conflict = stop, 0, ""
+
+    def close_reason(k: int) -> str | None:
+        if A.force_close[k]:
+            return "SESSION_CLOSE"
+        if k >= time_idx and time_bars:
+            return "TIME"
+        if k >= hold_idx and max_hold:
+            return "MAX_HOLD"
+        if k == last:
+            return "END_OF_DATA"
+        return None
+
+    k, px, reason = f, math.nan, ""
+    for k in range(f, limit + 1):
+        out, px, reason, c2 = resolve_bar(A, ib, k, d, cur, target, pol, entry if k == f else None,
+                                          entry_type, entry_level, ent, ib_ent)
+        conflict = c2 or conflict
+        if out != NONE:
+            if cur != stop and reason in ("STOP", "STOP_GAP"):
+                reason = "TRAIL_" + reason
+            break
+        cr = close_reason(k)
+        if cr:
+            reason, px = cr, float(A.c[k])
+            break
+        # ---- decisions at the CLOSE of bar k (apply from bar k+1) ----
+        if k > f:
+            hk, lk = float(A.h[k]), float(A.l[k])
+            new_extreme = (hk > extreme) if d > 0 else (lk < extreme)
+            if new_extreme:
+                extreme = hk if d > 0 else lk
+        profit = d * (extreme - fill)
+        if trail.np_bars and k - f + 1 == trail.np_bars and not profit >= np_pts:
+            reason, px = "NO_PROGRESS", float(A.c[k])
+            break
+        if not active and trail.mode not in ("breakeven", "none") and profit >= act_pts:
+            active = True
+        if trail.be_kind and not be_on and profit >= be_pts:
+            be_on = True
+        close_k = float(A.c[k])
+        cands = []
+        if be_on:
+            cands.append((fill + d * trail.be_offset, 0.0))
+        n_held = k - f + 1
+        if active and trail.mode in ("distance", "level") and n_held % trail.every_bars == 0 \
+                and (new_extreme or not trail.only_new_extreme):
+            if trail.mode == "distance":
+                dist = trail.distance if trail.distance_kind == "points" else trail.distance * float(atr[k])
+                cands.append((extreme - d * dist, trail.min_step))
+            else:
+                cands.append((float(level[k]), trail.min_step))
+        for cand, step in cands:
+            if math.isfinite(cand) and d * (close_k - cand) > 0 and d * (cand - cur) > step:
+                cur, updates = cand, updates + 1
+        if sx is not None and k == limit:
+            g = _gap(d, float(A.o[sx]), cur, target, pol)
+            if g is not None:
+                k, px, reason = sx, float(g[1]), g[2]
+                if cur != stop and reason == "STOP_GAP":
+                    reason = "TRAIL_STOP_GAP"
+            else:
+                k, px, reason = sx, float(A.o[sx]), "SIGNAL"
+            break
+    else:                                   # defensive: limit always carries a close-based or signal exit
+        raise AssertionError(f"no exit event by bar {limit}")
+    k_full = k + 1 if reason in ("SESSION_CLOSE", "TIME", "MAX_HOLD", "END_OF_DATA", "NO_PROGRESS") else k
+    if k_full > f:
+        hi, lo = A.h[f:k_full].max(), A.l[f:k_full].min()
+    else:
+        hi, lo = -math.inf, math.inf
+    if d > 0:
+        mfe = max(hi - fill, px - fill, 0.0)
+        mae = max(fill - lo, fill - px, 0.0)
+    else:
+        mfe = max(fill - lo, fill - px, 0.0)
+        mae = max(hi - fill, px - fill, 0.0)
+    return {"exit_bar": int(k), "exit_price_theo": float(px), "exit_reason": reason,
+            "conflict_resolution": conflict, "mfe_points": float(mfe), "mae_points": float(mae),
+            "final_stop": float(cur), "trail_updates": int(updates)}

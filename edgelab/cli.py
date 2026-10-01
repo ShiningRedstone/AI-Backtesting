@@ -163,12 +163,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--controls", type=int, default=20, help="control: random-entry realizations (default 20)")
 
     p = sub.add_parser("prop", help="Phase 6 prop-account simulation over a stored run (read-only)")
-    p.add_argument("action", choices=("configs", "list", "validate", "simulate", "show"))
+    p.add_argument("action", choices=("configs", "list", "validate", "simulate", "show", "profiles", "lifecycle"))
     p.add_argument("target", nargs="?", help="validate: rule-set file or id; simulate: RUN_ id; show: PROP_ id")
     p.add_argument("--config", action="append", default=[],
                    help="simulate: rule-set file or id from configs/prop (repeat: one account per config)")
     p.add_argument("--accounts", type=int, default=1, help="simulate: identical accounts per --config (default 1)")
     p.add_argument("--record", action="store_true", help="simulate: store the simulation under <data>/prop_simulations")
+
+    p = sub.add_parser("factory", help="day-trading strategy factory: generate / list / summary / query / verify "
+                                       "a strategy-universe manifest (generation only: no data, no trials)")
+    p.add_argument("action", choices=("generate", "list", "summary", "query", "verify", "capabilities"))
+    p.add_argument("manifest_id", nargs="?", help="FM_ id (summary / query / verify)")
+    p.add_argument("--seed", type=int, help="generate: seed (default: the factory default seed)")
+    p.add_argument("--filter", action="append", default=[], help="query: key=value (repeatable)")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--offset", type=int, default=0)
 
     p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
     p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
@@ -254,6 +263,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         elif a.cmd == "prop":
             return _prop(svc, a)
+        elif a.cmd == "factory":
+            return _factory(svc, a, ap)
         elif a.cmd == "report":
             try:
                 _print(svc.research_report(a.run_ids), True)
@@ -280,6 +291,38 @@ def main(argv: list[str] | None = None) -> int:
     except KeyError as exc:
         print(f"not found: {exc}", file=sys.stderr)
         return 3
+    return 0
+
+
+def _factory(svc, a, ap) -> int:
+    if a.action == "generate":
+        r = svc.factory_generate(a.seed)
+        if a.json:
+            _print(r, True)
+        else:
+            c = r["counts"]
+            print(f"manifest {r['manifest_id']} -> {r['path']}\n  candidates {c['candidates_generated']}, valid unique "
+                  f"{c['valid_unique']}, rejected {c['rejected']}, duplicates {c['duplicates']}\n"
+                  "  (generation only: no market data read, no numerical trials, no holdout looks)")
+        return 0
+    if a.action == "list":
+        _print(svc.factory_manifests(), a.json)
+        return 0
+    if a.action == "capabilities":
+        from edgelab.strategy import capabilities
+        print(capabilities.render_markdown(), end="")
+        return 0
+    if not a.manifest_id:
+        ap.error(f"factory {a.action} needs a manifest id (FM_...)")
+    if a.action == "summary":
+        _print(svc.factory_summary(a.manifest_id), True)
+    elif a.action == "query":
+        filters = dict(f.split("=", 1) for f in a.filter)
+        _print(svc.factory_query(a.manifest_id, filters, a.limit, a.offset), True)
+    else:
+        r = svc.factory_verify(a.manifest_id)
+        _print(r, a.json)
+        return 0 if r["reproducible"] else 2
     return 0
 
 
@@ -431,6 +474,22 @@ def _prop(svc, a) -> int:
     from edgelab.prop.rules import PropConfigError
     from edgelab.prop.simulator import PropDataError
     try:
+        if a.action == "profiles":
+            r = svc.prop_profiles()
+            _print(r, True)
+            return 0 if not r["registry_problems"] else 2
+        if a.action == "lifecycle":
+            if not a.target:
+                raise ValueError("prop lifecycle needs a RUN_ id")
+            r = svc.prop_lifecycle(a.target)
+            if a.json:
+                _print(r, True)
+            else:
+                for pr in r["profiles"]:
+                    print("\n".join(pr.get("headline", [pr.get("final_status", "")])))
+                    print(f"  rule profile: {pr['profile']['profile_id']} v{pr['profile']['version']} "
+                          f"hash {pr['profile'].get('profile_hash', '')[:12]}  status: {pr['profile'].get('verification_status')}")
+            return 0
         if a.action == "configs":
             _print([{k: c[k] for k in ("file", "id", "name", "valid", "synthetic_test_only", "config_hash", "errors")}
                     for c in svc.prop_configs()], a.json)

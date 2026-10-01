@@ -1,0 +1,385 @@
+# EdgeLab prop rule profile, schema 3 (ADR-66). Every rule: value + status (VERIFIED / ASSUMED_DEFAULT / CUSTOM)
+# + basis. Never edit a registered file: bump the version (scripts/prop_default_profiles.py).
+kind: edgelab.prop_profile
+schema_version: 3
+profile_id: TRADEIFY_SELECT_DAILY_50K
+version: 3
+provider: Tradeify
+product: Select Daily
+path: Tradeify Select 50K evaluation -> Select Daily 50K funded -> Select Daily payouts
+description: Select evaluation, Select Daily funded branch.
+rules_source:
+  title: Canonical default prop rule profiles supplied by the user in the EdgeLab tasks of 2026-09-30
+  provided_on: '2026-09-30'
+  note: VERIFIED = explicitly supplied by the user; ASSUMED_DEFAULT = EdgeLab assumption, simulated but not a confirmed provider
+    rule. Neither was checked against provider documentation by EdgeLab.
+conventions:
+  on_oversize: fail_incompatible
+  pass_checked: end_of_trading_day
+  payout_checked: end_of_trading_day
+rules:
+  account.purchase_date:
+    value: '2026-10-01'
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  account.quantity_unit:
+    value: MNQ
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  account.size:
+    value: 50000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.consistency.cushion_amount_usd:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.consistency.cushion_enabled:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: no consistency cushion configured
+  evaluation.consistency.cushion_percent_points:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.consistency.enabled:
+    value: true
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.consistency.percent:
+    value: 40
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.consistency.window:
+    value: account
+    status: VERIFIED
+    basis: 'Canonical task default: largest single day / total account profit'
+  evaluation.day_boundary.reset_time:
+    value: '18:00'
+    status: ASSUMED_DEFAULT
+    basis: EdgeLab default day boundary 18:00 America/New_York (assumed; configurable per stage)
+  evaluation.day_boundary.timezone:
+    value: America/New_York
+    status: ASSUMED_DEFAULT
+    basis: EdgeLab default day boundary 18:00 America/New_York (assumed; configurable per stage)
+  evaluation.dll.amount:
+    value: 0
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.dll.behavior:
+    value: soft
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.dll.enabled:
+    value: false
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.dll.measurement:
+    value: closed_trades_only
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: DLL measured on closed trades only (assumed; unrealized/intraday measurement configurable)'
+  evaluation.drawdown.breach_comparison:
+    value: at_or_below
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: touching the floor counts as a breach (assumed)'
+  evaluation.drawdown.lock_enabled:
+    value: true
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default lock: trigger starting balance + 2,100, locked floor starting balance + 100 (assumed; configurable)'
+  evaluation.drawdown.lock_trigger_offset:
+    value: 2100
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default lock: trigger starting balance + 2,100, locked floor starting balance + 100 (assumed; configurable)'
+  evaluation.drawdown.locked_floor_offset:
+    value: 100
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default lock: trigger starting balance + 2,100, locked floor starting balance + 100 (assumed; configurable)'
+  evaluation.drawdown.max_loss:
+    value: 2000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.drawdown.measurement:
+    value: intratrade_worst_price
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab execution-model assumption: worst executable price reached during the trade (bar/quote model, MAE) compared
+      with the floor; not a provider-certified intrabar rule'
+  evaluation.drawdown.mode:
+    value: eod_trailing
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.drawdown.update_frequency:
+    value: end_of_day
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.max_micros:
+    value: 40
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.minimum_trading_days:
+    value: 3
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.profit_target:
+    value: 3000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  evaluation.scaling.basis:
+    value: balance_above_stage_start
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.scaling.effective:
+    value: next_session
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.scaling.enabled:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: 'no evaluation scaling supplied: disabled (assumed)'
+  evaluation.scaling.persist:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.scaling.start_micros:
+    value: 40
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.scaling.tiers:
+    value: []
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.scaling.update:
+    value: end_of_session
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  evaluation.starting_balance:
+    value: 50000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.carry_evaluation_profit:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: EdgeLab default (assumed)
+  funded.consistency.cushion_amount_usd:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  funded.consistency.cushion_enabled:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: no consistency cushion configured
+  funded.consistency.cushion_percent_points:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  funded.consistency.enabled:
+    value: false
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.consistency.percent:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  funded.consistency.window:
+    value: account
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  funded.day_boundary.reset_time:
+    value: '18:00'
+    status: ASSUMED_DEFAULT
+    basis: EdgeLab default day boundary 18:00 America/New_York (assumed; configurable per stage)
+  funded.day_boundary.timezone:
+    value: America/New_York
+    status: ASSUMED_DEFAULT
+    basis: EdgeLab default day boundary 18:00 America/New_York (assumed; configurable per stage)
+  funded.dll.amount:
+    value: 1000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.dll.behavior:
+    value: soft
+    status: ASSUMED_DEFAULT
+    basis: 'Select Daily DLL behaviour: soft (stop for the day) is an EdgeLab default assumption; set hard (CUSTOM) to fail
+      the account instead'
+  funded.dll.enabled:
+    value: true
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.dll.measurement:
+    value: closed_trades_only
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: DLL measured on closed trades only (assumed; unrealized/intraday measurement configurable)'
+  funded.drawdown.breach_comparison:
+    value: at_or_below
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: touching the floor counts as a breach (assumed)'
+  funded.drawdown.lock_enabled:
+    value: true
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default lock: trigger starting balance + 2,100, locked floor starting balance + 100 (assumed; configurable)'
+  funded.drawdown.lock_trigger_offset:
+    value: 2100
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default lock: trigger starting balance + 2,100, locked floor starting balance + 100 (assumed; configurable)'
+  funded.drawdown.locked_floor_offset:
+    value: 100
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default lock: trigger starting balance + 2,100, locked floor starting balance + 100 (assumed; configurable)'
+  funded.drawdown.max_loss:
+    value: 2000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.drawdown.measurement:
+    value: intratrade_worst_price
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab execution-model assumption: worst executable price reached during the trade (bar/quote model, MAE) compared
+      with the floor; not a provider-certified intrabar rule'
+  funded.drawdown.mode:
+    value: eod_trailing
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.drawdown.update_frequency:
+    value: end_of_day
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.max_micros:
+    value: 40
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.scaling.basis:
+    value: balance_above_stage_start
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: tier from EOD balance above the funded start, so a payout can move the tier down (assumed)'
+  funded.scaling.effective:
+    value: next_session
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.scaling.enabled:
+    value: true
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.scaling.persist:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: tiers are recalculated each session end and can move down (assumed)'
+  funded.scaling.start_micros:
+    value: 20
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.scaling.tiers:
+    value:
+    - min_profit: 1500
+      micros: 30
+    - min_profit: 2000
+      micros: 40
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.scaling.update:
+    value: end_of_session
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.starting_balance:
+    value: 50000
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  funded.starts:
+    value: next_trading_day
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  live_transition.payout_count:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  live_transition.rule:
+    value: none
+    status: ASSUMED_DEFAULT
+    basis: no live-transition rule configured for Select (assumed)
+  payout.after_payout_drawdown:
+    value: unchanged
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: a payout does not move the drawdown floor (assumed)'
+  payout.balance_requirement:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  payout.balance_requirement_enabled:
+    value: false
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.buffer_enabled:
+    value: true
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.buffer_offset:
+    value: 2100
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.cap_mode:
+    value: by_purchase_date
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.cap_schedule:
+    value: []
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  payout.cap_table:
+    value:
+    - purchased_on_or_after: '2026-09-01'
+      amount: 1250
+    status: VERIFIED
+    basis: 'Canonical task default: $1,250 cap for the current research scenario (purchase 2026-10-01)'
+  payout.count_limit:
+    value: 0
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable
+  payout.count_limit_enabled:
+    value: false
+    status: ASSUMED_DEFAULT
+    basis: no payout count limit supplied (assumed)
+  payout.cycle_reset:
+    value: after_payout
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.enabled:
+    value: true
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.formula_factor:
+    value: 2
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.formula_mode:
+    value: cycle_profit_multiple
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.formula_profit_basis:
+    value: cycle_net_profit
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.frequency_mode:
+    value: daily
+    status: ASSUMED_DEFAULT
+    basis: 'Select Daily: a payout can be requested at any day''s end (assumed)'
+  payout.minimum:
+    value: 250
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.positive_cycle_profit_required:
+    value: true
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.request:
+    value: max_allowed
+    status: ASSUMED_DEFAULT
+    basis: 'EdgeLab default: each payout requests the maximum permitted amount (assumed)'
+  payout.split_trader:
+    value: 0.9
+    status: VERIFIED
+    basis: Canonical task default supplied by the user (2026-09-30)
+  payout.winning_day_threshold:
+    value: 150
+    status: ASSUMED_DEFAULT
+    basis: reported profitable-day threshold; not a Select Daily payout condition (assumed)
+  payout.winning_days_required:
+    value: 1
+    status: ASSUMED_DEFAULT
+    basis: inactive while the parent rule is disabled; value kept so the profile stays runnable

@@ -36,6 +36,7 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
 AI_GEN_ID = re.compile(r"^AIG_[0-9A-F]{12}$")
 AI_PROP_ID = re.compile(r"^AIP_[0-9A-F]{12}$")
 PROTOCOL_ID = re.compile(r"^RP_[0-9A-F]{12}$")
+FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 
 
 class ApiError(Exception):
@@ -321,6 +322,27 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def family(fid):
         return jsonify(call(svc.family_detail, _id(fid, SAFE_ID, "family id")))
 
+    # ------------------------------------------------------------------ strategy factory (read-only)
+    @app.get("/api/factory/manifests")
+    def factory_manifests():
+        return jsonify(call(svc.factory_manifests))
+
+    @app.get("/api/factory/<mid>")
+    def factory_summary(mid):
+        return jsonify(call(svc.factory_summary, _id(mid, FACTORY_ID, "manifest id")))
+
+    @app.get("/api/factory/<mid>/strategies")
+    def factory_strategies(mid):
+        args = dict(request.args)
+        try:
+            limit, offset = int(args.pop("limit", 100)), int(args.pop("offset", 0))
+        except ValueError:
+            raise _bad("limit/offset must be integers")
+        for k, v in args.items():
+            _id(k, SAFE_ID, "filter name")
+            _id(v, SAFE_ID, "filter value")
+        return jsonify(call(svc.factory_query, _id(mid, FACTORY_ID, "manifest id"), args, limit, offset))
+
     # ------------------------------------------------------------------ variations
     def _spec(b: dict) -> dict:
         spec = b.get("spec")
@@ -554,6 +576,15 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if not isinstance(batch, dict):
             raise _bad("batch must be a proposal batch object (or its YAML/JSON text)")
         return jsonify(call(svc.ingest_proposals, batch, bool(b.get("save", False))))
+
+    # ------------------------------------------------------------------ prop lifecycle (ADR-64, read-only)
+    @app.get("/api/prop/profiles")
+    def prop_profiles():
+        return jsonify(call(svc.prop_profiles))
+
+    @app.get("/api/prop/lifecycle/<rid>")
+    def prop_lifecycle(rid):
+        return jsonify(call(svc.prop_lifecycle, _id(rid, RUN_ID, "run id")))
 
     # ------------------------------------------------------------------ prop simulation (Phase 6)
     @app.get("/api/prop/configs")

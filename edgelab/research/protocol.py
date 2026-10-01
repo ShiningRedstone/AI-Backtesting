@@ -32,6 +32,13 @@ with a pre-registered replicate count and a seed derived from (protocol, candida
 ``robust_lower_bound``. The random-entry control is an exact Monte-Carlo p-value robustness filter,
 NOT a familywise test. Version-1 records keep their own (normal / percentile) rules when assessed.
 
+Declared multiplicity family (protocol_version 3, ADR-67). The Bonferroni family is the DECLARED
+``trial_budget.max_unique_trials`` (fixed before discovery, e.g. the 10,000-strategy universe), not the number of trials counted
+so far: per-test alpha = familywise_alpha / declared budget at every holdout look, so an early look is never easier than a
+late one. The bootstrap-t replicate count is derived from that family (>= 25 replicates beyond the tail). Version-2 records
+keep their counted-family rule. A protocol that has not been used (zero counted trials, zero holdout looks) can be SUPERSEDED
+by a new protocol (new identity, ``supersedes`` recorded; the old record is retired, never edited).
+
 Refusals are ``ProtocolRefusal`` (a ValueError) with a machine-readable ``code``.
 Nothing here reads results into AI context; the AI layer only sees the protocol id and the
 discovery window (edgelab/ai/context.py FORBIDDEN_KEYS still applies).
@@ -48,15 +55,17 @@ import pandas as pd
 
 from edgelab.core.identity import hash_obj
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 STATUSES = ("ACTIVE", "RETIRED")
 ENTRY_POINTS = ("backtest_strategy", "search_cell", "internal_validation", "random_control_candidate",
                 "holdout_evaluation")
 SAMPLE_ORDER = ("LOW SAMPLE SIZE", "MODERATE SAMPLE", "ADEQUATE SAMPLE")
 
-DEFAULT_TRIAL_BUDGET = 2000
-DEFAULT_HOLDOUT_LOOKS = 10
-BOOTSTRAP_REPLICATES = 1_000_000     # 25 / (0.05 / 2000): >= 25 replicates beyond the tail at the full trial budget
+DEFAULT_TRIAL_BUDGET = 10_000       # the declared 10,000-strategy research universe (ADR-60, ADR-67)
+DEFAULT_HOLDOUT_LOOKS = 10          # independent of the trial budget
+FAMILYWISE_ALPHA = 0.05
+MIN_TAIL_REPLICATES = 25
+BOOTSTRAP_REPLICATES = 1_000_000     # 25 / (0.05 / 2000): the version-2 default (2,000-trial family)
 BOOTSTRAP_MIN_TRADES = 30
 BOOTSTRAP_CHUNK = 2000
 DEFAULT_ACCEPTANCE = {
@@ -100,11 +109,26 @@ DEFAULT_ACCEPTANCE = {
 }
 DEFAULT_MULTIPLE_TESTING = {
     "method": "Bonferroni-familywise-alpha",
-    "familywise_alpha": 0.05,
-    "family_size": "counted unique numerical trials of this protocol at holdout-evaluation time (minimum 1)",
+    "familywise_alpha": FAMILYWISE_ALPHA,
+    "family_size_rule": "declared_max_unique_trials",
+    "family_size": "the DECLARED trial_budget.max_unique_trials of this protocol (fixed before discovery; never smaller "
+                   "than the counted unique trials, which the budget caps)",
     "per_test_alpha": "familywise_alpha / family_size",
     "applies_to": "acceptance_criteria.oos_confidence",
 }
+
+
+def bootstrap_replicates_for(trial_budget: int, familywise_alpha: float = FAMILYWISE_ALPHA) -> int:
+    """Replicates so that >= MIN_TAIL_REPLICATES bootstrap statistics lie beyond the per-test alpha of the declared family."""
+    return max(BOOTSTRAP_REPLICATES, math.ceil(MIN_TAIL_REPLICATES * int(trial_budget) / float(familywise_alpha)))
+
+
+def family_size(material: Mapping, counted_trials: int) -> int:
+    """The Bonferroni family of a protocol: the declared budget (version 3) or the counted trials (version <= 2)."""
+    mt = material["multiple_testing"]
+    if mt.get("family_size_rule") == "declared_max_unique_trials":
+        return max(int(material["trial_budget"]["max_unique_trials"]), int(counted_trials), 1)
+    return max(1, int(counted_trials))
 
 
 class ProtocolRefusal(ValueError):
@@ -189,11 +213,18 @@ def build_material(*, dataset_manifest, windows: Mapping, cost_model: Mapping, b
                    config_hash: str, pre_protocol_exposure: Sequence[Mapping], exposure_statement: str,
                    name: str = "", trial_budget: int = DEFAULT_TRIAL_BUDGET,
                    holdout_looks: int = DEFAULT_HOLDOUT_LOOKS, acceptance: Mapping | None = None,
-                   multiple_testing: Mapping | None = None, search_constraints: Mapping | None = None) -> dict:
+                   multiple_testing: Mapping | None = None, search_constraints: Mapping | None = None,
+                   supersedes: str | None = None) -> dict:
     m = dataset_manifest
     for k, v in (("trial_budget", trial_budget), ("holdout_looks", holdout_looks)):
         if not isinstance(v, int) or isinstance(v, bool) or v < 1:
             raise ProtocolRefusal("PROTOCOL_INVALID", f"{k} must be a positive integer", value=v)
+    mt = dict(multiple_testing or DEFAULT_MULTIPLE_TESTING)
+    if acceptance is None:
+        import copy as _copy
+        acceptance = _copy.deepcopy(DEFAULT_ACCEPTANCE)
+        acceptance["oos_confidence"]["bootstrap"]["replicates"] = bootstrap_replicates_for(
+            trial_budget, float(mt["familywise_alpha"]))
     return {
         "protocol_version": PROTOCOL_VERSION,
         "name": name,
@@ -221,8 +252,9 @@ def build_material(*, dataset_manifest, windows: Mapping, cost_model: Mapping, b
                                  "but not counted"},
         "holdout_budget": {"max_unique_candidate_evaluations": holdout_looks, "per_candidate": 1},
         "acceptance_criteria": dict(acceptance or DEFAULT_ACCEPTANCE),
-        "multiple_testing": dict(multiple_testing or DEFAULT_MULTIPLE_TESTING),
+        "multiple_testing": mt,
         "pre_protocol_exposure": {"statement": exposure_statement, "runs": list(pre_protocol_exposure)},
+        "supersedes": supersedes,
     }
 
 
@@ -258,6 +290,9 @@ def bonferroni(multiple_testing: Mapping, family_size: int) -> dict:
     alpha = float(multiple_testing["familywise_alpha"]) / m
     return {"method": "Bonferroni-familywise-alpha", "familywise_alpha": float(multiple_testing["familywise_alpha"]),
             "family_size": m, "per_test_alpha": alpha, "z_one_sided": NormalDist().inv_cdf(1.0 - alpha)}
+
+
+_family = family_size
 
 
 def derive_seed(protocol_id: str, logic_hash: str, purpose: str = "oos_confidence_bootstrap_t_v1") -> int:
@@ -335,7 +370,7 @@ def assess_holdout(material: Mapping, metrics: Mapping, cost_rows: Sequence[Mapp
     """Apply the protocol's pre-registered criteria to one holdout evaluation. Every criterion is
     reported (pass / fail / unavailable); unavailable counts as not met. Never 'accepted'."""
     ac, mt = material["acceptance_criteria"], material["multiple_testing"]
-    adj = bonferroni(mt, family_size)
+    adj = bonferroni(mt, _family(material, family_size))
     crit = {}
     lab = metrics.get("sample_label")
     need = ac["min_oos_sample_label"]

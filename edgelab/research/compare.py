@@ -104,8 +104,8 @@ def comparison_warnings(manifests: Sequence, check_periods: bool = True) -> list
 def run_across_datasets(strategy: Strategy, datasets: Sequence[ValidatedDataset],
                         costs_for: Callable[[ValidatedDataset], CostModel], cfg: Mapping,
                         sessions: Mapping[str, SessionWindow] | None = None,
-                        cache: FeatureCache | None = None, sizing_cfg: Mapping | None = None
-                        ) -> ComparisonResult:
+                        cache: FeatureCache | None = None, sizing_cfg: Mapping | None = None,
+                        contract_for: Callable[[Mapping | None], object] | None = None) -> ComparisonResult:
     """Run one strategy independently on each dataset. A failure on one dataset (e.g. an
     unconfigured cost profile) is recorded for that dataset and does not stop the others."""
     from edgelab.core.config import config_hash
@@ -127,7 +127,8 @@ def run_across_datasets(strategy: Strategy, datasets: Sequence[ValidatedDataset]
                 strat = strategy.bind(ctx)
                 keys = {fs.label: ctx.engine.cache_key(fs) for fs in strategy.feature_specs()}
             costs = costs_for(ds)
-            res = run_backtest(ds, strat, costs, bt_cfg, sizing=sizing_cfg)
+            res = run_backtest(ds, strat, costs, bt_cfg, sizing=sizing_cfg,
+                               contract=contract_for(sizing_cfg) if contract_for else None)
             met = compute_metrics(res.trades, sample_thresholds=cfg.get("sample_size"))
             runs.append(DatasetRun(prov, strategy.strategy_id, strategy.spec, costs.to_dict(), keys,
                                    res.assumptions, met, res.trades))

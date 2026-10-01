@@ -12,21 +12,56 @@ Conventions for every feature:
 
 | id | v | category | requires | known at | causal | summary |
 |---|---|---|---|---|---|---|
+| `adx` | 1 | trend | - | bar_close | yes | Wilder ADX with +DI / -DI. |
 | `atr` | 1 | volatility | - | bar_close | yes | Average True Range, Wilder smoothing. |
+| `atr_regime` | 1 | volatility | - | bar_close | yes | Volatility regime: trailing percentile rank of ATR. |
+| `bollinger` | 1 | volatility | - | bar_close | yes | Bollinger bands, rolling z-score and bandwidth rank (squeeze). |
 | `candle` | 1 | price_action | - | bar_close | yes | Single-bar anatomy: body, range, wicks, gap. |
 | `daily_levels` | 1 | session | - | bar_close | yes | Trading-date levels from the dataset's exchange calendar. |
+| `daily_nr` | 1 | structure | - | bar_close | yes | Session-level NR7: was the previous trading date the narrowest of the last n? |
+| `donchian` | 1 | structure | - | bar_close | yes | Donchian channel of the n bars BEFORE t (a close beyond it is a breakout). |
 | `ema` | 1 | trend | - | bar_close | yes | Exponential moving average of close, SMA-seeded. |
 | `fvg` | 1 | structure | - | bar_close | yes | Three-candle fair value gaps with partial/full fill tracking. |
+| `macd` | 1 | momentum | - | bar_close | yes | MACD line, signal line and histogram (SMA-seeded EMAs). |
+| `narrow_range` | 1 | volatility | - | bar_close | yes | Narrow-range bar (NR4 / NR7 ...). |
+| `order_block` | 1 | structure | - | bar_close | yes | Order blocks (last opposite candle before a displacement that breaks structure) and breaker blocks (failed order blocks that flip polarity). |
 | `range_stats` | 1 | structure | - | bar_close | yes | Displacement, range expansion and consolidation, normalised by ATR. |
 | `roc` | 1 | momentum | - | bar_close | yes | Rate of change and raw momentum over n bars. |
 | `rsi` | 1 | momentum | - | bar_close | yes | Relative Strength Index, Wilder smoothing. |
 | `rvol_tod` | 1 | volume | volume | bar_close | yes | Time-of-day relative volume (accounts for the intraday volume U-shape). |
 | `session` | 1 | session | - | bar_close | yes | Session window membership, running session levels, previous session levels. |
 | `sma` | 1 | trend | - | bar_close | yes | Simple moving average of close. |
+| `stoch` | 1 | momentum | - | bar_close | yes | Stochastic oscillator %K / %D. |
 | `swings` | 1 | structure | - | bar_close | yes | Fractal swings (confirmed only), break of structure, liquidity sweeps, structure trend. |
 | `time_of_day` | 1 | session | - | bar_open | yes | Local clock and weekday of each bar (for trading windows and weekday filters). |
 | `volume_stats` | 1 | volume | volume | bar_close | yes | Relative volume, z-score and percentile rank versus recent bars. |
 | `vwap` | 1 | volume | volume | bar_close | yes | Anchored volume-weighted average price with standard deviation. |
+
+## `adx` (version 1)
+
+Wilder ADX with +DI / -DI.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** 2n - 1 bars
+- **Depends on:** -
+- **Implementation hash:** `6a449f93dbace69b`
+
+**Calculation.** +DM = H_t - H_{t-1} if it exceeds L_{t-1} - L_t and is > 0 (else 0); -DM mirrored. TR, +DM, -DM Wilder-smoothed (seed = mean of bars 1..n at bar n). DI = 100 * smoothed DM / smoothed TR; DX = 100 |+DI - -DI| / (+DI + -DI) (0 if both 0); ADX = Wilder average of DX seeded at bar 2n-1.
+
+**Edge cases.** NaN before bar n (DI) and 2n-1 (ADX). Gaps enter through TR and DM of the previous AVAILABLE bar.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `14` | >= 1 | Wilder length n |
+
+| output | meaning |
+|---|---|
+| `adx` | Average Directional Index 0..100 (trend strength) |
+| `plus_di` | +DI 0..100 |
+| `minus_di` | -DI 0..100 |
+| `dx` | directional index of the bar |
 
 ## `atr` (version 1)
 
@@ -52,6 +87,62 @@ Average True Range, Wilder smoothing.
 | `atr` | Wilder ATR in points |
 | `tr` | true range of the bar |
 | `atr_pct` | atr / close |
+
+## `atr_regime` (version 1)
+
+Volatility regime: trailing percentile rank of ATR.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** atr_period + lookback - 2 bars
+- **Depends on:** -
+- **Implementation hash:** `0a91c91694219dc0`
+
+**Calculation.** ATR as in `atr`; rank over the trailing window including t.
+
+**Edge cases.** NaN until atr_period + lookback - 2 bars.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `atr_period` | int | `14` | >= 1 | ATR length |
+| `lookback` | int | `100` | >= 2 | rank window |
+
+| output | meaning |
+|---|---|
+| `atr_rank` | fraction of the last `lookback` ATR values (incl. t) <= ATR_t (0..1) |
+| `atr` | Wilder ATR (same as `atr`) |
+
+## `bollinger` (version 1)
+
+Bollinger bands, rolling z-score and bandwidth rank (squeeze).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n - 1 bars (bandwidth_rank: n + rank_lookback - 2)
+- **Depends on:** -
+- **Implementation hash:** `962cacfa531a9fec`
+
+**Calculation.** Windows of the last n closes incl. C_t; std with ddof=0. bandwidth_rank is a trailing percentile rank.
+
+**Edge cases.** std == 0 gives NaN zscore. bandwidth_rank is NaN while any bandwidth in its window is NaN.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `20` | >= 2 | window n |
+| `k` | float | `2.0` | >= 0 | band width in std devs |
+| `rank_lookback` | int | `100` | >= 2 | window for bandwidth_rank |
+
+| output | meaning |
+|---|---|
+| `mid` | SMA_n of close |
+| `upper` | mid + k * std |
+| `lower` | mid - k * std |
+| `std` | population std (ddof=0) of the last n closes |
+| `zscore` | (C - mid) / std |
+| `bandwidth` | (upper - lower) / mid |
+| `bandwidth_rank` | fraction of the last rank_lookback bandwidths (incl. t) <= bandwidth_t; low = compressed volatility |
 
 ## `candle` (version 1)
 
@@ -106,6 +197,56 @@ Trading-date levels from the dataset's exchange calendar.
 | `prev_day_low` | previous completed trading date: low |
 | `prev_day_close` | previous completed trading date: close |
 | `gap` | day_open - prev_day_close |
+
+## `daily_nr` (version 1)
+
+Session-level NR7: was the previous trading date the narrowest of the last n?
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n completed trading dates
+- **Depends on:** -
+- **Implementation hash:** `73dda6161f12d33c`
+
+**Calculation.** Per trading date D (exchange calendar), R_D = range of the previous completed date (daily_levels prev_day_high - prev_day_low, completed = scheduled close <= bar close). prev_is_nr_D = R_D < min(R_{D-1} .. R_{D-n+2}); constant across the bars of D.
+
+**Edge cases.** NaN until n completed dates exist. Holidays/early closes follow the calendar (unverified for the Dukascopy feed). The bar loop is over trading dates only.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `n` | int | `7` | >= 2 | NR-n over completed trading dates |
+
+| output | meaning |
+|---|---|
+| `prev_is_nr` | 1 if the last COMPLETED trading date's range is strictly below the ranges of the n-1 completed dates before it, else 0 |
+| `prev_range` | high - low of the last completed trading date |
+
+## `donchian` (version 1)
+
+Donchian channel of the n bars BEFORE t (a close beyond it is a breakout).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n bars
+- **Depends on:** -
+- **Implementation hash:** `17bd2a6021ec4f08`
+
+**Calculation.** Rolling max/min of the previous n highs/lows, excluding the current bar.
+
+**Edge cases.** NaN before bar n. Windows span session breaks and missing bars.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `20` | >= 1 | channel length n (bars before t) |
+
+| output | meaning |
+|---|---|
+| `upper` | max(H_{t-n} .. H_{t-1}) - EXCLUDES bar t |
+| `lower` | min(L_{t-n} .. L_{t-1}) |
+| `mid` | (upper + lower) / 2 |
+| `width` | upper - lower |
 
 ## `ema` (version 1)
 
@@ -178,6 +319,103 @@ Three-candle fair value gaps with partial/full fill tracking.
 | `bear_age` | bars since it formed |
 | `bear_fill` | deepest penetration so far / size, 0..1 (1 = reached the far edge) |
 | `bear_dist` | bull: C - top; bear: bottom - C (>0: price outside the gap on the side it was left; <=0: inside/through) |
+
+## `macd` (version 1)
+
+MACD line, signal line and histogram (SMA-seeded EMAs).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** max(fast, slow) + signal - 2 bars
+- **Depends on:** -
+- **Implementation hash:** `8e418634b5dbdf5f`
+
+**Calculation.** EMAs as in `ema` (SMA-seeded). MACD_t = EMA_fast - EMA_slow, defined from bar max(fast, slow)-1. Signal = EMA_signal of MACD, seeded with the mean of its first `signal` defined values.
+
+**Edge cases.** NaN before bar max(fast, slow) + signal - 2 for signal/hist. fast >= slow is allowed but meaningless; strategy validation decides.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `fast` | int | `12` | >= 1 | fast EMA length |
+| `slow` | int | `26` | >= 1 | slow EMA length |
+| `signal` | int | `9` | >= 1 | signal EMA length (of the MACD line) |
+
+| output | meaning |
+|---|---|
+| `macd` | EMA_fast(C) - EMA_slow(C) |
+| `signal` | EMA_signal of the MACD line |
+| `hist` | macd - signal |
+
+## `narrow_range` (version 1)
+
+Narrow-range bar (NR4 / NR7 ...).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n - 1 bars
+- **Depends on:** -
+- **Implementation hash:** `2004a8a36ac2b123`
+
+**Calculation.** is_nr_t = (H_t - L_t) < min(H_s - L_s, s = t-n+1 .. t-1). Strict: ties are not narrow.
+
+**Edge cases.** NaN before bar n-1. On a higher timeframe it is the NR of completed HTF bars.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `n` | int | `7` | >= 2 | NR-n: bar range strictly below the previous n-1 ranges |
+
+| output | meaning |
+|---|---|
+| `is_nr` | 1 if H_t - L_t < min range of the previous n-1 bars, else 0 |
+| `range` | H_t - L_t |
+
+## `order_block` (version 1)
+
+Order blocks (last opposite candle before a displacement that breaks structure) and breaker blocks (failed order blocks that flip polarity).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** atr_period + left + right bars
+- **Depends on:** atr, swings
+- **Implementation hash:** `1bd002e98ab96c90`
+
+**Calculation.** Bull displacement at j: bullish candle with |C-O| >= disp x ATR_j and (optionally) bos_up_j = 1. The order block is the last BEARISH candle i in [j-lookback, j-1]; zone = its range or body. The zone is valid for bars t in [j+1, end], end = the first bar that closes <= bottom (invalidation), the first bar touching it (low <= top) when first_touch_only, or j + max_age_bars. Bear mirrored. A bull block invalidated by a close <= bottom at s becomes a BEARISH breaker valid from s+1 until a close >= top, the first touch (high >= bottom) when first_touch_only, or s + max_age_bars; a failed bear block becomes a bull breaker. The most recently formed valid zone is reported.
+
+**Edge cases.** Outputs at bar t use zone state as of the close of bar t-1 (formed at <= t-1, invalidated by bars <= t-1), so the reaction bar t can test the zone causally. NaN when no valid zone. Zones of different sessions are not separated: use max_age_bars.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `left` | int | `3` | >= 1 | swing pivot bars on the left (structure break) |
+| `right` | int | `1` | >= 0 | swing pivot bars on the right = confirmation delay |
+| `disp` | float | `1.5` | >= 0 | displacement: candle body >= disp x ATR |
+| `require_bos` | bool | `True` |  | the displacement must also close through the prior confirmed swing |
+| `lookback` | int | `10` | >= 1 | max bars back to find the last opposite candle |
+| `zone` | str | `range` | one of ['range', 'body'] | zone = candle range (high/low) or body (open/close) |
+| `first_touch_only` | bool | `True` |  | a zone is consumed by the first bar that touches it |
+| `max_age_bars` | int | `100` | >= 1 | a zone expires after this many bars |
+| `atr_period` | int | `14` | >= 1 | ATR length for the displacement test |
+
+| output | meaning |
+|---|---|
+| `ob_bull_top` | top of the most recent valid bull order block zone as of the close of bar t-1 |
+| `ob_bull_bottom` | bottom of that bull order block zone |
+| `ob_bull_age` | bars since that bull order block formed |
+| `ob_bull_new` | 1 on the bar a bull order block forms (known at its close) |
+| `ob_bear_top` | top of the most recent valid bear order block zone as of the close of bar t-1 |
+| `ob_bear_bottom` | bottom of that bear order block zone |
+| `ob_bear_age` | bars since that bear order block formed |
+| `ob_bear_new` | 1 on the bar a bear order block forms (known at its close) |
+| `brk_bull_top` | top of the most recent valid bull breaker block zone as of the close of bar t-1 |
+| `brk_bull_bottom` | bottom of that bull breaker block zone |
+| `brk_bull_age` | bars since that bull breaker block formed |
+| `brk_bull_new` | 1 on the bar a bull breaker block forms (known at its close) |
+| `brk_bear_top` | top of the most recent valid bear breaker block zone as of the close of bar t-1 |
+| `brk_bear_bottom` | bottom of that bear breaker block zone |
+| `brk_bear_age` | bars since that bear breaker block formed |
+| `brk_bear_new` | 1 on the bar a bear breaker block forms (known at its close) |
 
 ## `range_stats` (version 1)
 
@@ -332,6 +570,31 @@ Simple moving average of close.
 |---|---|
 | `sma` | mean of the last n closes, including C_t |
 | `dist` | C_t - SMA_t |
+
+## `stoch` (version 1)
+
+Stochastic oscillator %K / %D.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** k + d - 2 bars
+- **Depends on:** -
+- **Implementation hash:** `64c27db2e4fa936d`
+
+**Calculation.** HH/LL over the last k bars incl. t; %D = mean of the last d %K values.
+
+**Edge cases.** HH == LL gives NaN (not 50). %D is NaN while any %K in its window is NaN.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `k_period` | int | `14` | >= 1 | %K lookback |
+| `d_period` | int | `3` | >= 1 | %D smoothing |
+
+| output | meaning |
+|---|---|
+| `k` | %K = 100 (C - LL_k) / (HH_k - LL_k) |
+| `d` | SMA_d of %K |
 
 ## `swings` (version 1)
 

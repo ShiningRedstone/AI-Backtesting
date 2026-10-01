@@ -92,6 +92,63 @@ def load_instruments(cfg: Mapping[str, Any]) -> dict[str, Instrument]:
     return {sym: instrument_from_config(sym, meta) for sym, meta in cfg["instruments"].items()}
 
 
+# ---- execution contract (ADR-63) ------------------------------------------------------------
+# The historical price series and the contract that is TRADED are different things. The canonical research
+# series is Dukascopy's USA 100 Technical Index CFD (a proxy, never CME MNQ); the execution target is whole
+# Micro E-mini Nasdaq-100 contracts. The ONLY authoritative contract specification is the instrument's entry
+# in configs/instruments.yaml (for MNQ: tick 0.25, tick value $0.50 -> point value $2, whole contracts). An
+# "execution view" keeps the DATA instrument's price grid and identity and takes the economics (point value,
+# minimum size, size step) from the contract.
+class ExecutionContractError(InstrumentError):
+    pass
+
+
+def execution_view(data: Instrument, contract: Instrument) -> Instrument:
+    """Instrument used for sizing, P&L and cost USD conversion when a strategy trades ``contract`` on a ``data`` series.
+    Price grid (tick_size), calendar, asset class and underlying stay the DATA series'; point value, min size and
+    size step are the CONTRACT's. Index points are translated 1:1 (1 index point of the series = 1 point of the
+    contract = ``contract.point_value`` dollars per contract); prices are NOT snapped to the contract's tick."""
+    if data.asset_class == "future" and data.symbol != contract.symbol:
+        raise ExecutionContractError(
+            f"{contract.symbol} contracts cannot be traded on the {data.symbol} futures series: its cost profile "
+            f"describes {data.symbol}, not {contract.symbol} (use a proxy/CFD index series, or the {contract.symbol} series)")
+    pv = contract.point_value
+    view = Instrument(symbol=contract.symbol, tick_size=data.tick_size, tick_value=data.tick_size * pv,
+                      calendar=data.calendar, exchange=contract.exchange, asset_class=data.asset_class,
+                      currency=contract.currency, description=f"{contract.symbol} contracts on the {data.symbol} series",
+                      min_size=contract.min_size, size_step=contract.size_step, underlying=data.underlying,
+                      extra={"execution_contract": contract.symbol, "data_instrument": data.symbol,
+                             "contract_tick_size": contract.tick_size, "contract_tick_value": contract.tick_value})
+    if abs(view.point_value - pv) > 1e-9 * max(1.0, abs(pv)):
+        raise ExecutionContractError(f"point value {view.point_value} != {pv} after adaptation")
+    return view
+
+
+def contract_for(cfg: Mapping[str, Any], sizing: Mapping | None) -> Instrument | None:
+    """The execution contract named by a strategy's sizing, from the ONE authoritative specification
+    (``cfg["instruments"]``, i.e. configs/instruments.yaml). None when the sizing names no contract; an unknown
+    name is a refusal, never a silent fallback to the data series."""
+    name = (sizing or {}).get("contract")
+    if not name:
+        return None
+    insts = load_instruments(cfg)
+    if name not in insts:
+        raise ExecutionContractError(f"unknown execution contract {name!r}; configured: {sorted(insts)}")
+    return insts[name]
+
+
+def contract_summary(contract: Instrument, data: Instrument) -> dict:
+    """What a run discloses about its execution contract (recorded in the run assumptions)."""
+    return {"contract": contract.symbol, "contract_point_value": contract.point_value,
+            "contract_tick_size": contract.tick_size, "contract_tick_value": contract.tick_value,
+            "min_contracts": contract.min_size, "contract_step": contract.size_step,
+            "data_instrument": data.symbol, "data_tick_size": data.tick_size,
+            "translation": f"1 index point of the {data.symbol} research series = 1 point of the contract = "
+                           f"${contract.point_value:g} per contract; prices are not snapped to the contract tick; "
+                           "sizing and USD P&L/costs use the contract's point value; R-multiples do not depend on it",
+            "source": "configs/instruments.yaml (single authoritative contract specification)"}
+
+
 # ---- source identity (Phase 9) -------------------------------------------------------------
 # An instrument entry may describe a price SOURCE whose identity is not yet established
 # (``identity_status: provisional``). Such an instrument can be imported, validated and inspected,

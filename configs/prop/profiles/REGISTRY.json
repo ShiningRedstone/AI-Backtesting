@@ -1,0 +1,101 @@
+{
+ "profiles": [
+  {
+   "file": "LUCID_LUCIDFLEX_50K.v1.yaml",
+   "profile_hash": "efd505c79732920d704e363c8fe03727f6f765da6bb9b60a7c7c54ea521daf34",
+   "profile_id": "LUCID_LUCIDFLEX_50K",
+   "version": 1
+  },
+  {
+   "file": "TRADEIFY_GROWTH_50K.v1.yaml",
+   "profile_hash": "639fb35947176959b4eb254a255f1e8da9fffd66e28bc328a3002da44c2fef61",
+   "profile_id": "TRADEIFY_GROWTH_50K",
+   "version": 1
+  },
+  {
+   "file": "TRADEIFY_SELECT_FLEX_50K.v1.yaml",
+   "profile_hash": "e1ff03dba47a7b78641fec59b6de8bc003ccfba085c6820296ddada033df1c2e",
+   "profile_id": "TRADEIFY_SELECT_FLEX_50K",
+   "version": 1
+  },
+  {
+   "file": "TRADEIFY_SELECT_DAILY_50K.v1.yaml",
+   "profile_hash": "c3b107a02e0184b896e50a402b10af0cf8181e2972a01c232cefc13aad8f867e",
+   "profile_id": "TRADEIFY_SELECT_DAILY_50K",
+   "version": 1
+  },
+  {
+   "file": "LUCID_LUCIDFLEX_50K.v2.yaml",
+   "profile_hash": "48bf64741af0bab00a1afc9a0688a979cd79846176a96fe8e7c5942965e168c8",
+   "profile_id": "LUCID_LUCIDFLEX_50K",
+   "version": 2
+  },
+  {
+   "file": "TRADEIFY_GROWTH_50K.v2.yaml",
+   "profile_hash": "c2fd1484a34a24ad99ae372337f93a1ee929ec59d0b542ebaa0fc205c7720b49",
+   "profile_id": "TRADEIFY_GROWTH_50K",
+   "version": 2
+  },
+  {
+   "file": "TRADEIFY_SELECT_FLEX_50K.v2.yaml",
+   "profile_hash": "1b30493d7ffefa5f62a72653421f261d4d30a96a838081a88ad64919d2e170bc",
+   "profile_id": "TRADEIFY_SELECT_FLEX_50K",
+   "version": 2
+  },
+  {
+   "file": "TRADEIFY_SELECT_DAILY_50K.v2.yaml",
+   "profile_hash": "d1ba612b942c37def91fca498578aaefd315c57010d5018f77e6ee86a50621d4",
+   "profile_id": "TRADEIFY_SELECT_DAILY_50K",
+   "version": 2
+  },
+  {
+   "file": "LUCID_LUCIDFLEX_50K.v3.yaml",
+   "profile_hash": "6d3b0743b0bbd8e5fc3c36fe64d5c39c20a2e0c8452978013622163677decc73",
+   "profile_id": "LUCID_LUCIDFLEX_50K",
+   "version": 3
+  },
+  {
+   "file": "TRADEIFY_GROWTH_50K.v3.yaml",
+   "profile_hash": "c08339a022d62df64b849aec9920eba2e76186b41333541c87371f05938a734e",
+   "profile_id": "TRADEIFY_GROWTH_50K",
+   "version": 3
+  },
+  {
+   "file": "TRADEIFY_SELECT_FLEX_50K.v3.yaml",
+   "profile_hash": "921862ab01f7d0021253940590b1f78c3d62075e2550c0a593349e97453cb840",
+   "profile_id": "TRADEIFY_SELECT_FLEX_50K",
+   "version": 3
+  },
+  {
+   "file": "TRADEIFY_SELECT_DAILY_50K.v3.yaml",
+   "profile_hash": "89373fd8de862dbd66d875870345a4400ab8c499f2bbdf0f39a3b35044955e94",
+   "profile_id": "TRADEIFY_SELECT_DAILY_50K",
+   "version": 3
+  },
+  {
+   "file": "LUCID_LUCIDFLEX_50K.v4.yaml",
+   "profile_hash": "98ab18b10c95ec516625ef7e81635bebdcb7cf28490abf8a7182ddfcebb75004",
+   "profile_id": "LUCID_LUCIDFLEX_50K",
+   "version": 4
+  },
+  {
+   "file": "TRADEIFY_GROWTH_50K.v4.yaml",
+   "profile_hash": "8d95fd1df3967ac629c0d30eac2f9f8fb3a166deba4466eb72caa41cc39df9fa",
+   "profile_id": "TRADEIFY_GROWTH_50K",
+   "version": 4
+  },
+  {
+   "file": "TRADEIFY_SELECT_FLEX_50K.v4.yaml",
+   "profile_hash": "1ee743a6c1872a000981553bcfdcf58b7e246e8650f52f7dede1f51d99290a1a",
+   "profile_id": "TRADEIFY_SELECT_FLEX_50K",
+   "version": 4
+  },
+  {
+   "file": "TRADEIFY_SELECT_DAILY_50K.v4.yaml",
+   "profile_hash": "79a570829155ebba033dcc6b2b5b298d19797f74d7672b4a40e97d415a55875c",
+   "profile_id": "TRADEIFY_SELECT_DAILY_50K",
+   "version": 4
+  }
+ ],
+ "schema_version": 1
+}
