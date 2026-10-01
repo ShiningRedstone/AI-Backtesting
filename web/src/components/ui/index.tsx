@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import type { Issue } from "../../api/types";
+import { plainProse } from "../../app/labels";
 
 export function Button({ children, onClick, kind = "secondary", busy, busyLabel, disabled, title, type = "button", small, testId }: {
   children?: ReactNode; onClick?: () => void; kind?: "primary" | "secondary" | "danger" | "ghost";
@@ -244,7 +245,7 @@ function displayValue(v: unknown): string {
   if (typeof v === "number") return Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 });
   if (Array.isArray(v)) return v.map(displayValue).join(", ") || "none";
   const s = String(v);
-  return /^[A-Za-z0-9]+(_[A-Za-z0-9]+)+$/.test(s) && !/^(STR|RUN|CTRL|VAL|RP|CMP|FM|AIP|PB|SB)_/.test(s) ? humanizeKey(s) : s;
+  return /^[A-Za-z0-9]+(_[A-Za-z0-9]+)+$/.test(s) && !/^(STR|RUN|CTRL|VAL|RP|CMP|FM|AIP|PB|SB)_/.test(s) ? humanizeKey(s) : plainProse(s);
 }
 
 export function fmt(v: unknown): string {

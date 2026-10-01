@@ -92,7 +92,7 @@ export function ExplorerPage() {
         <span className="fgroup">min trades</span>
         <input className={`input num-filter${f.min_trades ? " active" : ""}`} inputMode="numeric" value={f.min_trades ?? ""} aria-label="minimum trades"
           data-testid="filter-min-trades" onChange={(e: { target: HTMLInputElement }) => set("min_trades", e.target.value.replace(/[^0-9]/g, ""))} />
-        <span className="fgroup">max /wk</span>
+        <span className="fgroup">max per week</span>
         <input className={`input num-filter${f.max_trades_per_week ? " active" : ""}`} inputMode="decimal" value={f.max_trades_per_week ?? ""}
           aria-label="maximum trades per week" onChange={(e: { target: HTMLInputElement }) => set("max_trades_per_week", e.target.value.replace(/[^0-9.]/g, ""))} />
         <label className="check small"><input type="checkbox" checked={f.tested_only === "1"}

@@ -4,9 +4,11 @@ import { JOB_FINAL, POLL_MS, research } from "../api/research";
 import type { BatchRow, DatasetRow, JobStatus, LibraryRow, Ranking, RankingMetric, SampleLabel, SearchBatch, SearchCell,
   SearchDetail, SearchPlan, SearchSpec, SearchValidation } from "../api/types";
 import { useApi, useApp } from "../app/context";
+import { datasetLabel, facetLabel, familyLabel, humanize, metricLabel, statusLabel, strategyLabel } from "../app/labels";
 import { go, href, useRoute } from "../app/router";
+import { plainText } from "../components/research";
 import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, IssueList, KeyValues, Kpi, Loading, Mono,
-  NumberInput, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
+  NumberInput, Select, TableWrap, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
 import type { ProtocolRecordRow, ProtocolStatus } from "../api/types";
 
 // Phase 4 research: plan and run strategy x dataset searches over the /api/research service contracts.
@@ -14,12 +16,21 @@ import type { ProtocolRecordRow, ProtocolStatus } from "../api/types";
 
 const METRICS: RankingMetric[] = ["expectancy_r", "profit_factor", "net_r"];
 const SAMPLES: SampleLabel[] = ["LOW SAMPLE SIZE", "MODERATE SAMPLE", "ADEQUATE SAMPLE"];
+const METRIC_OPTIONS = METRICS.map((m) => ({ value: m, label: metricLabel(m) }));
+const SAMPLE_OPTIONS = SAMPLES.map((s) => ({ value: s, label: humanize(s) }));
 const IN_SAMPLE = "IN-SAMPLE research results · NOT VALIDATED · not a forecast";
 
 const tone = (s: string | undefined): "ok" | "warn" | "error" | "info" | "neutral" =>
   s === "completed" ? "ok" : s === "failed" ? "error" : s === "cancelled" || s === "interrupted" ? "warn"
     : s === "running" || s === "queued" ? "info" : "neutral";
-const StatusBadge = ({ s }: { s: string | undefined }) => <Badge tone={tone(s)}>{s ?? "—"}</Badge>;
+// Plain one-word states (running, completed, cancelled …) are shown as they are; codes become words.
+const StatusBadge = ({ s }: { s: string | undefined }) => <Badge tone={tone(s)}>{s && /^[a-z]+$/.test(s) ? s : statusLabel(s)}</Badge>;
+/** Strategy machine names by id, for showing names instead of ids in tables. */
+type Names = (sid: string) => string;
+function useStrategyNames(): Names {
+  const lib = useApi<LibraryRow[]>("/api/strategies");
+  return (sid) => { const row = lib.data?.find((x) => x.strategy_id === sid); return row ? strategyLabel(row.name) : lib.data ? "Strategy not in the library" : "…"; };
+}
 
 export function ResearchPage() {
   const route = useRoute();
@@ -106,41 +117,42 @@ function SearchSetup() {
     !rows.length ? <Empty>None stored.</Empty> : (
       <div className="checks" data-testid={testId}>{rows.map((r) => (
         <Checkbox key={r.id} checked={chosen.includes(r.id)} onChange={(on) => set(toggle(chosen, r.id, on))}
-          testId={`${testId}-${r.id}`} label={<><span>{r.label}</span> <Mono>{r.id}</Mono>{r.extra && <span className="muted small"> {r.extra}</span>}</>} />))}
+          testId={`${testId}-${r.id}`} label={<><span title={r.id}>{r.label}</span>{r.extra && <span className="muted small"> {r.extra}</span>}</>} />))}
       </div>);
+  const nameOf = (sid: string) => { const row = strategies.data?.find((x) => x.strategy_id === sid); return row ? strategyLabel(row.name) : "Strategy not in the library"; };
   const loadErr = strategies.error ?? batches.error ?? families.error ?? datasets.error;
   return (
     <Card title="Search setup" testId="search-setup">
       {loadErr && <ErrorPanel error={loadErr} />}
       <div className="grid2">
-        <Field label="Strategies" wide>{strategies.data ? pick(strategies.data.map((s) => ({ id: s.strategy_id, label: s.name, extra: s.timeframe ?? "" })),
+        <Field label="Strategies" wide>{strategies.data ? pick(strategies.data.map((s) => ({ id: s.strategy_id, label: strategyLabel(s.name), extra: s.timeframe ? facetLabel("timeframe", s.timeframe) : "" })),
           ids, setIds, "rs-ids") : <Loading label="Loading strategies…" />}</Field>
         <Field label="Datasets" hint="Ineligible datasets stay in the plan with their reasons (e.g. unconfigured broker costs).">
-          {datasets.data ? pick(datasets.data.map((d) => ({ id: d.dataset_id, label: `${d.instrument} ${d.timeframe}`,
-            extra: `${d.asset_type}${d.runnable ? "" : " · " + d.reasons.join("; ")}` })), dsIds, setDsIds, "rs-datasets")
+          {datasets.data ? pick(datasets.data.map((d) => ({ id: d.dataset_id, label: datasetLabel(d.dataset_id),
+            extra: `${humanize(d.asset_type)}${d.runnable ? "" : " · " + plainText(d.reasons.join("; "))}` })), dsIds, setDsIds, "rs-datasets")
             : <Loading label="Loading datasets…" />}</Field>
-        <Field label="Variation batches">{batches.data ? pick(batches.data.map((b) => ({ id: b.batch_id, label: b.base_name, extra: `${b.generated} variants` })),
+        <Field label="Variation batches">{batches.data ? pick(batches.data.map((b) => ({ id: b.batch_id, label: strategyLabel(b.base_name), extra: `${b.generated} variants · ${shortTime(b.created_at)}` })),
           vbs, setVbs, "rs-vbs") : <Loading label="Loading batches…" />}</Field>
-        <Field label="Families">{families.data ? pick(Object.entries(families.data).map(([f, n]) => ({ id: f, label: f, extra: `${n} instance(s)` })),
+        <Field label="Families">{families.data ? pick(Object.entries(families.data).map(([f, n]) => ({ id: f, label: familyLabel(f), extra: `${n} instance(s)` })),
           fams, setFams, "rs-families") : <Loading label="Loading families…" />}</Field>
-        <Field label="Proposal batches" hint="PB_… ids, comma separated (Mode B batches ingested with save)">
+        <Field label="Proposal batches" hint="Proposal batch ids, comma separated (AI proposal batches that were saved through the ingestion gate)">
           <TextInput value={pbs} onChange={setPbs} mono testId="rs-pbs" placeholder="PB_…" /></Field>
         <Field label="Period" hint="Explicit times need an offset, e.g. 2024-01-02T00:00:00Z (timezones are never guessed).">
           <Select value={periodMode} onChange={setPeriodMode} testId="rs-period"
-            options={[...(activeProtocol ? [{ value: "protocol" as const, label: `protocol discovery window (${activeProtocol.discovery_trading_dates?.join(" → ")})` }] : []),
-              { value: "none", label: "full datasets" }, { value: "common", label: "common period" },
-              { value: "explicit", label: "explicit start / end" }]} />
+            options={[...(activeProtocol ? [{ value: "protocol" as const, label: `Protocol discovery window (${activeProtocol.discovery_trading_dates?.join(" → ")})` }] : []),
+              { value: "none", label: "Full datasets" }, { value: "common", label: "Period common to all datasets" },
+              { value: "explicit", label: "Explicit start / end" }]} />
           {periodMode === "explicit" && <div className="inline">
-            <TextInput value={start} onChange={setStart} mono ariaLabel="period start" testId="rs-start" placeholder="start" />
-            <TextInput value={end} onChange={setEnd} mono ariaLabel="period end" testId="rs-end" placeholder="end" /></div>}
+            <TextInput value={start} onChange={setStart} mono ariaLabel="period start" testId="rs-start" placeholder="Start" />
+            <TextInput value={end} onChange={setEnd} mono ariaLabel="period end" testId="rs-end" placeholder="End" /></div>}
         </Field>
-        <Field label="Ranking metric"><Select value={metric} onChange={setMetric} options={METRICS} testId="rs-metric" /></Field>
-        <Field label="Minimum sample"><Select value={minSample} onChange={setMinSample} options={SAMPLES} testId="rs-min-sample" /></Field>
+        <Field label="Ranking metric"><Select value={metric} onChange={setMetric} options={METRIC_OPTIONS} testId="rs-metric" /></Field>
+        <Field label="Minimum sample size"><Select value={minSample} onChange={setMinSample} options={SAMPLE_OPTIONS} testId="rs-min-sample" /></Field>
         <Field label="Max eligible cells" hint="A larger search is refused, never truncated.">
           <NumberInput value={maxCells} onChange={setMaxCells} integer testId="rs-max-cells" /></Field>
         <Field label="Seed" hint="Optional; part of the search identity."><NumberInput value={seed} onChange={setSeed} integer testId="rs-seed" /></Field>
       </div>
-      <details className="tech"><summary>Search spec (exactly what is sent)</summary>
+      <details className="tech"><summary>Technical details: search spec (exactly what is sent)</summary>
         <pre className="code" data-testid="rs-spec-json">{JSON.stringify(spec(), null, 2)}</pre></details>
       <div className="actions">
         <Button onClick={() => run("validate")} busy={busy === "validate"} testId="rs-validate">Check spec</Button>
@@ -150,30 +162,33 @@ function SearchSetup() {
       <ErrorPanel error={error} testId="rs-error" />
       {validation && <div data-testid="rs-validation">
         {validation.valid
-          ? <Banner tone="ok">Search spec is well formed · search hash <Mono title={String(validation.search_hash ?? "") || undefined}>{validation.search_hash?.slice(0, 16)}</Mono></Banner>
+          ? <><Banner tone="ok">Search spec is well formed.</Banner>
+            {validation.search_hash && <TechDetails rows={[["Search hash", <Mono>{validation.search_hash}</Mono>]]} />}</>
           : <Banner tone="error">Search spec has {validation.errors.length} problem(s)</Banner>}
         <IssueList issues={[...validation.errors, ...validation.warnings]} testId="rs-validation-issues" />
       </div>}
-      {plan && <PlanView plan={plan} />}
+      {plan && <PlanView plan={plan} nameOf={nameOf} />}
     </Card>
   );
 }
 
-function PlanView({ plan }: { plan: SearchPlan }) {
+function PlanView({ plan, nameOf }: { plan: SearchPlan; nameOf: Names }) {
   const c = plan.counts;
   return (
     <div data-testid="rs-plan-result">
-      <h3>Plan <Mono>{plan.search_id}</Mono> <span className="muted small">(nothing executed)</span></h3>
+      <h3>Plan <span className="muted small">(nothing executed)</span></h3>
       <KeyValues rows={[["Cells", `${c.planned} planned · ${c.eligible} eligible · ${c.ineligible} ineligible`],
         ["Strategies", `${c.strategies} (${c.duplicate_references_collapsed} duplicate reference(s) collapsed, ${c.excluded_archived} archived excluded)`],
-        ["Datasets", fmt(c.datasets)], ["Period", plan.period ? `${plan.period.mode}: ${plan.period.start} → ${plan.period.end}` : "full datasets"]]} />
-      {plan.warnings.map((w, i) => <Banner key={i} tone="warn">{w}</Banner>)}
+        ["Datasets", fmt(c.datasets)], ["Period", plan.period ? `${humanize(plan.period.mode)}: ${plan.period.start} → ${plan.period.end}` : "full datasets"]]} />
+      <TechDetails rows={[["Search id", <Mono>{plan.search_id}</Mono>], ["Search hash", <Mono>{plan.search_hash}</Mono>], ["Plan hash", <Mono>{plan.plan_hash}</Mono>],
+        ["Config hash", <Mono>{plan.config_hash}</Mono>]]} />
+      {plan.warnings.map((w, i) => <Banner key={i} tone="warn">{plainText(w)}</Banner>)}
       <TableWrap testId="rs-plan-cells"><table>
         <thead><tr><th>#</th><th>Strategy</th><th>Dataset</th><th>Eligible</th><th>Reasons</th></tr></thead>
         <tbody>{plan.cells.map((x) => (
-          <tr key={x.cell_id}><td>{x.plan_index}</td><td><Mono>{x.strategy_id}</Mono></td><td><Mono>{x.dataset_id}</Mono></td>
+          <tr key={x.cell_id}><td>{x.plan_index}</td><td title={x.strategy_id}>{nameOf(x.strategy_id)}</td><td title={x.dataset_id}>{datasetLabel(x.dataset_id)}</td>
             <td>{x.eligible ? <Badge tone="ok">eligible</Badge> : <Badge tone="warn">ineligible</Badge>}</td>
-            <td className="small">{x.reasons.join("; ") || "—"}</td></tr>))}
+            <td className="small">{plainText(x.reasons.join("; ")) || "—"}</td></tr>))}
         </tbody>
       </table></TableWrap>
     </div>
@@ -201,17 +216,18 @@ function JobPanel({ jobId, onFinished }: { jobId: string; onFinished: () => void
   const p = job?.progress ?? { stored: false };
   const active = job && !JOB_FINAL.has(job.state);
   return (
-    <Card title={<>Search job <Mono>{jobId}</Mono></>} testId="rs-job"
+    <Card title="Search job" testId="rs-job"
       actions={active && !job?.cancel_requested
         ? <Button kind="danger" small onClick={cancel} busy={cancelling} testId="rs-cancel">Cancel search</Button> : null}>
       <ErrorPanel error={error} title={error?.status === 404 ? "This job is not known to the running server (job ids live in the server process)" : undefined}
         testId="rs-job-error" />
       {!job ? (!error && <Loading label="Loading job…" />) : <>
         <KeyValues rows={[["State", <span data-testid="rs-job-state"><StatusBadge s={job.state} /></span>],
-          ["Search", <a href={href(`/research/${job.search_id}`)} data-testid="rs-job-search"><Mono>{job.search_id}</Mono></a>],
+          ["Search", <a href={href(`/research/${job.search_id}`)} data-testid="rs-job-search" title={job.search_id}>View this search</a>],
           ["Started", shortTime(job.started_at)], ["Finished", shortTime(job.finished_at)]]} />
         {job.cancel_requested && active && <Banner tone="warn" testId="rs-cancel-requested">Cancellation requested: the running cell
           finishes, no new cell starts. Completed cells stay stored; the rest become cancelled.</Banner>}
+        <TechDetails rows={[["Job id", <Mono>{jobId}</Mono>], ["Search id", <Mono>{job.search_id}</Mono>]]} />
         {job.error && <Banner tone="error" testId="rs-job-failure">{job.error}</Banner>}
         {p.stored && <div data-testid="rs-progress">
           <progress max={1} value={p.fraction_done ?? 0} aria-label="search progress" />
@@ -231,14 +247,14 @@ function SearchList({ rows }: { rows: SearchBatch[] }) {
   if (!rows.length) return <Empty>No searches yet.</Empty>;
   return (
     <TableWrap testId="rs-searches"><table>
-      <thead><tr><th>Search</th><th>Status</th><th>Created</th><th>Planned</th><th>Eligible</th><th>Evaluated</th>
+      <thead><tr><th>Search (created)</th><th>Status</th><th>Finished</th><th>Planned</th><th>Eligible</th><th>Evaluated</th>
         <th>Failed</th><th>Cancelled</th><th>Trials</th><th>Shortlist</th><th>Protocol</th></tr></thead>
       <tbody>{[...rows].reverse().map((r) => (
-        <tr key={r.search_id}><td><a href={href(`/research/${r.search_id}`)}><Mono>{r.search_id}</Mono></a></td>
-          <td><StatusBadge s={r.status} /></td><td className="small">{shortTime(r.created_at)}</td><td>{r.n_planned}</td>
+        <tr key={r.search_id}><td><a href={href(`/research/${r.search_id}`)} title={r.search_id}>{shortTime(r.created_at)}</a></td>
+          <td><StatusBadge s={r.status} /></td><td className="small">{shortTime(r.finished_at)}</td><td>{r.n_planned}</td>
           <td>{r.n_eligible}</td><td>{r.n_evaluated}</td><td>{r.n_failed}</td><td>{r.n_cancelled}</td><td>{r.n_trials}</td>
           <td>{r.shortlist?.strategy_ids.length ?? 0}</td>
-          <td className="small">{r.protocol_id ? <Mono>{r.protocol_id}</Mono> : <span className="muted">none</span>}</td></tr>))}
+          <td className="small">{r.protocol_id ? <span title={r.protocol_id}>attributed</span> : <span className="muted">none</span>}</td></tr>))}
       </tbody>
     </table></TableWrap>
   );
@@ -247,48 +263,50 @@ function SearchList({ rows }: { rows: SearchBatch[] }) {
 // =========================================================================== one search
 function SearchPage({ id }: { id: string }) {
   const detail = useApi<SearchDetail>(research.searchUrl(id), [id]);
-  if (detail.error) return <div className="page"><ErrorPanel error={detail.error} title={`Could not load search ${id}`} testId="rs-search-error" />
+  const nameOf = useStrategyNames();
+  if (detail.error) return <div className="page"><ErrorPanel error={detail.error} title="Could not load search results" testId="rs-search-error" />
     <p><a href={href("/research")}>Back to research</a></p></div>;
   const d = detail.data;
   if (!d) return <Loading label="Loading search…" />;
   return (
     <div className="page" data-testid="rs-search-page">
-      <header className="page-head"><div><h1>Search <Mono>{d.search_id}</Mono></h1>
+      <header className="page-head"><div><h1>Search of {shortTime(d.created_at)}</h1>
         <div className="subtitle"><StatusBadge s={d.status} /> · created {shortTime(d.created_at)} · finished {shortTime(d.finished_at)}</div></div>
         <div className="actions"><a href={href(`/compare?source=search&id=${d.search_id}`)} data-testid="rs-compare">Compare runs</a>
           {" · "}<a href={href("/research")}>All searches</a></div></header>
-      <Banner tone="info" testId="rs-search-in-sample"><b>{IN_SAMPLE}.</b> {d.note}</Banner>
+      <Banner tone="info" testId="rs-search-in-sample"><b>{IN_SAMPLE}.</b> {plainText(d.note)}</Banner>
       {d.protocol_id ? <ProtocolBudget pid={d.protocol_id} search={d} />
-        : <Banner tone="warn">This search is not attributed to a research protocol (it ran without an ACTIVE protocol): its trials are counted
+        : <Banner tone="warn">This search is not attributed to a research protocol (it ran without an active protocol): its trials are counted
           only per search.</Banner>}
       <Card title="Accounting">
         <KeyValues rows={[["Last invocation", `${d.n_planned} planned · ${d.n_eligible} eligible · ${d.n_ineligible} ineligible · `
           + `${d.n_evaluated} evaluated · ${d.n_skipped_resume} skipped (already completed) · ${d.n_failed} failed · ${d.n_cancelled} cancelled`],
-          ["All invocations (current plan)", Object.entries(d.cumulative).map(([k, v]) => `${k} ${v}`).join(" · ")],
-          ["Trials (distinct cells evaluated)", <b data-testid="rs-trials">{d.cumulative.trials}</b>],
-          ["Config hash", <Mono title={String(d.config_hash ?? "") || undefined}>{d.config_hash.slice(0, 12)}</Mono>], ["Search hash", <Mono title={String(d.search_hash ?? "") || undefined}>{d.search_hash.slice(0, 16)}</Mono>]]} />
-        {d.warnings.map((w, i) => <Banner key={i} tone="warn">{w}</Banner>)}
-        <details className="tech"><summary>Search spec</summary><pre className="code">{JSON.stringify(d.spec, null, 2)}</pre></details>
+          ["All invocations (current plan)", Object.entries(d.cumulative).map(([k, v]) => `${humanize(k).toLowerCase()} ${v}`).join(" · ")],
+          ["Trials (distinct cells evaluated)", <b data-testid="rs-trials">{d.cumulative.trials}</b>]]} />
+        {d.warnings.map((w, i) => <Banner key={i} tone="warn">{plainText(w)}</Banner>)}
+        <TechDetails rows={[["Search id", <Mono>{d.search_id}</Mono>], ["Config hash", <Mono>{d.config_hash}</Mono>], ["Search hash", <Mono>{d.search_hash}</Mono>],
+          ["Protocol id", d.protocol_id ? <Mono>{d.protocol_id}</Mono> : null]]}>
+          <h4>Search spec</h4><pre className="code">{JSON.stringify(d.spec, null, 2)}</pre></TechDetails>
       </Card>
-      <Card title={`Current cells (${d.cells.length})`}><CellTable cells={d.cells} testId="rs-cells" /></Card>
+      <Card title={`Current cells (${d.cells.length})`}><CellTable cells={d.cells} testId="rs-cells" nameOf={nameOf} /></Card>
       <Card title={`Historical cells (${d.historical_cells.length})`} testId="rs-historical">
         <p className="muted small">Cells from an earlier plan of this search (e.g. a family whose membership has changed). Kept for the
           research record; not counted in the current accounting or trials, and never ranked.</p>
-        {d.historical_cells.length ? <CellTable cells={d.historical_cells} testId="rs-historical-cells" /> : <Empty>None.</Empty>}
+        {d.historical_cells.length ? <CellTable cells={d.historical_cells} testId="rs-historical-cells" nameOf={nameOf} /> : <Empty>None.</Empty>}
       </Card>
-      <RankingCard search={d} />
-      <ShortlistCard search={d} onSaved={detail.reload} />
+      <RankingCard search={d} nameOf={nameOf} />
+      <ShortlistCard search={d} onSaved={detail.reload} nameOf={nameOf} />
     </div>
   );
 }
 
 function ProtocolBudget({ pid, search }: { pid: string; search: SearchDetail }) {
   const { data, error } = useApi<{ status: ProtocolStatus }>(`/api/protocols/${pid}`, [pid]);
-  if (error) return <ErrorPanel error={error} title={`Protocol ${pid}`} />;
+  if (error) return <ErrorPanel error={error} title="Research protocol" />;
   if (!data) return <Loading label="Loading protocol budget…" />;
   const t = data.status.trials, h = data.status.holdout;
   return (
-    <Card title={<>Protocol <Mono>{pid}</Mono> <Badge tone={data.status.status === "ACTIVE" ? "ok" : "neutral"}>{data.status.status}</Badge></>} testId="rs-protocol">
+    <Card title={<>Research protocol <Badge tone={data.status.status === "ACTIVE" ? "ok" : "neutral"}>{statusLabel(data.status.status)}</Badge></>} testId="rs-protocol">
       <div className="kpis">
         <Kpi label="This search: trials" value={String(search.cumulative.trials ?? search.n_trials)} sub={`${search.n_failed} failed cells`} />
         <Kpi label="Program: unique trials" value={`${t.unique_numerical_trials} / ${t.budget}`} sub={`${t.remaining} remaining · ${t.duplicate_events} duplicate events`}
@@ -297,32 +315,35 @@ function ProtocolBudget({ pid, search }: { pid: string; search: SearchDetail }) 
         <Kpi label="Holdout looks" value={`${h.looks_used} / ${h.budget}`} sub="one per shortlisted candidate" meter={h.looks_used / Math.max(1, h.budget)} />
       </div>
       <p className="small muted">A shortlist is a tag carrying this protocol id; it is never acceptance. Holdout access is only through the backend gate.</p>
+      <TechDetails rows={[["Protocol id", <Mono>{pid}</Mono>]]} />
     </Card>
   );
 }
 
-function CellTable({ cells, testId }: { cells: SearchCell[]; testId: string }) {
+function CellTable({ cells, testId, nameOf }: { cells: SearchCell[]; testId: string; nameOf: Names }) {
   if (!cells.length) return <Empty>No cells.</Empty>;
   return (
     <TableWrap testId={testId}><table>
-      <thead><tr><th>#</th><th>Strategy</th><th>Dataset</th><th>Status</th><th>Run</th><th>Trades</th><th>Sample</th>
-        <th>Expectancy R</th><th>Profit factor</th><th>Net R</th><th>Reasons / error</th></tr></thead>
+      <thead><tr><th>#</th><th>Strategy</th><th>Dataset</th><th>Status</th><th>Run</th><th>Trades</th><th>Sample size</th>
+        <th>Net R per trade</th><th>Profit factor</th><th>Net R</th><th>Reasons / error</th></tr></thead>
       <tbody>{cells.map((c) => {
         const h = c.headline ?? {};
         return (
           <tr key={c.cell_id} data-status={c.status}><td>{c.plan_index}</td>
-            <td><a href={href(`/strategies/${c.strategy_id}`)}><Mono>{c.strategy_id}</Mono></a></td><td><Mono>{c.dataset_id}</Mono></td>
+            <td><a href={href(`/strategies/${c.strategy_id}`)} title={c.strategy_id}>{nameOf(c.strategy_id)}</a></td><td title={c.dataset_id}>{datasetLabel(c.dataset_id)}</td>
             <td><StatusBadge s={c.status} /></td>
-            <td>{c.run_id ? <a href={href(`/results/${c.run_id}`)}><Mono>{c.run_id}</Mono></a> : "—"}</td>
-            <td>{fmt(h.trade_count)}</td><td className="small">{fmt(h.sample_label)}</td><td>{fmt(h.expectancy_r)}</td>
+            <td>{c.run_id ? <a href={href(`/results/${c.run_id}`)} title={c.run_id}>open run</a> : "—"}</td>
+            <td>{fmt(h.trade_count)}</td><td className="small">{h.sample_label ? humanize(h.sample_label) : "—"}</td><td>{fmt(h.expectancy_r)}</td>
             <td>{fmt(h.profit_factor)}</td><td>{fmt(h.net_r)}</td>
-            <td className="small">{c.error ?? ((c.reasons ?? []).join("; ") || "—")}</td></tr>);
+            <td className="small">{c.error ?? (plainText((c.reasons ?? []).join("; ")) || "—")}</td></tr>);
       })}</tbody>
-    </table></TableWrap>
+    </table>
+    <TechDetails>{cells.map((c) => <div key={c.cell_id} className="small">#{c.plan_index}: <Mono>{c.strategy_id}</Mono> · <Mono>{c.dataset_id}</Mono>
+      {c.run_id && <> · <Mono>{c.run_id}</Mono></>}</div>)}</TechDetails></TableWrap>
   );
 }
 
-function RankingCard({ search }: { search: SearchDetail }) {
+function RankingCard({ search, nameOf }: { search: SearchDetail; nameOf: Names }) {
   const [metric, setMetric] = useState<RankingMetric>(search.spec.ranking?.metric ?? "expectancy_r");
   const [minSample, setMinSample] = useState<SampleLabel>(search.spec.ranking?.min_sample_label ?? "MODERATE SAMPLE");
   const [ranking, setRanking] = useState<Ranking | null>(null);
@@ -337,34 +358,34 @@ function RankingCard({ search }: { search: SearchDetail }) {
   return (
     <Card title="Ranking (in-sample)" testId="rs-ranking">
       <div className="inline">
-        <Field label="Metric"><Select value={metric} onChange={setMetric} options={METRICS} testId="rk-metric" /></Field>
-        <Field label="Minimum sample"><Select value={minSample} onChange={setMinSample} options={SAMPLES} testId="rk-min-sample" /></Field>
+        <Field label="Metric"><Select value={metric} onChange={setMetric} options={METRIC_OPTIONS} testId="rk-metric" /></Field>
+        <Field label="Minimum sample size"><Select value={minSample} onChange={setMinSample} options={SAMPLE_OPTIONS} testId="rk-min-sample" /></Field>
       </div>
       <ErrorPanel error={error} testId="rk-error" />
       {ranking && <>
         <Banner tone="warn" testId="rk-label"><b>{ranking.label}</b></Banner>
-        <p className="muted small" data-testid="rk-meta">metric {ranking.metric} ({ranking.direction}) · sample floor {ranking.min_sample_label} ·
-          {" "}{ranking.n_trials} trial(s) · status {ranking.status} · excluded: {Object.entries(ranking.excluded).filter(([, n]) => n)
-            .map(([k, n]) => `${k} ${n}`).join(", ") || "none"}</p>
+        <p className="muted small" data-testid="rk-meta">Ranked by {metricLabel(ranking.metric).toLowerCase()} ({ranking.direction}) · minimum sample size {humanize(ranking.min_sample_label).toLowerCase()} ·
+          {" "}{ranking.n_trials} trial(s) · status {statusLabel(ranking.status).toLowerCase()} · excluded: {Object.entries(ranking.excluded).filter(([, n]) => n)
+            .map(([k, n]) => `${humanize(k).toLowerCase()} ${n}`).join(", ") || "none"}</p>
         {ranking.ranked.length ? <TableWrap testId="rk-table"><table>
-          <thead><tr><th>Rank</th><th>Strategy</th><th>Dataset</th><th>{ranking.metric}</th><th>Trades</th><th>Sample</th>
-            <th>Expectancy R</th><th>Profit factor</th><th>Net R</th><th>Max DD R</th><th>Run</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Strategy</th><th>Dataset</th><th>Ranked by: {metricLabel(ranking.metric)}</th><th>Trades</th><th>Sample size</th>
+            <th>Net R per trade</th><th>Profit factor</th><th>Net R</th><th>Max drawdown (R)</th><th>Run</th></tr></thead>
           <tbody>{ranking.ranked.map((r) => (
-            <tr key={r.cell_id}><td>{r.rank}</td><td><Mono>{r.strategy_id}</Mono></td><td><Mono>{r.dataset_id}</Mono></td>
+            <tr key={r.cell_id}><td>{r.rank}</td><td title={r.strategy_id}>{nameOf(r.strategy_id)}</td><td title={r.dataset_id}>{datasetLabel(r.dataset_id)}</td>
               <td>{r.value_infinite ? "+∞ (no losing trade)" : fmt(r.value)}</td><td>{fmt(r.metrics.trade_count)}</td>
-              <td className="small">{fmt(r.metrics.sample_label)}</td><td>{fmt(r.metrics.expectancy_r)}</td>
+              <td className="small">{r.metrics.sample_label ? humanize(r.metrics.sample_label) : "—"}</td><td>{fmt(r.metrics.expectancy_r)}</td>
               <td>{r.value_infinite && ranking.metric === "profit_factor" ? "+∞" : fmt(r.metrics.profit_factor)}</td>
               <td>{fmt(r.metrics.net_r)}</td><td>{fmt(r.metrics.max_drawdown_r)}</td>
-              <td>{r.run_id ? <a href={href(`/results/${r.run_id}`)}><Mono>{r.run_id}</Mono></a> : "—"}</td></tr>))}
+              <td>{r.run_id ? <a href={href(`/results/${r.run_id}`)} title={r.run_id}>open run</a> : "—"}</td></tr>))}
           </tbody>
         </table></TableWrap> : <Empty>No cell meets the ranking filters (see the excluded counts above).</Empty>}
-        <p className="muted small" data-testid="rk-note">{ranking.note}</p>
+        <p className="muted small" data-testid="rk-note">{plainText(ranking.note)}</p>
       </>}
     </Card>
   );
 }
 
-function ShortlistCard({ search, onSaved }: { search: SearchDetail; onSaved: () => void }) {
+function ShortlistCard({ search, onSaved, nameOf }: { search: SearchDetail; onSaved: () => void; nameOf: Names }) {
   const { toast } = useApp();
   const ids = [...new Set(search.cells.map((c) => c.strategy_id))];
   const [chosen, setChosen] = useState<string[]>(search.shortlist?.strategy_ids ?? []);
@@ -384,14 +405,15 @@ function ShortlistCard({ search, onSaved }: { search: SearchDetail; onSaved: () 
         Candidates still need the Phase 6 out-of-sample and walk-forward checks.</p>
       <div className="checks">{ids.map((sid) => (
         <Checkbox key={sid} checked={chosen.includes(sid)} onChange={(on) => setChosen(toggle(chosen, sid, on))}
-          testId={`sl-${sid}`} label={<Mono>{sid}</Mono>} />))}
+          testId={`sl-${sid}`} label={<span title={sid}>{nameOf(sid)}</span>} />))}
       </div>
       <div className="actions"><Button kind="primary" onClick={save} busy={busy} testId="sl-save">Save shortlist</Button></div>
       <ErrorPanel error={error} testId="sl-error" />
       <div data-testid="sl-current">{search.shortlist
         ? <>Saved shortlist ({shortTime(search.shortlist.selected_at)}): {search.shortlist.strategy_ids.length
-          ? search.shortlist.strategy_ids.map((s) => <Mono key={s}>{s}</Mono>) : <span className="muted">empty</span>}
-          <div className="muted small">{search.shortlist.note}</div></>
+          ? search.shortlist.strategy_ids.map((s) => nameOf(s)).join(", ") : <span className="muted">empty</span>}
+          <div className="muted small">{plainText(search.shortlist.note)}</div>
+          {search.shortlist.strategy_ids.length > 0 && <TechDetails rows={[["Strategy ids", <Mono>{search.shortlist.strategy_ids.join(", ")}</Mono>]]} />}</>
         : <span className="muted">No shortlist saved.</span>}</div>
     </Card>
   );

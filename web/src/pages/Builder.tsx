@@ -8,7 +8,8 @@ import type { BuilderCtx } from "../components/builder/editors";
 import { DslPreview, ReviewPanel } from "../components/builder/preview";
 import { EntrySection, ExitSection, GeneralSection, MarketSection, ParametersSection, SizingSection, sectionOf } from "../components/builder/sections";
 import type { SectionId } from "../components/builder/sections";
-import { Badge, Banner, Button, Confirm, ErrorPanel, KeyValues, Loading, Mono, Tabs } from "../components/ui";
+import { strategyLabel } from "../app/labels";
+import { Badge, Banner, Button, Confirm, ErrorPanel, Loading, Mono, Tabs, TechDetails } from "../components/ui";
 import { newStrategy } from "../dsl/edit";
 import type { StrategyDoc } from "../dsl/types";
 import { isRef } from "../dsl/types";
@@ -158,7 +159,7 @@ export function BuilderPage() {
       const r = await api.post<SaveResult>("/api/strategies/save", body);
       setSaveResult(r); setDirty(false);
       setOrigin({ kind: "edit", id: r.strategy_id });
-      toast(r.created ? "ok" : "info", r.created ? `Saved ${r.strategy_id}` : (r.note ?? `Already stored as ${r.strategy_id}`));
+      toast(r.created ? "ok" : "info", r.created ? `Saved ${strategyLabel(doc.name)}` : (r.note ?? "Already stored in the strategy library"));
     } catch (e) {
       setSaveError(e as ApiError); setTab("review");
     } finally { setSaving(""); }
@@ -172,10 +173,10 @@ export function BuilderPage() {
           <div>
             <h1>Strategy Builder</h1>
             <div className="subtitle">
-              <b data-testid="builder-name">{doc.name || "(unnamed)"}</b>{" "}
+              <b data-testid="builder-name" title={doc.name || undefined}>{doc.name ? strategyLabel(doc.name) : "(unnamed)"}</b>{" "}
               {origin.kind === "new" && <Badge>new draft</Badge>}
-              {origin.kind === "edit" && <>editing <a href={href(`/strategies/${origin.id}`)}><Mono>{origin.id}</Mono></a> — saving a logic change creates a new instance with lineage</>}
-              {origin.kind === "duplicate" && <>duplicate of <a href={href(`/strategies/${origin.id}`)}><Mono>{origin.id}</Mono></a></>}
+              {origin.kind === "edit" && <>editing <a href={href(`/strategies/${origin.id}`)} title={origin.id}>the saved version</a> — saving a logic change creates a new instance with lineage</>}
+              {origin.kind === "duplicate" && <>duplicate of <a href={href(`/strategies/${origin.id}`)} title={origin.id}>a saved strategy</a></>}
               {dirty && <Badge tone="warn">unsaved changes</Badge>}
             </div>
           </div>
@@ -194,7 +195,7 @@ export function BuilderPage() {
         {saveResult && (
           <Banner tone={saveResult.created ? "ok" : "info"} testId="save-result">
             <b>{saveResult.created ? "Saved to the strategy library." : "Nothing new saved."}</b> {saveResult.note}
-            <KeyValues rows={[
+            <TechDetails rows={[
               ["Strategy ID", <a href={href(`/strategies/${saveResult.strategy_id}`)}><Mono>{saveResult.strategy_id}</Mono></a>],
               ["Logic hash", <Mono>{saveResult.logic_hash}</Mono>], ["Definition hash", <Mono>{saveResult.definition_hash}</Mono>]]} />
             <p><a href={href(`/strategies/${saveResult.strategy_id}?tab=research`)} data-testid="open-in-lab">Open this version in the Strategy Lab</a>
@@ -217,9 +218,9 @@ export function BuilderPage() {
             )}
           </div>
           <aside className="builder-side">
-            <div className="live-status" data-testid="live-status">
+            <div className="live-status" data-testid="live-status" data-strategy-id={render?.valid ? render.identity?.strategy_id : undefined}>
               {rendering ? <span className="muted">Checking…</span>
-                : render?.valid ? <><Badge tone="ok">valid</Badge> <Mono>{render.identity?.strategy_id}</Mono></>
+                : render?.valid ? <Badge tone="ok" title={render.identity?.strategy_id}>valid</Badge>
                   : render ? <Badge tone="error">{render.errors.length} validation issue{render.errors.length === 1 ? "" : "s"}</Badge> : null}
               <span className="muted small"> · checked by the backend validator</span>
             </div>

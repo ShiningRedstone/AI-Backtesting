@@ -2,23 +2,30 @@ import { useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { WorkspaceInfo, WorkspaceState } from "../api/types";
 import { href } from "../app/router";
-import { Badge, Banner, Button, Card, ErrorPanel, KeyValues, Mono, TextInput } from "./ui";
+import { humanize } from "../app/labels";
+import { Badge, Banner, Button, Card, ErrorPanel, KeyValues, Mono, TechDetails, TextInput } from "./ui";
 
 /** Research Workspace: which folder (configs/ + data/) EdgeLab works on. Choosing one is a pointer
  *  change: the backend validates it read-only and never copies, migrates, imports or deletes data. */
+const storeLabel = (b: string) => (b === "sqlite" ? "SQLite store" : b === "duckdb" ? "DuckDB store" : `${humanize(b)} store`);
+/** How the workspace was chosen ("--data-root", an environment variable, "saved selection") in words. */
+const sourceLabel = (s: string) => (s.startsWith("--") ? "start-up option" : /^[A-Z0-9]+(_[A-Z0-9]+)+$/.test(s) ? "environment variable"
+  : s === "none" ? "nothing (not selected)" : humanize(s));
+
 export function WorkspaceSummary({ w, testId }: { w: WorkspaceInfo; testId?: string }) {
   return (
     <div data-testid={testId}>
       <KeyValues rows={[["Location", <Mono>{w.path}</Mono>],
         ["Status", <>{w.valid ? <Badge tone="ok">valid workspace</Badge> : <Badge tone="error">not usable</Badge>}{" "}
-          {w.store_backend && <Badge>{w.store_backend}</Badge>}{" "}
+          {w.store_backend && <Badge>{storeLabel(w.store_backend)}</Badge>}{" "}
           {w.writable ? <Badge tone="neutral">read/write</Badge> : <Badge tone="warn">read-only</Badge>}
           {w.has_store ? "" : <> <Badge tone="info">no store yet</Badge></>}</>],
         ["Datasets", <b data-testid={testId ? `${testId}-datasets` : undefined}>{w.datasets}</b>],
         ["Research runs", <b data-testid={testId ? `${testId}-runs` : undefined}>{w.runs}</b>],
         ["Strategies", String(w.strategies)], ["Prop simulations", String(w.prop_simulations)],
         ["Feature cache", w.has_feature_cache ? "present" : "none"],
-        ...(w.source ? [["Selected by", w.source] as [string, string]] : [])]} />
+        ...(w.source ? [["Selected by", sourceLabel(w.source)] as [string, string]] : [])]} />
+      {w.source && sourceLabel(w.source) !== w.source && <TechDetails rows={[["Selected by", <Mono>{w.source}</Mono>]]} />}
       {w.problems.map((p) => <Banner key={p} tone="error">{p}</Banner>)}
     </div>
   );
@@ -50,8 +57,8 @@ export function WorkspacePanel({ state, welcome }: { state: WorkspaceState; welc
         <p data-testid="ws-connected">Connected to workspace: <Mono>{state.current.path}</Mono></p>
         <WorkspaceSummary w={state.current} testId="ws-current" />
       </> : <Banner tone="info" testId="ws-none">{welcome ? "No research workspace is selected yet." : "No research workspace is selected."}</Banner>}
-      {!state.switchable ? <p className="muted small">Development server: the workspace is the <code>--root</code> folder. Restart with
-        another <code>--root</code> to change it; the desktop app switches workspaces here.</p> : <>
+      {!state.switchable ? <p className="muted small">Development server: the workspace is the root folder the server was started with.
+        Restart it with another root folder to change it; the desktop app switches workspaces here.</p> : <>
         <h3>{welcome ? "Open an existing workspace" : "Open another workspace"}</h3>
         <p className="muted small">An EdgeLab workspace is a folder with <code>configs/</code> and <code>data/</code> — for example your
           development folder (<code>…\AI-Backtesting</code>). Its datasets, strategies, runs, feature cache and prop simulations are used where
@@ -77,7 +84,8 @@ export function WorkspacePanel({ state, welcome }: { state: WorkspaceState; welc
           <p className="small"><Mono>{d.path}</Mono> — {d.info.valid ? `${d.info.datasets} datasets, ${d.info.runs} runs` : "not created yet"}</p>
           <Button onClick={() => (d.info.valid ? select(d.path) : create(d.path))} busy={busy === "select" || busy === "create"} testId="ws-default">
             {d.info.valid ? "Open default workspace" : "Create default workspace"}</Button></>}
-        {state.settings_path && <p className="muted small">Your choice is remembered in <Mono>{state.settings_path}</Mono> (not inside any workspace).</p>}
+        {state.settings_path && <><p className="muted small">Your choice is remembered in this computer's EdgeLab settings file (not inside any workspace).</p>
+          <TechDetails rows={[["Settings file", <Mono>{state.settings_path}</Mono>]]} /></>}
       </>}
       <ErrorPanel error={err} title="The workspace was not changed" testId="ws-error" />
     </div>

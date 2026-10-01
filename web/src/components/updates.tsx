@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { AppVersion, UpdateStatus } from "../api/types";
 import { href } from "../app/router";
-import { Badge, Banner, Button, Card, Checkbox, ErrorPanel, KeyValues, Loading, Mono, bytes, shortTime } from "./ui";
+import { humanize } from "../app/labels";
+import { Badge, Banner, Button, Card, Checkbox, ErrorPanel, KeyValues, Loading, Mono, TechDetails, bytes, shortTime } from "./ui";
 
 export const UI_VERSION = typeof __EDGELAB_VERSION__ === "string" ? __EDGELAB_VERSION__ : "unknown";
 
@@ -134,7 +135,7 @@ export function UpdatePanel() {
       {inst?.state === "up_to_date" && <Banner tone="info" testId="update-uptodate">EdgeLab {currentLabel(s)} is up to date; nothing to install.</Banner>}
       {installing && <Banner tone="info" testId="update-installing">{stepLabel} EdgeLab will close and reopen on the new version
         {inst?.version ? ` (${inst.version})` : ""}.</Banner>}
-      {inst?.state === "error" && inst.error && <Banner tone="error" testId="update-install-error"><b>{inst.error.code}</b> — {inst.error.message}
+      {inst?.state === "error" && inst.error && <Banner tone="error" testId="update-install-error"><b>{humanize(inst.error.code)}</b> — {inst.error.message}
         {" "}Nothing was installed; the current version is unchanged.</Banner>}
       <KeyValues rows={[
         ["Installed", <>version {s.current_version}{s.current_build ? `, build ${s.current_build}` : ""}
@@ -142,13 +143,14 @@ export function UpdatePanel() {
         ["Update branch", s.channel ? <b>{s.channel}</b> : <span className="muted">none (this is not a branch build)</span>],
         ["Latest available", rel ? <>{relLabel(rel)} {s.available ? <Badge tone="ok">newer</Badge> : null}
           {s.skipped ? <Badge tone="warn">skipped</Badge> : null} <span className="small muted">{rel.published_at ? shortTime(rel.published_at) : ""}</span></> : "—"],
-        ["Last check", s.check.checked_at ? `${shortTime(s.check.checked_at)} · ${s.check.state}` : s.check.state],
-        ["Check result", s.check.error ? <span className="warn">{s.check.error.code}: {s.check.error.message}</span> : (s.note ?? (s.available ? "update available" : "—"))],
+        ["Last check", s.check.checked_at ? `${shortTime(s.check.checked_at)} · ${humanize(s.check.state).toLowerCase()}` : humanize(s.check.state)],
+        ["Check result", s.check.error ? <span className="warn">{humanize(s.check.error.code)}: {s.check.error.message}</span> : (s.note ?? (s.available ? "update available" : "—"))],
         ["Release source", <span className="small">{s.source}</span>], ["Platform", s.platform],
-        ["Install location", s.install_dir ? <Mono>{s.install_dir}</Mono> : <span className="muted">development run (updates not installed)</span>],
-        ["Download staging", <Mono>{s.cache_dir}</Mono>], ["Update log", <Mono>{s.log}</Mono>],
-        ["Last update", s.last_update ? `${String(s.last_update.event)} ${String(s.last_update.version ?? "")} · ${shortTime(String(s.last_update.at))}`
+        ["Install location", s.install_dir ? "installed desktop app" : <span className="muted">development run (updates not installed)</span>],
+        ["Last update", s.last_update ? `${humanize(s.last_update.event)} ${String(s.last_update.version ?? "")} · ${shortTime(String(s.last_update.at))}`
           + (s.last_update.error ? ` · ${String(s.last_update.error)}` : "") : "none recorded"]]} />
+      <TechDetails rows={[["Install folder", s.install_dir ? <Mono>{s.install_dir}</Mono> : null], ["Download staging", <Mono>{s.cache_dir}</Mono>],
+        ["Update log", <Mono>{s.log}</Mono>]]} />
       <div className="inline" style={{ marginTop: 10 }}>
         <Checkbox checked={s.auto_check} onChange={(on) => void act("preferences", { auto_check: on })()}
           label="Check for updates automatically (at start-up, then every 30 minutes)"
@@ -161,7 +163,7 @@ export function UpdatePanel() {
           : <Button kind="ghost" onClick={act("skip", { version: relKey(rel) })}>Skip {relLabel(rel)}</Button>}
       </div>}
       {s.download.state !== "idle" && <div style={{ marginTop: 10 }}><Progress s={s} /></div>}
-      {s.download.state === "error" && s.download.error && <Banner tone="error"><b>{s.download.error.code}</b> — {s.download.error.message}</Banner>}
+      {s.download.state === "error" && s.download.error && <Banner tone="error"><b>{humanize(s.download.error.code)}</b> — {s.download.error.message}</Banner>}
       {s.skipped_versions.length > 0 && <p className="small muted">Skipped versions: {s.skipped_versions.join(", ")}</p>}
       <ErrorPanel error={err} />
       <p className="small muted">EdgeLab works fully offline; a failed check never affects research. Updates come from the builds GitHub

@@ -2,8 +2,10 @@ import { useState } from "react";
 import type { BatchRow, Comparison, LibraryRow, SearchBatch } from "../api/types";
 import { go, useRoute } from "../app/router";
 import { useApi } from "../app/context";
+import { facetLabel, statusLabel, strategyLabel } from "../app/labels";
+import { plainText } from "../components/research";
 import { CompareTable } from "../components/strategy/lab";
-import { Banner, Button, Card, Empty, ErrorPanel, Field, Loading, Mono, Select } from "../components/ui";
+import { Banner, Button, Card, Empty, ErrorPanel, Field, Loading, Mono, Select, TechDetails, shortTime } from "../components/ui";
 
 type Source = "lineage" | "strategy" | "batch" | "search" | "runs";
 const SOURCES: { value: Source; label: string }[] = [
@@ -36,9 +38,9 @@ function SourcePicker({ source, id }: { source: Source | ""; id: string }) {
   const strategies = useApi<LibraryRow[]>("/api/strategies");
   const batches = useApi<BatchRow[]>("/api/variation-batches");
   const searches = useApi<SearchBatch[]>("/api/research/searches");
-  const opts = kind === "batch" ? (batches.data ?? []).map((b) => ({ value: b.batch_id, label: `${b.batch_id} · ${b.base_name} · ${b.generated} variants` }))
-    : kind === "search" ? (searches.data ?? []).map((s) => ({ value: s.search_id, label: `${s.search_id} · ${s.status} · ${s.n_evaluated ?? 0} evaluated` }))
-    : (strategies.data ?? []).map((s) => ({ value: s.strategy_id, label: `${s.name} · ${s.strategy_id}` }));
+  const opts = kind === "batch" ? (batches.data ?? []).map((b) => ({ value: b.batch_id, label: `${strategyLabel(b.base_name)} · ${b.generated} variants · ${shortTime(b.created_at)}` }))
+    : kind === "search" ? (searches.data ?? []).map((s) => ({ value: s.search_id, label: `Search of ${shortTime(s.created_at)} · ${statusLabel(s.status)} · ${s.n_evaluated ?? 0} evaluated` }))
+    : (strategies.data ?? []).map((s) => ({ value: s.strategy_id, label: `${strategyLabel(s.name)}${s.timeframe ? ` · ${facetLabel("timeframe", s.timeframe)}` : ""}${s.created_at ? ` · ${shortTime(s.created_at)}` : ""}` }));
   return (
     <Card title="Source">
       <div className="grid3">
@@ -46,7 +48,9 @@ function SourcePicker({ source, id }: { source: Source | ""; id: string }) {
         <Field label="Choose"><Select value={pick} onChange={setPick} options={opts} placeholder="Choose…" testId="cmp-id" /></Field>
         <div className="actions"><Button kind="primary" disabled={!pick} onClick={() => go(`/compare?source=${kind}&id=${pick}`)} testId="cmp-go">Compare</Button></div>
       </div>
-      {source === "runs" && <p className="small">Showing selected runs <Mono>{id}</Mono>.</p>}
+      {source === "runs" && <><p className="small">Showing {id.split(",").filter(Boolean).length} selected runs.</p>
+        <TechDetails rows={[["Run ids", <Mono>{id}</Mono>]]} /></>}
+      {source !== "runs" && pick && <TechDetails rows={[["Selected id", <Mono>{pick}</Mono>]]} />}
     </Card>
   );
 }
@@ -59,7 +63,7 @@ function CompareResults({ source, id }: { source: Source; id: string }) {
   const one = sel.length === 1 ? data.rows.find((r) => r.run_id === sel[0]) : undefined;
   return (
     <Card title={`Runs (${data.n_runs})`} testId="compare-results">
-      {data.labels.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{l}</Banner>)}
+      {data.labels.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{plainText(l)}</Banner>)}
       {!data.rows.length ? <Empty>No stored runs for this source yet. Run a backtest or a research job first.</Empty> : <>
         <CompareTable rows={data.rows} selected={sel} onSelect={setSel} />
         <div className="actions" data-testid="cmp-actions">
@@ -67,7 +71,7 @@ function CompareResults({ source, id }: { source: Source; id: string }) {
           <Button small disabled={sel.length < 2} onClick={() => go(`/compare?source=runs&id=${sel.join(",")}`)}>Compare only selected</Button>
           <Button small disabled={!one} testId="cmp-validate"
             onClick={() => one && go(`/strategies/${one.strategy_id}?tab=validate&dataset=${one.parent_dataset_id ?? one.dataset_id}`)}>
-            Validate selected (OOS · WF · control)</Button>
+            Validate selected (out-of-sample · walk-forward · control)</Button>
           <Button small disabled={!one} onClick={() => one && go(`/prop?run=${one.run_id}`)} testId="cmp-prop">Prop simulation on selected run</Button>
         </div>
       </>}

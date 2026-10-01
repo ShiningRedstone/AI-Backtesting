@@ -2,10 +2,11 @@ import type { BatchDetail, BatchRow, FamilyDetail, RunAnalytics, RunDetail, RunR
 import { CostPanel, EquityPanels, MonteCarloPanel, PerformanceKpis, PerformancePanels, TradePanels } from "../components/analytics";
 import { go, href, useRoute } from "../app/router";
 import { useApi } from "../app/context";
+import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, plainProse, statusLabel, strategyLabel, valueLabel } from "../app/labels";
 import { LineageTable, LineageTree, MetricsView, SYNTHETIC_NOTICE, VariationResults } from "../components/strategy";
 import { EquityChart, SCOPE, ScopeBadge } from "../components/strategy/lab";
 import { ChooseWorkspaceLink } from "../components/workspace";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, TableWrap, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, ObjectView, TableWrap, TechDetails, fmt, shortTime } from "../components/ui";
 
 // =========================================================================== families
 export function FamiliesPage() {
@@ -25,7 +26,7 @@ function FamilyList() {
       {!rows.length ? <Empty>No families yet — families appear when strategies are saved.</Empty> : (
         <TableWrap testId="families-table"><table>
           <thead><tr><th>Family</th><th>Instances</th></tr></thead>
-          <tbody>{rows.map(([f, n]) => <tr key={f}><td><a href={href(`/families/${f}`)}>{f}</a></td><td>{n}</td></tr>)}</tbody>
+          <tbody>{rows.map(([f, n]) => <tr key={f}><td><a href={href(`/families/${f}`)} title={f}>{familyLabel(f)}</a></td><td>{n}</td></tr>)}</tbody>
         </table></TableWrap>)}
     </div>
   );
@@ -33,16 +34,17 @@ function FamilyList() {
 
 function FamilyPage({ id }: { id: string }) {
   const { data, error } = useApi<FamilyDetail>(`/api/families/${id}`, [id]);
-  if (error) return <ErrorPanel error={error} title={`Could not load family ${id}`} />;
+  if (error) return <ErrorPanel error={error} title="Could not load this family" />;
   if (!data) return <Loading label="Loading family…" />;
   const nodes = data.instances.map((n) => ({ ...n, name: n.name }));
   return (
     <div className="page" data-testid="family-page">
-      <header className="page-head"><div><h1>{data.family.name || data.family_id}</h1>
-        <div className="subtitle">Family <Mono>{data.family_id}</Mono>{data.family.category ? <> · {data.family.category}</> : null}</div></div></header>
+      <header className="page-head"><div><h1 title={data.family_id}>{familyLabel(data.family_id, data.family.name)}</h1>
+        <div className="subtitle">Strategy family{data.family.category ? <> · {humanize(data.family.category)}</> : null}</div></div></header>
       <Card title="Hypothesis">
         <p data-testid="family-hypothesis">{data.family.hypothesis || <span className="muted">No hypothesis recorded.</span>}</p>
         <p className="muted small">A hypothesis to be tested, not a claim. {data.instances.length} instance(s).</p>
+        <TechDetails rows={[["Family ID", <Mono>{data.family_id}</Mono>]]} />
       </Card>
       <Card title="Lineage"><LineageTree nodes={nodes} /></Card>
       <Card title="Instances (table)"><LineageTable nodes={nodes} /></Card>
@@ -66,10 +68,10 @@ function BatchList() {
       <p className="muted">Generate variations from a saved strategy (Strategy → Generate Variations). Batches are reproducible from their records.</p>
       {!data.length ? <Empty>No variation batches yet. Open a <a href={href("/strategies")}>saved strategy</a> to generate one.</Empty> : (
         <TableWrap testId="batches-table"><table>
-          <thead><tr><th>Batch</th><th>Base</th><th>Spec</th><th>Mode</th><th>Combinations</th><th>Unique</th><th>Duplicates</th><th>Same as base</th><th>Created</th></tr></thead>
+          <thead><tr><th>Batch</th><th>Base</th><th>Mode</th><th>Combinations</th><th>Unique</th><th>Duplicates</th><th>Same as base</th><th>Created</th></tr></thead>
           <tbody>{data.map((b) => (
-            <tr key={b.batch_id}><td><a href={href(`/variations/${b.batch_id}`)}><Mono>{b.batch_id}</Mono></a></td>
-              <td><a href={href(`/strategies/${b.base_strategy_id}`)}>{b.base_name}</a></td><td>{b.spec_name}</td><td>{b.mode}</td>
+            <tr key={b.batch_id}><td><a href={href(`/variations/${b.batch_id}`)} title={b.batch_id}>{humanize(b.spec_name || "Variation batch")}</a></td>
+              <td><a href={href(`/strategies/${b.base_strategy_id}`)} title={b.base_strategy_id}>{strategyLabel(b.base_name)}</a></td><td>{humanize(b.mode)}</td>
               <td>{b.combinations}</td><td>{b.generated}</td><td>{b.duplicates}</td><td>{b.same_as_base}</td><td className="small">{shortTime(b.created_at)}</td></tr>))}
           </tbody>
         </table></TableWrap>)}
@@ -83,11 +85,14 @@ function BatchPage({ id }: { id: string }) {
   if (!b) return <Loading label="Loading batch…" />;
   return (
     <div className="page">
-      <header className="page-head"><h1>Batch <Mono>{b.batch_id}</Mono></h1></header>
+      <header className="page-head"><h1 title={b.batch_id}>Variation batch{b.spec.name ? `: ${humanize(b.spec.name)}` : ""}</h1></header>
       <Card title="Reproducibility">
-        <KeyValues rows={[["Base", <a href={href(`/strategies/${b.base.strategy_id}`)}><Mono>{b.base.strategy_id}</Mono></a>],
-          ["Mode", b.spec.mode], ["Max variants", fmt(b.spec.max_variants)], ["Generator", b.generator_version],
-          ["Compiler", b.compiler_version], ["DSL version", fmt(b.dsl_version)], ["Created", shortTime(b.created_at)]]} />
+        <KeyValues rows={[["Base", <a href={href(`/strategies/${b.base.strategy_id}`)} title={b.base.strategy_id}>
+            {strategyLabel(typeof b.base.definition?.name === "string" ? b.base.definition.name : "Base strategy")}</a>],
+          ["Mode", humanize(b.spec.mode)], ["Maximum variants", fmt(b.spec.max_variants)], ["Generator version", b.generator_version],
+          ["Compiler version", b.compiler_version], ["Strategy language version", fmt(b.dsl_version)], ["Created", shortTime(b.created_at)]]} />
+        <TechDetails rows={[["Batch ID", <Mono>{b.batch_id}</Mono>], ["Base strategy ID", <Mono>{b.base.strategy_id}</Mono>],
+          ["Base logic hash", <Mono>{b.base.logic_hash}</Mono>], ["Base definition hash", <Mono>{b.base.definition_hash}</Mono>]]} />
       </Card>
       <VariationResults result={{ batch_id: b.batch_id, base_strategy_id: b.base.strategy_id, combinations: b.combinations,
         generated: b.generated, duplicates: b.duplicates, same_as_base: b.same_as_base,
@@ -103,10 +108,10 @@ function RunAnalytics({ runId }: { runId: string }) {
   if (error) return <ErrorPanel error={error} title="Analytics unavailable" />;
   if (!data) return <Loading label="Computing analytics…" />;
   const cells = (x: Record<string, unknown>) => ["trade_count", "net_r", "expectancy_r", "profit_factor", "win_rate"].map((k) =>
-    <td key={k} className="mono">{typeof x[k] === "number" ? (x[k] as number).toFixed(k === "trade_count" ? 0 : 3) : fmt(x[k])}</td>);
+    <td key={k} className="mono">{typeof x[k] === "number" ? (x[k] as number).toFixed(k === "trade_count" ? 0 : 3) : valueLabel(x[k])}</td>);
   const table = (title: string, rows: Rows, first: (x: Record<string, unknown>) => string, testId: string) => (
     <div><h4>{title}</h4><TableWrap testId={testId}><table>
-      <thead><tr><th /><th>Trades</th><th>Net R</th><th>Expectancy R</th><th>PF</th><th>Win rate</th></tr></thead>
+      <thead><tr><th /><th>Trades</th><th>Net R</th><th>Net R per trade</th><th>Profit factor</th><th>Win rate</th></tr></thead>
       <tbody>{rows.rows.map((x, i) => <tr key={i}><td>{first(x)}</td>{cells(x)}</tr>)}</tbody></table></TableWrap>
       {rows.note && <p className="muted small">{rows.note}</p>}</div>);
   const be = data.cost_sensitivity.breakeven_cost_multiplier;
@@ -114,8 +119,8 @@ function RunAnalytics({ runId }: { runId: string }) {
     <Card title="Breakdowns (Phase 5 analytics of this run)" testId="run-analytics">
       {data.labels.map((l) => <p key={l} className="muted small">{l}</p>)}
       <div className="grid-cards">
-        {table("Sessions", data.sessions, (x) => `${fmt(x.session)} ${fmt(x.window)}`, "run-sessions")}
-        {table(`Entry hour (${data.hours.timezone ?? ""})`, data.hours, (x) => fmt(x.bucket), "run-hours")}
+        {table("Sessions", data.sessions, (x) => `${facetLabel("session", x.session)} ${fmt(x.window)}`, "run-sessions")}
+        {table(`Entry hour (${(data.hours.timezone ?? "").replace(/_/g, " ")})`, data.hours, (x) => fmt(x.bucket), "run-hours")}
         <div>{table("Cost sensitivity (× stated costs)", { ...data.cost_sensitivity,
           rows: data.cost_sensitivity.rows.map((x) => ({ ...x, trade_count: x.trades })) }, (x) => `${fmt(x.cost_multiplier)}×`, "run-costs")}
           <p className="small">Breakeven cost multiple: <b>{typeof be === "number" ? be.toFixed(3) : "—"}</b>
@@ -127,6 +132,10 @@ function RunAnalytics({ runId }: { runId: string }) {
 
 // =========================================================================== integrity / provenance
 /* eslint-disable @typescript-eslint/no-explicit-any */
+const causality = (cc: any) => (cc ? `${cc.passed ? "Passed" : "Failed"} (${fmt(cc.cuts_tested)} truncation points tested)` : "—");
+/** A trade cell: enum-like lower-case values as words; numbers, times and ids as stored. */
+const tradeCell = (v: unknown) => (typeof v === "string" && /^[A-Za-z0-9]+(_[A-Za-z0-9]+)+$/.test(v) ? valueLabel(v) : fmt(v));
+
 function ProvenanceSection({ r, id }: { r: Record<string, any>; id: string }) {
   const d = r.dataset ?? {}, a = r.assumptions ?? {}, c = a.costs ?? {}, s = r.strategy ?? {}, cv = r.code_version ?? {};
   const quotes = c.spread_source === "quotes";
@@ -135,23 +144,28 @@ function ProvenanceSection({ r, id }: { r: Record<string, any>; id: string }) {
       <p className="small muted" style={{ marginTop: 0 }}>Everything that produced this result. Re-running the same strategy definition on the
         same dataset content with the same config and code reproduces the same trades hash.</p>
       <div className="grid2">
-        <KeyValues rows={[["Run", <Mono>{id}</Mono>], ["Status", <Badge>{r.status}</Badge>],
-          ["Strategy", <><Mono>{s.strategy_id}</Mono> {s.dsl?.name ? <span className="small muted">{s.dsl.name}</span> : null}</>],
-          ["Logic hash", <Mono>{s.dsl?.logic_hash ?? "—"}</Mono>], ["Definition hash", <Mono>{s.dsl?.definition_hash ?? "—"}</Mono>],
-          ["Parent strategy", s.parent_strategy_id ? <Mono>{s.parent_strategy_id}</Mono> : "—"],
-          ["Dataset", <Mono>{d.dataset_id}</Mono>], ["Parent dataset", d.parent_dataset_id ? <Mono>{d.parent_dataset_id}</Mono> : "—"],
-          ["Dataset content hash", <Mono title={String(d.content_hash ?? "—")}>{String(d.content_hash ?? "—").slice(0, 24)}</Mono>],
+        <KeyValues rows={[["Status", <Badge>{statusLabel(r.status)}</Badge>],
+          ["Strategy", s.dsl?.name ? strategyLabel(s.dsl.name) : "—"],
+          ["Parent strategy", s.parent_strategy_id ? <a href={href(`/strategies/${s.parent_strategy_id}`)} title={s.parent_strategy_id}>Open the parent version</a> : "—"],
+          ["Dataset", <span title={d.dataset_id}>{datasetLabel(d.dataset_id)}</span>],
+          ["Parent dataset", d.parent_dataset_id ? <span title={d.parent_dataset_id}>{datasetLabel(d.parent_dataset_id)}</span> : "—"],
           ["Period", `${String(d.start ?? "").slice(0, 16)} → ${String(d.end ?? "").slice(0, 16)}`],
-          ["Instrument / provider / TF", `${d.instrument} / ${d.provider} / ${d.timeframe}`]]} />
-        <KeyValues rows={[["Config hash", <Mono title={String(r.config_hash)}>{String(r.config_hash).slice(0, 24)}</Mono>],
-          ["Code", <Mono>{cv.app_version ? `v${cv.app_version} · ` : ""}{String(cv.git_commit ?? "—").slice(0, 12)}{cv.dirty ? " (modified)" : ""}</Mono>],
-          ["Source hash", <Mono title={String(cv.source_sha256 ?? "—")}>{String(cv.source_sha256 ?? "—").slice(0, 16)}</Mono>],
-          ["Trades hash", <Mono title={String(r.trades_hash)}>{String(r.trades_hash).slice(0, 24)}</Mono>],
-          ["Causality check", r.causality_check ? `passed=${r.causality_check.passed}, cuts=${r.causality_check.cuts_tested}` : "—"],
-          ["Execution", quotes ? "directional BID/ASK quotes (long ASK→BID, short BID→ASK)" : `single series, spread ${c.spread_source ?? "fixed"}`],
-          ["Cost scenario", <Mono>{c.scenario || c.profile || "—"}</Mono>], ["Cost status", <Badge tone={a.cost_status === "assumed" ? "warn" : "neutral"}>{a.cost_status}</Badge>],
+          ["Instrument / provider / timeframe", `${plainProse(d.instrument)} / ${valueLabel(d.provider)} / ${facetLabel("timeframe", d.timeframe)}`]]} />
+        <KeyValues rows={[["Software version", cv.app_version ? `${cv.app_version}${cv.dirty ? " (modified)" : ""}` : cv.dirty ? "modified" : "—"],
+          ["Causality check", causality(r.causality_check)],
+          ["Execution", quotes ? "directional BID/ASK quotes (long ASK→BID, short BID→ASK)" : `single series, spread ${humanize(c.spread_source ?? "fixed").toLowerCase()}`],
+          ["Cost scenario", c.scenario || c.profile ? <span title={c.scenario || c.profile}>{humanize(c.scenario || c.profile)}</span> : "—"],
+          ["Cost status", <Badge tone={a.cost_status === "assumed" ? "warn" : "neutral"}>{valueLabel(a.cost_status)}</Badge>],
           ["Cost basis", <span className="small">{c.basis || "—"}</span>], ["Seed", String(r.seed ?? "—")]]} />
       </div>
+      <TechDetails testId="run-provenance-tech" rows={[["Run ID", <Mono>{id}</Mono>], ["Strategy ID", <Mono>{s.strategy_id}</Mono>],
+        ["Logic hash", <Mono>{s.dsl?.logic_hash ?? "—"}</Mono>], ["Definition hash", <Mono>{s.dsl?.definition_hash ?? "—"}</Mono>],
+        ["Parent strategy ID", s.parent_strategy_id ? <Mono>{s.parent_strategy_id}</Mono> : null],
+        ["Dataset ID", <Mono>{d.dataset_id}</Mono>], ["Parent dataset ID", d.parent_dataset_id ? <Mono>{d.parent_dataset_id}</Mono> : null],
+        ["Dataset content hash", <Mono>{String(d.content_hash ?? "—")}</Mono>], ["Config hash", <Mono>{String(r.config_hash)}</Mono>],
+        ["Code commit", <Mono>{String(cv.git_commit ?? "—")}{cv.dirty ? " (modified)" : ""}</Mono>],
+        ["Source hash", <Mono>{String(cv.source_sha256 ?? "—")}</Mono>], ["Trades hash", <Mono>{String(r.trades_hash)}</Mono>],
+        ["Cost scenario ID", c.scenario || c.profile ? <Mono>{c.scenario || c.profile}</Mono> : null]]} />
     </Card>
   );
 }
@@ -172,9 +186,10 @@ function RunList() {
     <TableWrap testId={testId}><table>
       <thead><tr><th>Run</th><th>Created</th><th>Strategy</th><th>Dataset</th><th>Status</th><th>Trades</th><th>Sample</th></tr></thead>
       <tbody>{rows.map((r) => (
-        <tr key={r.run_id}><td><a href={href(`/results/${r.run_id}`)}><Mono>{r.run_id}</Mono></a></td><td className="small">{shortTime(r.created_at)}</td>
-          <td><a href={href(`/strategies/${r.strategy_id}`)}>{r.strategy_name ?? r.strategy_id}</a></td><td><Mono>{r.dataset_id}</Mono></td>
-          <td><Badge>{r.status}</Badge></td><td>{fmt(r.headline_metrics.trade_count)}</td><td>{fmt(r.headline_metrics.sample_label)}</td></tr>))}
+        <tr key={r.run_id}><td><a href={href(`/results/${r.run_id}`)} title={r.run_id}>Open run</a></td><td className="small">{shortTime(r.created_at)}</td>
+          <td><a href={href(`/strategies/${r.strategy_id}`)} title={r.strategy_id}>{strategyLabel(r.strategy_name ?? "Unnamed strategy")}</a></td>
+          <td title={r.dataset_id}>{datasetLabel(r.dataset_id)}</td>
+          <td><Badge>{statusLabel(r.status)}</Badge></td><td>{fmt(r.headline_metrics.trade_count)}</td><td>{valueLabel(r.headline_metrics.sample_label)}</td></tr>))}
       </tbody>
     </table></TableWrap>);
   return (
@@ -200,7 +215,8 @@ function RunPage({ id }: { id: string }) {
   const cols = data.trades.length ? Object.keys(data.trades[0]).filter((c) => c !== "run_id") : [];
   return (
     <div className="page">
-      <header className="page-head"><div><h1>Run <Mono>{id}</Mono></h1>
+      <header className="page-head"><div><h1 title={id}>Run of {r.strategy?.dsl?.name ? strategyLabel(r.strategy.dsl.name) : "a strategy"}
+        <span className="muted small"> · {shortTime(r.created_at)}</span></h1>
         <div className="subtitle"><ScopeBadge status={r.status} /> {SCOPE[r.status]?.note}</div></div>
         <div className="actions">
           <Button small onClick={() => go(`/strategies/${r.strategy?.strategy_id}?tab=research`)}>Open strategy in Lab</Button>
@@ -215,11 +231,13 @@ function RunPage({ id }: { id: string }) {
       {an.data && an.data.n_trades > 0 && <PerformanceKpis a={an.data} />}
       <ProvenanceSection r={r} id={id} />
       <Card title="Record">
-        <KeyValues rows={[["Status", <Badge>{r.status}</Badge>], ["Strategy", <Mono>{r.strategy?.strategy_id}</Mono>],
-          ["Dataset", <Mono>{r.dataset?.dataset_id}</Mono>], ["Created", shortTime(r.created_at)],
-          ["Causality check", r.causality_check ? `passed=${r.causality_check.passed}, cuts=${r.causality_check.cuts_tested}` : "—"],
-          ["Trades hash", <Mono>{r.trades_hash}</Mono>], ["Code", <Mono title={String(r.code_version?.git_commit ?? "") || undefined}>{r.code_version?.git_commit?.slice(0, 10)}</Mono>],
-          ["Config hash", <Mono title={String(r.config_hash)}>{String(r.config_hash).slice(0, 12)}</Mono>], ["Notes", r.notes], ["Disclaimer", r.disclaimer]]} />
+        <KeyValues rows={[["Status", <Badge>{statusLabel(r.status)}</Badge>],
+          ["Strategy", r.strategy?.dsl?.name ? <span title={r.strategy?.strategy_id}>{strategyLabel(r.strategy.dsl.name)}</span> : "—"],
+          ["Dataset", <span title={r.dataset?.dataset_id}>{datasetLabel(r.dataset?.dataset_id)}</span>], ["Created", shortTime(r.created_at)],
+          ["Causality check", causality(r.causality_check)], ["Notes", r.notes ? valueLabel(r.notes) : null], ["Disclaimer", r.disclaimer]]} />
+        <TechDetails rows={[["Run ID", <Mono>{id}</Mono>], ["Strategy ID", <Mono>{r.strategy?.strategy_id}</Mono>],
+          ["Dataset ID", <Mono>{r.dataset?.dataset_id}</Mono>], ["Trades hash", <Mono>{r.trades_hash}</Mono>],
+          ["Code commit", <Mono>{String(r.code_version?.git_commit ?? "—")}</Mono>], ["Config hash", <Mono>{String(r.config_hash)}</Mono>]]} />
       </Card>
       <Card title="Headline metrics"><MetricsView metrics={r.headline_metrics ?? {}} /></Card>
       <Card title="Equity and drawdown (net R)"><EquityChart runId={id} /></Card>
@@ -232,11 +250,12 @@ function RunPage({ id }: { id: string }) {
           <h3>Robustness (descriptive)</h3>
           <div className="panel-grid"><CostPanel a={an.data} /><MonteCarloPanel a={an.data} /></div>
         </>}
-      <Card title="Assumptions"><pre className="code">{JSON.stringify(r.assumptions, null, 2)}</pre></Card>
+      <Card title="Assumptions"><ObjectView value={r.assumptions} />
+        <TechDetails summary="Assumptions (technical)"><pre className="code">{JSON.stringify(r.assumptions, null, 2)}</pre></TechDetails></Card>
       <Card title={`Trades (${data.trades_shown} of ${data.n_trades})`}>
         {data.trades.length ? <TableWrap><table>
-          <thead><tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-          <tbody>{data.trades.map((t, i) => <tr key={i}>{cols.map((c) => <td key={c} className="mono small">{fmt(t[c])}</td>)}</tr>)}</tbody>
+          <thead><tr>{cols.map((c) => <th key={c} title={c}>{keyLabel(c)}</th>)}</tr></thead>
+          <tbody>{data.trades.map((t, i) => <tr key={i}>{cols.map((c) => <td key={c} className="mono small">{tradeCell(t[c])}</td>)}</tr>)}</tbody>
         </table></TableWrap> : <Empty>No trades.</Empty>}
       </Card>
     </div>

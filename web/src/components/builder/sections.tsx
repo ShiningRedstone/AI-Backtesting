@@ -3,8 +3,9 @@ import type { Issue } from "../../api/types";
 import { countRefs, newGroup, omit, renameRefs } from "../../dsl/edit";
 import type { Condition, LocalSession, ParamDecl, StopTarget, StrategyDoc } from "../../dsl/types";
 import { isRef } from "../../dsl/types";
+import { facetLabel, humanize, valueLabel } from "../../app/labels";
 import { Banner, Button, Checkbox, Field, IssueList, NumberInput, Select, TextInput } from "../ui";
-import { ConditionEditor, OperandEditor, ValueOrParam, htfChoices, paramsOfType, sessionChoices, useBuilder } from "./editors";
+import { ConditionEditor, OperandEditor, ValueOrParam, htfChoices, paramsOfType, sessionChoices, useBuilder, wordOptions, zoneLabel } from "./editors";
 
 export type SectionId = "general" | "market" | "parameters" | "entry" | "exit" | "sizing" | "review";
 export type SetDoc = (fn: (d: StrategyDoc) => StrategyDoc) => void;
@@ -20,6 +21,21 @@ export function sectionOf(path: string): SectionId {
 }
 
 const WEEKDAY_LABEL: Record<string, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+const PARAM_TYPE_LABEL: Record<string, string> = {
+  integer: "Whole number", float: "Decimal number", boolean: "On / off", choice: "Choice", timeframe: "Timeframe",
+};
+const typeOptions = (types: string[]) => wordOptions(types, (t) => PARAM_TYPE_LABEL[t] ?? humanize(t));
+/** Plain-English notes for exits the form cannot set (the backend validator's exact wording is the tooltip). */
+const UNSUPPORTED_NOTE: Record<string, string> = {
+  trailing_stop: "not set up in this form; a trailing exit is declared in the trailing-exit block of the strategy definition",
+  breakeven: "not set up in this form; a breakeven move is declared in the trailing-exit block of the strategy definition",
+  partial_exits: "partial exits or scaling out are not supported (one fill in, one fill out)",
+  pyramiding: "pyramiding or scaling in is not supported (one position at a time)",
+};
+const tfLabel = (t: string) => facetLabel("timeframe", t);
+/** The engine's session-flatten settings as words. */
+const flattenText = (f: Record<string, unknown>) =>
+  `flatten daily: ${valueLabel(f.flatten_daily)}, flatten time: ${valueLabel(f.flatten_time)}, hold overnight: ${valueLabel(f.hold_overnight)}`;
 
 // =========================================================================== general
 export function GeneralSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDoc: SetDoc; issues: Issue[] }) {
@@ -33,7 +49,7 @@ export function GeneralSection({ doc, setDoc, issues }: { doc: StrategyDoc; setD
           <TextInput value={doc.name} onChange={(v) => setDoc((d) => ({ ...d, name: v }))} testId="f-name" />
         </Field>
         <Field label="Category">
-          <TextInput value={fam.category} onChange={(v) => setFam("category", v)} placeholder="breakout, trend, mean_reversion…" testId="f-category" />
+          <TextInput value={fam.category} onChange={(v) => setFam("category", v)} placeholder="breakout, trend, mean reversion…" testId="f-category" />
         </Field>
         <Field label="Description" wide>
           <TextInput value={doc.description} multiline onChange={(v) => setDoc((d) => ({ ...d, description: v }))} testId="f-description" />
@@ -43,7 +59,7 @@ export function GeneralSection({ doc, setDoc, issues }: { doc: StrategyDoc; setD
       <p className="muted small">The family is the market hypothesis; every saved instance of it is a concrete canonical
         definition. Describe the hypothesis to be tested — never expected performance.</p>
       <div className="grid2">
-        <Field label="Family ID" hint="lowercase letters, digits, underscore (e.g. ny_opening_range_breakout)">
+        <Field label="Family code" hint="A short code that groups every version of this idea: lowercase letters, digits and underscores only.">
           <TextInput value={fam.id} mono onChange={(v) => setFam("id", v)} testId="f-family-id" />
         </Field>
         <Field label="Family name">
@@ -75,12 +91,12 @@ export function MarketSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDo
           hint="Strategy timeframe must match the dataset timeframe when the strategy is bound for execution. Higher-timeframe feature references are configured inside feature operands.">
           <select className="input" value={doc.timeframe} data-testid="f-timeframe" aria-label="strategy timeframe"
             onChange={(e: { target: HTMLSelectElement }) => setDoc((d) => ({ ...d, timeframe: e.target.value }))}>
-            {ctx.options.timeframes.map((t) => <option key={t} value={t}>{t}</option>)}
-            {tfParams.map((n) => <option key={n} value={`$${n}`}>${n} (parameter)</option>)}
-            {!ctx.options.timeframes.includes(doc.timeframe) && !isRef(doc.timeframe) && <option value={doc.timeframe}>{doc.timeframe}</option>}
+            {ctx.options.timeframes.map((t) => <option key={t} value={t}>{tfLabel(t)}</option>)}
+            {tfParams.map((n) => <option key={n} value={`$${n}`}>{`from parameter: ${humanize(n)}`}</option>)}
+            {!ctx.options.timeframes.includes(doc.timeframe) && !isRef(doc.timeframe) && <option value={doc.timeframe}>{tfLabel(doc.timeframe)}</option>}
           </select>
         </Field>
-        <Field label="Trading window" hint="The DSL supports one trading window: a signal bar must OPEN inside it. Session windows can also be referenced by session-based features.">
+        <Field label="Trading window" hint="A strategy has one trading window: a signal bar must OPEN inside it. Session windows can also be referenced by session-based features.">
           <select className="input" value={doc.entry.session ?? ""} data-testid="f-entry-session" aria-label="trading window"
             onChange={(e: { target: HTMLSelectElement }) => setDoc((d) => ({
               ...d, entry: e.target.value ? { ...d.entry, session: e.target.value } : omit(d.entry, "session") }))}>
@@ -102,11 +118,11 @@ export function MarketSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDo
         </div>
       </Field>
 
-      <h3>Configured sessions <span className="muted small">(configs/sessions.yaml — DST-safe, computed by the backend)</span></h3>
+      <h3>Configured sessions <span className="muted small">(from the sessions configuration file — daylight-saving safe, computed by the backend)</span></h3>
       <div className="session-list">
         {Object.values(ctx.options.sessions).map((s) => (
-          <span key={s.name} className="session-chip" title={`${s.timezone}, weekdays ${s.weekdays.join(",")}`}>
-            <b>{s.name}</b> {s.start}–{s.end} <span className="muted">{s.timezone}</span>
+          <span key={s.name} className="session-chip" title={`${zoneLabel(s.timezone)}, ${s.weekdays.map((w) => WEEKDAY_LABEL[w] ?? w).join(", ")}`}>
+            <b>{facetLabel("session", s.name)}</b> {s.start}–{s.end} <span className="muted">{zoneLabel(s.timezone)}</span>
           </span>
         ))}
       </div>
@@ -115,7 +131,7 @@ export function MarketSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDo
       <p className="muted small">Windows defined inside this strategy (e.g. opening ranges). They become part of the strategy's identity.</p>
       {Object.entries(local).map(([name, s]) => (
         <div className="local-session" key={name} data-testid={`local-session-${name}`}>
-          <b className="mono">{name}</b>
+          <b title={name}>{humanize(name)}</b>
           <Field label="Timezone"><TextInput value={s.timezone} onChange={(v) => setLocal({ ...local, [name]: { ...s, timezone: v } })} /></Field>
           <Field label="Start"><input className="input" type="time" value={s.start} aria-label={`${name} start`}
             onChange={(e: { target: HTMLInputElement }) => setLocal({ ...local, [name]: { ...s, start: e.target.value } })} /></Field>
@@ -132,16 +148,15 @@ export function MarketSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDo
         </div>
       ))}
       <div className="inline">
-        <TextInput value={newName} onChange={(v) => setNewName(v.toUpperCase().replace(/[^A-Z0-9_]/g, "_"))} placeholder="NEW_SESSION_NAME" mono testId="new-session-name" ariaLabel="new session name" />
+        <TextInput value={newName} onChange={(v) => setNewName(v.toUpperCase().replace(/[^A-Z0-9_]/g, "_"))} placeholder="New session name" mono testId="new-session-name" ariaLabel="new session name" />
         <Button small disabled={!newName || newName in local} testId="add-session"
           onClick={() => { setLocal({ ...local, [newName]: { timezone: "America/New_York", start: "09:30", end: "10:30", weekdays: ["mon", "tue", "wed", "thu", "fri"] } }); setNewName(""); }}>
           + Add session</Button>
       </div>
 
       <h3>Session flatten</h3>
-      <p className="muted small">Engine configuration (configs/backtest.yaml → backtest.session), applied to every strategy; not part of the DSL.
-        Current: flatten_daily = <b>{String(flat.flatten_daily)}</b>, flatten_time = <b>{String(flat.flatten_time)}</b>,
-        hold_overnight = <b>{String(flat.hold_overnight)}</b>.</p>
+      <p className="muted small">Engine configuration (the backtest settings file), applied to every strategy; not part of the strategy definition.
+        Current: <b>{flattenText(flat)}</b>.</p>
     </div>
   );
 }
@@ -172,8 +187,8 @@ export function ParametersSection({ doc, setDoc, issues }: { doc: StrategyDoc; s
   const valid = /^[a-z][a-z0-9_]*$/.test(name);
   return (
     <div className="section">
-      <p className="muted small">Parameters are the declared knobs of the hypothesis. Reference them anywhere as <code>$name</code>.
-        Their min / max / step / choices define the only space Mode A variations may explore. The backend validator checks every declaration.</p>
+      <p className="muted small">Parameters are the declared knobs of the hypothesis. Any value that offers “from a parameter” can use them.
+        Their minimum, maximum, step and choices define the only space controlled variations may explore. The backend validator checks every declaration.</p>
       <IssueList issues={issues} />
       <div className="params">
         {Object.entries(params).map(([n, d]) => (
@@ -187,9 +202,9 @@ export function ParametersSection({ doc, setDoc, issues }: { doc: StrategyDoc; s
       </div>
       <div className="add-param">
         <Field label="New parameter name"><TextInput value={name} mono onChange={(v) => setName(v.toLowerCase())} placeholder="stop_atr" testId="new-param-name" /></Field>
-        <Field label="Type"><Select value={type} onChange={setType} options={ctx.options.parameter_types} testId="new-param-type" /></Field>
+        <Field label="Type"><Select value={type} onChange={setType} options={typeOptions(ctx.options.parameter_types)} testId="new-param-type" /></Field>
         <Button kind="primary" disabled={!valid || name in params} testId="add-param"
-          title={!valid ? "name must match [a-z][a-z0-9_]*" : name in params ? "already exists" : undefined}
+          title={!valid ? "use lowercase letters, digits and underscores, starting with a letter" : name in params ? "already exists" : undefined}
           onClick={() => { setDecl(name, defaultDecl(type, ctx.options.timeframes)); setName(""); }}>+ Add parameter</Button>
       </div>
     </div>
@@ -216,7 +231,7 @@ function ParamCard({ name, decl, refs, issues, timeframes, types, onChange, onRe
             else setEditName(name);
           }} />
         <Select value={decl.type} ariaLabel="parameter type" testId={`param-${name}-type`}
-          onChange={(t) => onChange(defaultDecl(t, timeframes))} options={types} />
+          onChange={(t) => onChange(defaultDecl(t, timeframes))} options={typeOptions(types)} />
         <span className="muted small">{refs ? `used in ${refs} place${refs > 1 ? "s" : ""}` : "not used yet"}</span>
         <span className="spacer" />
         {confirmDelete
@@ -233,7 +248,7 @@ function ParamCard({ name, decl, refs, issues, timeframes, types, onChange, onRe
           <Field label="Step"><NumberInput value={decl.step} onChange={(v) => setBound("step", v)} testId={`param-${name}-step`} /></Field>
         </>}
         {decl.type === "boolean" && (
-          <Field label="Default"><Checkbox label={decl.value ? "ON" : "OFF"} checked={Boolean(decl.value)} onChange={(v) => onChange({ ...decl, value: v })} testId={`param-${name}-value`} /></Field>
+          <Field label="Default"><Checkbox label={decl.value ? "On" : "Off"} checked={Boolean(decl.value)} onChange={(v) => onChange({ ...decl, value: v })} testId={`param-${name}-value`} /></Field>
         )}
         {decl.type === "choice" && <>
           <Field label="Choices" hint="comma-separated (e.g. session names)">
@@ -243,13 +258,13 @@ function ParamCard({ name, decl, refs, issues, timeframes, types, onChange, onRe
                 onChange({ ...decl, choices: ch, value: ch.includes(String(decl.value)) ? decl.value : ch[0] });
               }} />
           </Field>
-          <Field label="Current"><Select value={String(decl.value)} onChange={(v) => onChange({ ...decl, value: v })} options={(decl.choices ?? []).map(String)} testId={`param-${name}-value`} /></Field>
+          <Field label="Current"><Select value={String(decl.value)} onChange={(v) => onChange({ ...decl, value: v })} options={wordOptions((decl.choices ?? []).map(String))} testId={`param-${name}-value`} /></Field>
         </>}
         {decl.type === "timeframe" && <>
-          <Field label="Current"><Select value={String(decl.value)} onChange={(v) => onChange({ ...decl, value: v })} options={timeframes} testId={`param-${name}-value`} /></Field>
+          <Field label="Current"><Select value={String(decl.value)} onChange={(v) => onChange({ ...decl, value: v })} options={wordOptions(timeframes, tfLabel)} testId={`param-${name}-value`} /></Field>
           <Field label="Choices" hint="allowed values (optional)">
             <div className="checks">{timeframes.map((t) => (
-              <Checkbox key={t} label={t} checked={(decl.choices ?? []).map(String).includes(t)} testId={`param-${name}-choice-${t}`}
+              <Checkbox key={t} label={tfLabel(t)} checked={(decl.choices ?? []).map(String).includes(t)} testId={`param-${name}-choice-${t}`}
                 onChange={(on) => {
                   const cur = (decl.choices ?? []).map(String);
                   const ch = on ? timeframes.filter((x) => x === t || cur.includes(x)) : cur.filter((x) => x !== t);
@@ -309,7 +324,7 @@ export function EntrySection({ doc, setDoc, issues }: { doc: StrategyDoc; setDoc
         </Field>
         <Field label="Entry order" hint={order.type === "market" ? "Fills at the next bar's open." : "Works from the next bar at the operand's value on the signal bar."}>
           <Select value={order.type} onChange={setOrderType} testId="f-order-type"
-            options={ctx.options.entry_order_types.map((t) => ({ value: t, label: t[0].toUpperCase() + t.slice(1) }))} />
+            options={wordOptions(ctx.options.entry_order_types)} />
         </Field>
         <Field label="Cooldown (bars between signals)" hint="Measured between signals, not from trade exits.">
           <ValueOrParam value={e.cooldown_bars} kind="integer" testId="f-cooldown"
@@ -319,7 +334,7 @@ export function EntrySection({ doc, setDoc, issues }: { doc: StrategyDoc; setDoc
       {order.type !== "market" && (
         <div className="pending">
           {sides.map((side) => (
-            <Field key={side} label={`${side} ${order.type} price`}>
+            <Field key={side} label={`${side === "long" ? "Long" : "Short"} ${order.type} price`}>
               <OperandEditor value={(order as Record<string, unknown>)[`${side}_price`] as never} testId={`order-${side}-price`}
                 onChange={(o) => setEntry((x) => ({ ...x, order: { ...(x.order ?? { type: order.type }), [`${side}_price`]: o } }))} />
             </Field>
@@ -361,7 +376,7 @@ function StopTargetEditor({ which, value, onChange, types, sides, testId }: {
                 ? { type: t, ...Object.fromEntries(sides.map((s) => [s, { bar: s === "long" ? "low" : "high" }])) } : { type: t });
           }}>
           {which === "stop" && <option value="" disabled>None (a protective stop is required)</option>}
-          {types.map((t) => <option key={t} value={t}>{labels[t] ?? t}</option>)}
+          {types.map((t) => <option key={t} value={t}>{labels[t] ?? facetLabel(which === "stop" ? "stop_type" : "target_type", t)}</option>)}
         </select>
       </Field>
       {value.type === "points" && <Field label="Points"><ValueOrParam value={value.points} kind="number" onChange={(v) => set("points", v)} testId={`${testId}-points`} /></Field>}
@@ -380,7 +395,7 @@ function StopTargetEditor({ which, value, onChange, types, sides, testId }: {
         </Field>
       </>}
       {value.type === "price" && sides.map((s) => (
-        <Field key={s} label={`${s} ${which} level`}>
+        <Field key={s} label={`${s === "long" ? "Long" : "Short"} ${which} level`}>
           <OperandEditor value={value[s as "long" | "short"]} onChange={(o) => set(s, o)} testId={`${testId}-${s}`} />
         </Field>
       ))}
@@ -413,7 +428,7 @@ export function ExitSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDoc:
         onChange={(v) => setExit((e) => ({ ...e, target: v }))} />
       <div className="grid2">
         {optNum("time_stop_bars", "Time stop (bars)", "Exit at the close of the Nth bar after entry.")}
-        {optNum("max_hold_bars", "Max hold (bars)", "Hard limit on bars in the trade.")}
+        {optNum("max_hold_bars", "Maximum hold (bars)", "Hard limit on bars in the trade.")}
       </div>
       <h3>Signal exits</h3>
       <p className="muted small">When the condition is true at a bar's close, the position exits at the next bar's open (market order).
@@ -433,13 +448,12 @@ export function ExitSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDoc:
         </div>
       ))}
       <h3>Session flatten</h3>
-      <p className="muted small">Configured for the engine in configs/backtest.yaml (flatten_daily = {String(ctx.options.session_flatten.flatten_daily)},
-        flatten_time = {String(ctx.options.session_flatten.flatten_time)}); not a strategy setting.</p>
-      <h3>Not supported by the engine</h3>
+      <p className="muted small">Configured for the engine in the backtest settings file ({flattenText(ctx.options.session_flatten)}); not a strategy setting.</p>
+      <h3>Not available in this form</h3>
       <div className="unsupported" data-testid="unsupported-exits">
         {["trailing_stop", "breakeven", "partial_exits", "pyramiding"].map((k) => (
           <Checkbox key={k} disabled checked={false} onChange={() => undefined}
-            label={<><s>{k.replace("_", " ")}</s> <span className="muted small">— {ctx.options.unsupported[k] ?? "not supported"} (coming in a future engine phase)</span></>} />
+            label={<><s>{humanize(k)}</s> <span className="muted small" title={ctx.options.unsupported[k]}>— {UNSUPPORTED_NOTE[k] ?? "not supported"}</span></>} />
         ))}
       </div>
     </div>
@@ -458,7 +472,7 @@ export function SizingSection({ doc, setDoc, issues }: { doc: StrategyDoc; setDo
         {ctx.options.sizing_modes.map((m) => (
           <button key={m} role="radio" aria-checked={sz.mode === m} className={sz.mode === m ? "on" : ""} data-testid={`sizing-${m}`}
             onClick={() => set(m === "fixed" ? { mode: "fixed", quantity: 1 } : { mode: "risk", risk_usd: 500 })}>
-            {m === "fixed" ? "Fixed quantity" : "Risk-based"}</button>
+            {m === "fixed" ? "Fixed quantity" : m === "risk" ? "Risk-based" : humanize(m)}</button>
         ))}
       </div>
       <div className="grid2">

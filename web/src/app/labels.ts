@@ -3,14 +3,14 @@
    computed here. */
 
 const ACRONYMS = new Set(["atr", "ema", "sma", "vwap", "rsi", "fvg", "orb", "ny", "bos", "smc", "ict", "oos", "pdhl", "mtf",
-  "usd", "cfd", "nq", "es", "mnq", "rth", "eth", "pf", "dd", "id", "ui", "ai"]);
+  "usd", "cfd", "nq", "es", "mnq", "rth", "eth", "pf", "dd", "id", "ui", "ai", "nas100", "us100", "utc", "mae", "mfe", "cme"]);
 
 /** snake_case / kebab-case / camelCase / SHOUTING_CASE -> "Sentence case words" (acronyms kept upper case). */
 export function humanize(raw: unknown): string {
   if (raw === null || raw === undefined) return "—";
   const s = String(raw).trim();
   if (!s) return "—";
-  const words = s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[_\-\s]+/).filter(Boolean)
+  const words = s.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[_\-\s]+/).filter(Boolean)
     .map((w) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.toLowerCase()));
   if (!words.length) return "—";
   const first = words[0];
@@ -67,12 +67,18 @@ export const METRIC_LABEL: Record<string, string> = {
   expectancy_ci: "Net R per trade, uncertainty range", payoff_ratio: "Average reward to risk", avg_hold_minutes: "Average hold (minutes)",
   long_trades: "Long trades", short_trades: "Short trades", recovery_factor: "Recovery factor", skipped: "Skipped signals",
   n_signals: "Signals", gross_r_per_trade: "Gross R per trade", cost_r_per_trade: "Cost per trade (R)",
+  expectancy_se: "Net R per trade, standard error", expectancy_ci95: "Net R per trade, 95% range", std_r: "Spread of trade results (R)",
+  win_rate_ci95: "Win rate, 95% range", loss_rate: "Loss rate", best_trade_r: "Best trade (R)", worst_trade_r: "Worst trade (R)",
+  profit_factor_gross: "Profit factor before costs", sharpe_like_per_trade: "Sharpe-like ratio per trade",
+  sortino_like_per_trade: "Sortino-like ratio per trade", max_drawdown_usd: "Max drawdown ($)", median_hold_minutes: "Median hold (minutes)",
+  conflict_bars: "Bars where stop and target were both touched", avg_hold_bars: "Average hold (bars)", median_hold_bars: "Median hold (bars)",
 };
 export const metricLabel = (k: string) => METRIC_LABEL[k] ?? humanize(k);
 
 /** A dataset id as words ("NQ_FUTURE_SYNTHETIC_DEMO_5M_0A42F5A624" -> "NQ future synthetic demo 5m"): the trailing content
     hash is dropped; the full id stays available under Technical details. */
-export const datasetLabel = (id: string | null | undefined) => (id ? humanize(id.replace(/_[0-9A-F]{8,}$/, "")) : "—");
+export const datasetLabel = (id: string | null | undefined) => (id ? humanize(id.replace(/_[0-9A-F]{8,}(?=_|$)/g, ""))
+  .replace(/ (\d{4})(\d{2})(\d{2})\b/g, " from $1-$2-$3") : "—");
 
 /** A strategy's machine name as words ("mtf_trend_pullback" -> "MTF trend pullback"). */
 export const strategyLabel = (name: string | null | undefined) => humanize(name ?? "—");
@@ -91,5 +97,24 @@ export function valueLabel(v: unknown): string {
   if (Array.isArray(v)) return v.map(valueLabel).join(", ");
   const s = String(v);
   if (STATUS[s]) return STATUS[s];
-  return /^[A-Za-z0-9]+(_[A-Za-z0-9]+)+$/.test(s) ? humanize(s) : s;
+  return /^[A-Za-z0-9]+(_[A-Za-z0-9]+)+$/.test(s) || /^[A-Z][A-Z0-9]*( [A-Z0-9]+)+$/.test(s) ? humanize(s) : s;
+}
+
+const RECORD_ID = /^(STR|RUN|CTRL|VAL|RP|CMP|FM|AIP|PB|SB|VB|SRCH|JOB|CR)_/;
+/** Backend prose with code tokens turned into words: "cost profile 'NQ_CFD' is unconfigured" -> "… 'NQ CFD' …",
+    "America/New_York" -> "America/New York", "reason END_OF_DATA" -> "reason end of data", dotted rule keys
+    ("evaluation.drawdown.mode") -> "Evaluation · drawdown · mode". Record ids (STR_…, RUN_…) and file names are kept. */
+export function plainProse(t: unknown): string {
+  return String(t ?? "")
+    .replace(/\b[a-z][a-z0-9_]{2,}(?:\.[a-z][a-z0-9_]{1,})+\b/g, (m) => /\.(json|ya?ml|md|csv|py|txt|exe|zip)$/.test(m) ? m
+      : m.split(".").map((x, i) => (i ? humanize(x).replace(/^[A-Z][a-z]/, (c) => c.toLowerCase()) : humanize(x))).join(" · "))
+    .replace(/\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b/g, (m) => {
+      if (RECORD_ID.test(m)) return m;
+      const s = m.replace(/_[0-9A-F]{8,}$/, "");
+      const parts = s.split("_");
+      if (parts.every((p) => /^[A-Z][a-z]+$/.test(p))) return parts.join(" ");             // New_York
+      if (parts.some((p) => /^[A-Z0-9]{2,}$/.test(p) && /\d|^[A-Z]{2,5}$/.test(p)) && /^[A-Z0-9_]+$/.test(s)
+        && parts.length <= 3 && parts.some((p) => /\d/.test(p) || ACRONYMS.has(p.toLowerCase()))) return parts.join(" ");  // NQ_CFD
+      return humanize(s).replace(/^[A-Z][a-z]/, (c) => c.toLowerCase());
+    });
 }

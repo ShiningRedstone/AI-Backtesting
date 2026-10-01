@@ -94,8 +94,8 @@ class TestBrowserFlow(unittest.TestCase):
 
     def wait_valid(self, pg):
         pg.wait_for_function("() => { const s = document.querySelector(\"[data-testid='live-status']\");"
-                             " return s && /valid STR_/.test(s.innerText); }")
-        return self.tid(pg, "live-status").inner_text().split()[1]
+                             " return s && /valid/.test(s.innerText) && /^STR_/.test(s.dataset.strategyId || ''); }")
+        return self.tid(pg, "live-status").get_attribute("data-strategy-id")       # ids live in attributes, not text
 
     def build_strategy(self, pg) -> str:
         pg.goto(self.base + "/#/builder?new=1")
@@ -133,7 +133,7 @@ class TestBrowserFlow(unittest.TestCase):
     def test_1_create_validate_save_reload(self):
         pg = self.page()
         live_id = self.build_strategy(pg)
-        text = self.tid(pg, "dsl-text").inner_text()
+        text = self.tid(pg, "dsl-text").text_content()                         # inside the collapsed technical preview
         for fragment in ("period: $ema_period", "timeframe: 60m", "not:", "any:", "enabled: $use_filter", "points: $stop_pts"):
             self.assertIn(fragment, text)                     # backend-rendered DSL of the visual draft
         self.tid(pg, "tab-review").click()
@@ -147,7 +147,7 @@ class TestBrowserFlow(unittest.TestCase):
         self.tid(pg, "save").click()
         saved = self.tid(pg, "save-result")
         saved.wait_for()
-        self.assertIn(live_id, saved.inner_text())
+        self.assertIn(live_id, saved.text_content())              # under Technical details
         stored = _get(f"{self.base}/api/strategies/{live_id}")
         self.assertEqual(stored["family_id"], "e2e_trend")
         self.assertEqual(set(stored["definition"]["parameters"]),
@@ -187,11 +187,11 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertEqual(self.tid(pg, "stat-combinations").inner_text(), "6")
         self.assertEqual(self.tid(pg, "stat-unique").inner_text(), "5")
         self.assertEqual(self.tid(pg, "stat-same").inner_text(), "1")
-        child = self.tid(pg, "variants-table").locator("tbody tr").first.locator("code").first.inner_text()
+        child = self.tid(pg, "variants-table").locator("tbody tr").first.locator("a[title^='STR_']").first.get_attribute("title")
         pg.goto(f"{self.base}/#/strategies/{child}?tab=lineage")
         self.tid(pg, "lineage-view").wait_for()
         self.tid(pg, f"tree-{sid}").wait_for()                     # parent from lineage records
-        self.assertIn(sid, self.tid(pg, "lineage-table").inner_text())
+        self.assertIn(sid, self.tid(pg, "lineage-table").inner_html())
         lin = _get(f"{self.base}/api/strategies/{child}/lineage")
         self.assertEqual(lin["records"][0]["parent_strategy_id"], sid)
         self.assertEqual(lin["records"][0]["generation_method"], "mode_a_variation")
@@ -223,10 +223,10 @@ class TestBrowserFlow(unittest.TestCase):
         result = self.tid(pg, "backtest-result")
         result.wait_for(timeout=60000)
         self.assertIn("not evidence of trading performance", self.tid(pg, "synthetic-banner").inner_text())
-        self.assertIn("trade_count", self.tid(pg, "metrics").inner_text())
-        run_id = result.locator("a[href^='#/results/']").inner_text()
+        self.assertIn("Trades", self.tid(pg, "metrics").inner_text())          # metric keys in words
+        run_id = result.locator("a[href^='#/results/']").first.get_attribute("href").rsplit("/", 1)[-1]
         pg.goto(f"{self.base}/#/results")
-        self.assertIn(run_id, self.tid(pg, "runs-demo").inner_text())     # kept apart from research runs
+        self.assertIn(run_id, self.tid(pg, "runs-demo").inner_html())     # kept apart from research runs
         self.assertEqual(self.errors, [])
 
     def test_10_prop_simulation_and_dataset_eligibility(self):
@@ -243,8 +243,8 @@ class TestBrowserFlow(unittest.TestCase):
         self.tid(pg, "prop-config-1").select_option("SYNTH_TRAILING_EVAL")
         self.tid(pg, "prop-run-btn").click()
         self.tid(pg, "prop-result").wait_for(timeout=60000)
-        self.assertIn(run_id, self.tid(pg, "prop-strategy-result").inner_text())
-        table = self.tid(pg, "prop-account-results").inner_text()
+        self.assertIn(run_id, self.tid(pg, "prop-strategy-result").text_content())
+        table = self.tid(pg, "prop-account-results").text_content()
         self.assertIn("SYNTH_STATIC_EVAL", table)
         self.assertIn("SYNTH_TRAILING_EVAL", table)
         self.assertIn("not evidence that the strategy is profitable", self.tid(pg, "prop-result").inner_text())
@@ -280,7 +280,7 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertNotEqual(new_id, ema)
         self.tid(pg, "save").click()
         self.tid(pg, "save-result").wait_for()
-        self.assertIn(new_id, self.tid(pg, "save-result").inner_text())
+        self.assertIn(new_id, self.tid(pg, "save-result").text_content())
         rec = _get(f"{self.base}/api/strategies/{new_id}/research")
         self.assertEqual((rec["lineage"]["parent_strategy_id"], rec["lineage"]["generation_method"]), (ema, "duplicate"))
         self.assertEqual((rec["strategy"]["parameters"]["fast"], rec["strategy"]["parameters"]["slow"]), (8, 20))
@@ -291,7 +291,7 @@ class TestBrowserFlow(unittest.TestCase):
         self.tid(pg, "run-backtest").click()
         res = self.tid(pg, "backtest-result")
         res.wait_for(timeout=60000)
-        run_id = res.locator("a[href^='#/results/']").inner_text()
+        run_id = res.locator("a[href^='#/results/']").first.get_attribute("href").rsplit("/", 1)[-1]
         self.assertEqual(_get(f"{self.base}/api/results/{run_id}")["record"]["strategy"]["strategy_id"], new_id)
         res.locator("a[href^='#/results/']").click()
         self.tid(pg, "equity-chart").wait_for()
@@ -299,8 +299,8 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertIn("In-sample", pg.locator(".subtitle").first.inner_text())
         pg.goto(f"{self.base}/#/strategies/{new_id}?tab=research")
         self.tid(pg, "lab-runs").wait_for()
-        self.assertIn(run_id, self.tid(pg, "lab-runs").inner_text())
-        self.assertIn(ema, self.tid(pg, "lab-provenance").inner_text())
+        self.assertIn(run_id, self.tid(pg, "lab-runs").inner_html())          # id in the link, not the text
+        self.assertIn(ema, self.tid(pg, "lab-provenance").text_content())
         self.assertEqual(self.errors, [])
 
     def test_12_variations_batch_compare_validate_prop(self):
@@ -344,7 +344,7 @@ class TestBrowserFlow(unittest.TestCase):
         result = self.tid(pg, "lab-val-result")
         result.wait_for(timeout=120000)
         self.assertIn("Out-of-sample", result.inner_text())
-        oos_run = result.locator("tbody tr").nth(1).locator("a[href^='#/results/']").inner_text()
+        oos_run = result.locator("tbody tr").nth(1).locator("a[href^='#/results/']").first.get_attribute("href").rsplit("/", 1)[-1]
         self.assertEqual(_get(f"{self.base}/api/results/{oos_run}")["record"]["status"], "OUT_OF_SAMPLE")
         self.tid(pg, "lab-val-control").click()
         self.tid(pg, "lab-val-n").fill("3")
@@ -371,12 +371,12 @@ class TestBrowserFlow(unittest.TestCase):
             pg.goto(f"{self.base}/#/datasets")
             self.tid(pg, f"prefer-{did}").click()
             self.tid(pg, "preferred-strip").wait_for()
-            self.assertIn(did, self.tid(pg, "preferred-strip").inner_text())
+            self.assertIn(did, self.tid(pg, "preferred-strip").text_content())
             self.assertEqual(_get(self.base + "/api/preferences/research-dataset")["preferred"]["dataset_id"], did)
             pg.goto(f"{self.base}/#/discovery")
             self.tid(pg, "ai-offline").wait_for()                              # no external AI in tests: says so
             pg.wait_for_function(f"() => document.querySelector(\"[data-testid='ai-dataset']\")?.value === '{did}'")
-            self.assertIn(did, self.tid(pg, "research-dataset-strip").inner_text())
+            self.assertIn(did, self.tid(pg, "research-dataset-strip").text_content())
             self.tid(pg, "ai-mode-template").click()
             self.tid(pg, "ai-template").select_option("rsi_reversion")
             self.tid(pg, "ai-n").fill("2")
@@ -398,7 +398,7 @@ class TestBrowserFlow(unittest.TestCase):
             self.tid(pg, "run-backtest").click()
             res = self.tid(pg, "backtest-result")
             res.wait_for(timeout=60000)
-            run_id = res.locator("a[href^='#/results/']").inner_text()
+            run_id = res.locator("a[href^='#/results/']").first.get_attribute("href").rsplit("/", 1)[-1]
             rec = _get(f"{self.base}/api/results/{run_id}")["record"]
             gens = _get(self.base + "/api/ai/generations")
             gen = _get(f"{self.base}/api/ai/generations/{gens[0]['generation_id']}")
@@ -482,8 +482,9 @@ class TestBrowserFlow(unittest.TestCase):
         pg.wait_for_function("() => document.querySelector(\"[data-testid='rs-job-state']\")?.innerText === 'completed'",
                              timeout=120000)                                  # reached through polling
         self.assertIn("Trials", self.tid(pg, "rs-progress").inner_text())
-        sid = self.tid(pg, "rs-job-search").inner_text().strip()
-        self.assertIn(sid, self.tid(pg, "rs-searches").inner_text())         # the list refreshed
+        sid = self.tid(pg, "rs-job-search").get_attribute("title")             # ids live in attributes / Technical details
+        self.assertTrue(sid and sid.startswith("SRCH_"))
+        self.assertIn(sid, self.tid(pg, "rs-searches").inner_html())         # the list refreshed
         self.tid(pg, "rs-open-results").click()
         self.tid(pg, "rs-search-page").wait_for()
         self.assertIn("NOT VALIDATED", self.tid(pg, "rs-search-in-sample").inner_text())
@@ -492,13 +493,13 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertIn("None.", self.tid(pg, "rs-historical").inner_text())
         self.assertEqual(self.tid(pg, "rs-trials").inner_text(), "2")
         self.tid(pg, "rk-min-sample").select_option("LOW SAMPLE SIZE")
-        pg.wait_for_function("() => /LOW SAMPLE SIZE/.test(document.querySelector(\"[data-testid='rk-meta']\")?.innerText)")
+        pg.wait_for_function("() => /low sample size/i.test(document.querySelector(\"[data-testid='rk-meta']\")?.innerText)")
         self.assertIn("NOT VALIDATED", self.tid(pg, "rk-label").inner_text())
         self.assertIn("2 trial(s)", self.tid(pg, "rk-meta").inner_text())
         ema = strategies["ema_crossover"]
         self.tid(pg, f"sl-{ema}").check()
         self.tid(pg, "sl-save").click()
-        pg.wait_for_function(f"() => document.querySelector(\"[data-testid='sl-current']\")?.innerText.includes('{ema}')")
+        pg.wait_for_function(f"() => document.querySelector(\"[data-testid='sl-current']\")?.innerHTML.includes('{ema}')")
         self.assertIn("implies no validation", self.tid(pg, "rs-shortlist").inner_text())
         detail = _get(f"{self.base}/api/research/searches/{sid}")
         self.assertEqual(detail["shortlist"]["strategy_ids"], [ema])
@@ -600,15 +601,15 @@ class TestBrowserFlow(unittest.TestCase):
                                                                                    body=json.dumps(ranking)))
         pg.goto(f"{self.base}/#/research/{sid}")
         self.tid(pg, "rs-search-page").wait_for()
-        cur = self.tid(pg, "rs-cells").inner_text()
-        hist = self.tid(pg, "rs-historical-cells").inner_text()
+        cur = self.tid(pg, "rs-cells").text_content()                        # ids under Technical details
+        hist = self.tid(pg, "rs-historical-cells").text_content()
         self.assertIn("STR_111111111111", cur)
         self.assertIn("no cost profile", cur)                                 # ineligible stays visible
         self.assertNotIn("STR_333333333333", cur)
         self.assertIn("STR_333333333333", hist)
         self.assertIn("not counted", self.tid(pg, "rs-historical").inner_text())
         self.tid(pg, "rk-table").wait_for()
-        self.assertNotIn("STR_333333333333", self.tid(pg, "rk-table").inner_text())
+        self.assertNotIn("STR_333333333333", self.tid(pg, "rk-table").text_content())
         self.assertEqual(self._unexpected_errors(), [])
 
 

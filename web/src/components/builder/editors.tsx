@@ -4,6 +4,7 @@ import { conditionKind, newComparison, newGroup, omit, operandKind } from "../..
 import type { OperandKind } from "../../dsl/edit";
 import type { Condition, FeatureOperand, LocalSession, Operand, ParamDecl } from "../../dsl/types";
 import { isRef } from "../../dsl/types";
+import { facetLabel, humanize, valueLabel } from "../../app/labels";
 import { Button, NumberInput, Select, TextInput } from "../ui";
 
 /** What every editor needs to know about the draft (read-only). */
@@ -21,7 +22,13 @@ export function useBuilder(): BuilderCtx {
 }
 
 const OP_LABEL: Record<string, string> = { crosses_above: "crosses above", crosses_below: "crosses below" };
-export const opLabel = (op: string) => OP_LABEL[op] ?? op;
+export const opLabel = (op: string) => OP_LABEL[op] ?? (/^[a-z_]+$/.test(op) ? humanize(op).toLowerCase() : op);
+/** Select options whose visible text is in words while the stored value stays as is. */
+export const wordOptions = (values: string[], label: (v: string) => string = humanize) => values.map((v) => ({ value: v, label: label(v) }));
+/** Names of strategy parameters as select options ("stop_atr" shown as "Stop ATR"). */
+const paramOptions = (names: string[]) => wordOptions(names);
+/** An IANA time zone for display ("America/New_York" -> "New York"). */
+export const zoneLabel = (tz: string) => (tz.split("/").pop() ?? tz).replace(/_/g, " ");
 
 export function paramsOfType(params: Record<string, ParamDecl>, types: string[]): string[] {
   return Object.entries(params).filter(([, d]) => types.includes(d.type)).map(([n]) => n);
@@ -49,11 +56,11 @@ export function ValueOrParam({ value, onChange, kind, choices, paramTypes, testI
           if (e.target.value === "param" && usable.length) onChange(`$${usable[0]}`);
           if (e.target.value === "fixed") onChange(undefined);
         }}>
-        <option value="fixed">fixed</option>
-        <option value="param" disabled={!usable.length}>{usable.length ? "$ parameter" : "$ (no matching parameter)"}</option>
+        <option value="fixed">fixed value</option>
+        <option value="param" disabled={!usable.length}>{usable.length ? "from a parameter" : "from a parameter (none matching)"}</option>
       </select>
       {byParam ? (
-        <Select value={String(value).slice(1)} onChange={(n) => onChange(`$${n}`)} options={usable} testId={testId} ariaLabel={ariaLabel} />
+        <Select value={String(value).slice(1)} onChange={(n) => onChange(`$${n}`)} options={paramOptions(usable)} testId={testId} ariaLabel={ariaLabel} />
       ) : kind === "select" ? (
         <Select value={value as string} onChange={onChange} options={choices ?? []} testId={testId} ariaLabel={ariaLabel} placeholder={placeholder ?? "choose…"} />
       ) : kind === "text" ? (
@@ -68,14 +75,14 @@ export function ValueOrParam({ value, onChange, kind, choices, paramTypes, testI
 // --------------------------------------------------------------------------- sessions / timeframes
 export function sessionChoices(ctx: BuilderCtx): { value: string; label: string }[] {
   const configured = Object.values(ctx.options.sessions).map((s) => ({
-    value: s.name, label: `${s.name} (${s.start}–${s.end} ${s.timezone.split("/").pop()})` }));
-  const local = Object.entries(ctx.localSessions).map(([n, s]) => ({ value: n, label: `${n} (strategy-local ${s.start}–${s.end})` }));
+    value: s.name, label: `${facetLabel("session", s.name)} (${s.start}–${s.end} ${zoneLabel(s.timezone)})` }));
+  const local = Object.entries(ctx.localSessions).map(([n, s]) => ({ value: n, label: `${humanize(n)} (this strategy's own window ${s.start}–${s.end})` }));
   return [...local, ...configured];
 }
 
 export function htfChoices(ctx: BuilderCtx): { value: string; label: string }[] {
   const tfs = ctx.options.htf_options[ctx.timeframe] ?? [];
-  return tfs.filter((t) => t !== ctx.timeframe).map((t) => ({ value: t, label: t }));
+  return tfs.filter((t) => t !== ctx.timeframe).map((t) => ({ value: t, label: facetLabel("timeframe", t) }));
 }
 
 // --------------------------------------------------------------------------- operands
@@ -115,11 +122,11 @@ export function OperandEditor({ value, onChange, testId, depth = 0 }: {
         <NumberInput value={typeof value === "number" ? value : 0} onChange={(v) => onChange(v ?? 0)} ariaLabel="constant" testId={`${testId}-const`} />
       )}
       {kind === "param" && (
-        <Select value={String(value).slice(1)} onChange={(n) => onChange(`$${n}`)} options={numParams} ariaLabel="parameter" testId={`${testId}-param`} />
+        <Select value={String(value).slice(1)} onChange={(n) => onChange(`$${n}`)} options={paramOptions(numParams)} ariaLabel="parameter" testId={`${testId}-param`} />
       )}
       {kind === "bar" && typeof value === "object" && value && "bar" in value && (
         <span className="inline">
-          <Select value={value.bar} onChange={(b) => onChange({ ...value, bar: b })} options={ctx.options.bar_fields} ariaLabel="bar field" testId={`${testId}-bar`} />
+          <Select value={value.bar} onChange={(b) => onChange({ ...value, bar: b })} options={wordOptions(ctx.options.bar_fields)} ariaLabel="bar field" testId={`${testId}-bar`} />
           <LagEditor value={value.lag} onChange={(lag) => onChange(lag === undefined ? omit(value, "lag") : { ...value, lag })} testId={`${testId}-lag`} />
         </span>
       )}
@@ -142,11 +149,14 @@ export function OperandEditor({ value, onChange, testId, depth = 0 }: {
 function LagEditor({ value, onChange, testId }: { value: unknown; onChange: (v: number | string | undefined) => void; testId: string }) {
   return (
     <span className="lag" title="bars back on the strategy timeframe (0 = current bar)">
-      <span className="muted small">lag</span>
+      <span className="muted small">bars back</span>
       <ValueOrParam value={value} onChange={(v) => onChange(v === 0 ? undefined : (v as number | string | undefined))} kind="integer" ariaLabel="lag" testId={testId} />
     </span>
   );
 }
+
+/** A feature parameter's default for display (session defaults as session names). */
+const defaultLabel = (d: unknown, session = false) => (session && typeof d === "string" ? facetLabel("session", d) : valueLabel(d));
 
 export function featureInfo(options: BuilderOptions, id: string): FeatureInfo | undefined {
   return options.features.find((f) => f.id === id);
@@ -175,12 +185,12 @@ export function FeatureOperandEditor({ value, onChange, testId }: { value: Featu
             onChange({ feature: e.target.value, output: f?.outputs[0]?.name });
           }}>
           {[...byCat.entries()].map(([cat, fs]) => (
-            <optgroup key={cat} label={cat}>{fs.map((f) => <option key={f.id} value={f.id}>{f.id}</option>)}</optgroup>
+            <optgroup key={cat} label={humanize(cat)}>{fs.map((f) => <option key={f.id} value={f.id}>{humanize(f.id)}</option>)}</optgroup>
           ))}
         </select>
         <span className="muted">.</span>
         <Select value={value.output} ariaLabel="feature output" testId={`${testId}-output`}
-          onChange={(o) => onChange({ ...value, output: o })} options={(info?.outputs ?? []).map((o) => o.name)} />
+          onChange={(o) => onChange({ ...value, output: o })} options={wordOptions((info?.outputs ?? []).map((o) => o.name))} />
       </div>
       {info && (
         <div className="feature-params">
@@ -189,43 +199,44 @@ export function FeatureOperandEditor({ value, onChange, testId }: { value: Featu
             const v = params[p.name];
             return (
               <label key={p.name} className="fp" title={p.doc}>
-                <span className="fp-name">{p.name}</span>
+                <span className="fp-name">{humanize(p.name)}</span>
                 {isSession ? (
                   <ValueOrParam value={v} onChange={(x) => setParam(p.name, x)} kind="select" ariaLabel={p.name}
                     choices={sessionChoices(ctx)}
-                    placeholder={`default ${String(p.default)}`} testId={`${testId}-p-${p.name}`} />
+                    placeholder={`default ${defaultLabel(p.default, true)}`} testId={`${testId}-p-${p.name}`} />
                 ) : p.choices ? (
                   <ValueOrParam value={v} onChange={(x) => setParam(p.name, x)} kind="select" ariaLabel={p.name}
-                    choices={p.choices.map((c) => ({ value: String(c), label: String(c) }))} placeholder={`default ${String(p.default)}`}
+                    choices={p.choices.map((c) => ({ value: String(c), label: valueLabel(c) }))} placeholder={`default ${defaultLabel(p.default)}`}
                     testId={`${testId}-p-${p.name}`} />
                 ) : p.type === "int" || p.type === "float" ? (
                   <ValueOrParam value={v} onChange={(x) => setParam(p.name, x)} kind={p.type === "int" ? "integer" : "number"}
                     ariaLabel={p.name} testId={`${testId}-p-${p.name}`} />
                 ) : (
                   <ValueOrParam value={v} onChange={(x) => setParam(p.name, x)} kind="text" ariaLabel={p.name}
-                    placeholder={`default ${String(p.default)}`} testId={`${testId}-p-${p.name}`} />
+                    placeholder={`default ${defaultLabel(p.default)}`} testId={`${testId}-p-${p.name}`} />
                 )}
-                {v === undefined && <span className="muted small">default {String(p.default)}</span>}
+                {v === undefined && <span className="muted small">default {defaultLabel(p.default, isSession)}</span>}
               </label>
             );
           })}
           <label className="fp" title="Higher-timeframe values use the last completed higher-timeframe bar.">
-            <span className="fp-name">timeframe</span>
+            <span className="fp-name">Timeframe</span>
             <select className="input" aria-label="feature timeframe" data-testid={`${testId}-tf`}
               value={value.timeframe ? String(value.timeframe) : ""}
               onChange={(e: { target: HTMLSelectElement }) =>
                 onChange(e.target.value ? { ...value, timeframe: e.target.value } : omit(value, "timeframe"))}>
-              <option value="">strategy timeframe ({ctx.timeframe})</option>
+              <option value="">strategy timeframe ({facetLabel("timeframe", ctx.timeframe)})</option>
               {htf.map((h) => <option key={h.value} value={h.value}>{h.label} (higher)</option>)}
-              {tfParams.map((n) => <option key={n} value={`$${n}`}>${n}</option>)}
+              {tfParams.map((n) => <option key={n} value={`$${n}`}>{`from parameter: ${humanize(n)}`}</option>)}
             </select>
           </label>
           <LagEditor value={value.lag} onChange={(lag) => onChange(lag === undefined ? omit(value, "lag") : { ...value, lag })} testId={`${testId}-lag`} />
         </div>
       )}
       <div className="feature-doc small muted">
-        {info?.summary} {out ? <>· <b>{out.name}</b>: {out.doc}</> : null}
-        {value.timeframe ? <> · Higher-timeframe values use the last <b>completed</b> {String(value.timeframe)} bar.</> : null}
+        {info?.summary} {out ? <>· <b>{humanize(out.name)}</b>: {out.doc}</> : null}
+        {value.timeframe ? <> · Higher-timeframe values use the last <b>completed</b> {isRef(value.timeframe)
+          ? `bar of the timeframe set by the parameter ${humanize(String(value.timeframe).slice(1))}` : `${facetLabel("timeframe", value.timeframe)} bar`}.</> : null}
       </div>
     </div>
   );
@@ -238,14 +249,14 @@ function EnabledControl({ node, onChange, testId }: { node: Condition; onChange:
   const cur = node.enabled === undefined || node.enabled === true ? "on" : node.enabled === false ? "off" : String(node.enabled);
   return (
     <select className="input input-sm" aria-label="condition enabled" value={cur} data-testid={`${testId}-enabled`}
-      title="Optional conditions can be switched by a boolean parameter (and varied in Mode A)"
+      title="Optional conditions can be switched by an on/off parameter (and varied in controlled variations)"
       onChange={(e: { target: HTMLSelectElement }) => {
         const v = e.target.value;
         onChange(v === "on" ? omit(node, "enabled") : { ...node, enabled: v === "off" ? false : v } as Condition);
       }}>
       <option value="on">always on</option>
       <option value="off">disabled</option>
-      {flags.map((f) => <option key={f} value={`$${f}`}>when ${f}</option>)}
+      {flags.map((f) => <option key={f} value={`$${f}`}>{`when ${humanize(f)} is on`}</option>)}
     </select>
   );
 }
@@ -272,8 +283,8 @@ export function ConditionEditor({ node, onChange, onRemove, testId, depth = 0 }:
           <select className="input input-sm group-kind" aria-label="group type" value={kind} data-testid={`${testId}-kind`}
             onChange={(e: { target: HTMLSelectElement }) =>
               onChange({ ...omit(node, "all", "any"), [e.target.value]: items } as Condition)}>
-            <option value="all">ALL of (AND)</option>
-            <option value="any">ANY of (OR)</option>
+            <option value="all">All of these (and)</option>
+            <option value="any">Any of these (or)</option>
           </select>
           {meta}
           <span className="spacer" />

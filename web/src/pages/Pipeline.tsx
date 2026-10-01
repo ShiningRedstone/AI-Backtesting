@@ -2,8 +2,9 @@ import { useState } from "react";
 import type { PipelineBoard } from "../api/types";
 import { href } from "../app/router";
 import { useApi } from "../app/context";
+import { familyLabel, strategyLabel } from "../app/labels";
 import { PipelineStrip } from "../components/research";
-import { Badge, Card, Empty, ErrorPanel, Loading, Mono, TableWrap } from "../components/ui";
+import { Badge, Card, Empty, ErrorPanel, Loading, Mono, TableWrap, TechDetails } from "../components/ui";
 
 const TONE: Record<string, "ok" | "warn" | "info" | "neutral"> = { holdout_criteria_met: "ok", holdout_criteria_not_met: "warn",
   holdout_granted: "info", shortlisted: "info", oos_tested: "info" };
@@ -14,7 +15,7 @@ export function PipelinePage() {
   return (
     <div className="page" data-testid="pipeline-page">
       <header className="page-head"><div><div className="eyebrow">Research</div><h1>Candidate pipeline</h1>
-        <div className="subtitle small">Hypothesis → proposal validation → numerical testing → controls → OOS → shortlist → holdout authorization →
+        <div className="subtitle small">Hypothesis → proposal validation → numerical testing → controls → out-of-sample → shortlist → holdout authorization →
           holdout result → paper evaluation → human review. Every state is derived by the backend from stored facts; the UI infers nothing.</div></div></header>
       {error ? <ErrorPanel error={error} /> : !data ? <Loading label="Loading the pipeline…" /> : <>
         <div className="pipeline" data-testid="pipeline-board">
@@ -33,12 +34,12 @@ export function PipelinePage() {
             <thead><tr><th>Strategy</th><th>Family</th><th>State</th><th>Stages</th></tr></thead>
             <tbody>{data.candidates.map((c) => [
               <tr key={c.strategy_id} className="clickable" onClick={() => setOpen(open === c.strategy_id ? null : c.strategy_id)}>
-                <td><a href={href(`/explorer?open=${c.strategy_id}`)} onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>{c.name ?? c.strategy_id}</a>
-                  <div className="small muted mono">{c.strategy_id}</div></td>
-                <td className="small"><Mono>{c.family_id}</Mono></td>
+                <td><a href={href(`/explorer?open=${c.strategy_id}`)} onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()} title={c.strategy_id}>{c.name ? strategyLabel(c.name) : "Unnamed strategy"}</a></td>
+                <td className="small" title={c.family_id ?? undefined}>{familyLabel(c.family_id)}</td>
                 <td><Badge tone={TONE[c.state] ?? "neutral"}>{c.state_label}</Badge></td>
                 <td className="small">{c.stages.filter((s) => s.state === "done").length} of {c.stages.length} done {open === c.strategy_id ? "▲" : "▼"}</td></tr>,
-              open === c.strategy_id && <tr key={c.strategy_id + "-d"}><td colSpan={4}><PipelineStrip stages={c.stages} testId={`pipe-${c.strategy_id}`} /></td></tr>])}
+              open === c.strategy_id && <tr key={c.strategy_id + "-d"}><td colSpan={4}><PipelineStrip stages={c.stages} testId={`pipe-${c.strategy_id}`} />
+                <TechDetails rows={[["Strategy id", <Mono>{c.strategy_id}</Mono>], ["Family id", c.family_id ? <Mono>{c.family_id}</Mono> : null], ["State code", <Mono>{c.state}</Mono>]]} /></td></tr>])}
             </tbody></table></TableWrap>}
         </Card>
       </>}

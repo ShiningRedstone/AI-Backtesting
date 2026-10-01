@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import type { CompareRow, ControlReport, DatasetRow, Readiness, RunCurve, RunSummary, StrategyResearch, ValidationReport } from "../../api/types";
 import { research } from "../../api/research";
 import { go, href } from "../../app/router";
-import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, NumberInput, Select, TableWrap, TextInput, fmt, shortTime } from "../ui";
-import { METHOD_LABEL, SYNTHETIC_NOTICE, changesText } from "./index";
+import { datasetLabel, facetLabel, humanize, metricLabel, plainProse, statusLabel, strategyLabel, valueLabel } from "../../app/labels";
+import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, NumberInput, Select, TableWrap, TechDetails, TextInput, fmt, shortTime } from "../ui";
+import { SYNTHETIC_NOTICE, changesText, methodLabel, plainValue, qualityLabel } from "./index";
 
 /** Research-scope vocabulary shared by every Strategy Lab view: in-sample results never look like
  *  out-of-sample ones, controls are never runs, prop outcomes are never strategy results. */
@@ -14,7 +16,7 @@ export const SCOPE: Record<string, { label: string; tone: "warn" | "info" | "ok"
   WALK_FORWARD: { label: "Walk-forward test window", tone: "info", note: "Fixed definition on consecutive held-out windows." },
 };
 export const ScopeBadge = ({ status }: { status: string }) => {
-  const s = SCOPE[status] ?? { label: status, tone: "neutral" as const, note: "" };
+  const s = SCOPE[status] ?? { label: statusLabel(status), tone: "neutral" as const, note: "" };
   return <Badge tone={s.tone} title={s.note}>{s.label}</Badge>;
 };
 const num = (v: unknown, d = 3) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : fmt(v));
@@ -44,7 +46,7 @@ export function EquityChart({ runId }: { runId: string }) {
         <text x={2} y={y(hi) + 4} fontSize={10} fill="var(--muted)">{hi.toFixed(1)}R</text>
         <text x={2} y={y(lo)} fontSize={10} fill="var(--muted)">{lo.toFixed(1)}R</text>
         <path d={area} fill="var(--error-weak)" stroke="var(--error)" strokeWidth={0.8} />
-        <text x={2} y={H + 20} fontSize={10} fill="var(--muted)">DD</text>
+        <text x={2} y={H + 20} fontSize={10} fill="var(--muted)">Drawdown</text>
         <text x={2} y={H + DH + 10} fontSize={10} fill="var(--muted)">{mdd.toFixed(1)}R</text>
       </svg>
       <figcaption className="muted small">Cumulative net R by trade exit (top) and drawdown from the running peak (bottom), from the stored
@@ -77,7 +79,8 @@ export function DatasetPicker({ strategy, multi, value, onChange, testId = "lab-
     if (!d.runnable) return;
     onChange(multi ? (on ? [...value.filter((x) => x !== d.dataset_id), d.dataset_id] : value.filter((x) => x !== d.dataset_id)) : [d.dataset_id]);
   };
-  const opt = (k: keyof DatasetRow, label: string) => [{ value: "", label: `All ${label}` }, ...uniq(k).map((v) => ({ value: v, label: v }))];
+  const opt = (k: keyof DatasetRow, label: string) => [{ value: "", label: `All ${label}` },
+    ...uniq(k).map((v) => ({ value: v, label: k === "timeframe" ? facetLabel("timeframe", v) : valueLabel(v) }))];
   return (
     <div data-testid={testId}>
       <div className="filters">
@@ -86,23 +89,23 @@ export function DatasetPicker({ strategy, multi, value, onChange, testId = "lab-
         <Select value={f.timeframe} onChange={(v) => setF({ ...f, timeframe: v })} options={opt("timeframe", "timeframes")} ariaLabel="timeframe filter" />
         <Checkbox checked={f.eligibleOnly} onChange={(v) => setF({ ...f, eligibleOnly: v })} label="Eligible only" />
       </div>
-      <p className="muted small">Strategy timeframe <b>{ready.strategy_timeframe ?? "?"}</b>. A dataset is eligible when it passed validation, matches the
+      <p className="muted small">Strategy timeframe <b>{ready.strategy_timeframe ? facetLabel("timeframe", ready.strategy_timeframe) : "?"}</b>. A dataset is eligible when it passed validation, matches the
         timeframe and has a configured cost profile. Ineligible datasets cannot be selected.</p>
       <PreferredNotice ready={ready} testId={`${testId}-preferred`} />
       {!rows.length ? <Empty>No datasets match. Import one on the <a href={href("/datasets")}>Datasets</a> page.</Empty> : (
         <TableWrap><table>
-          <thead><tr><th /><th>Dataset</th><th>Provider</th><th>Instrument</th><th>TF</th><th>Range</th><th>Validation</th><th>Costs</th><th>Eligibility</th></tr></thead>
+          <thead><tr><th /><th>Dataset</th><th>Provider</th><th>Instrument</th><th>Timeframe</th><th>Range</th><th>Validation</th><th>Costs</th><th>Eligibility</th></tr></thead>
           <tbody>{rows.map((d) => (
             <tr key={d.dataset_id} className={d.runnable ? "" : "disabled-row"} data-testid={`${testId}-${d.dataset_id}`}>
-              <td><input type={multi ? "checkbox" : "radio"} name={testId} disabled={!d.runnable} aria-label={`select ${d.dataset_name ?? d.dataset_id}`}
+              <td><input type={multi ? "checkbox" : "radio"} name={testId} disabled={!d.runnable} aria-label={`select ${datasetLabel(d.dataset_id)}`}
                 checked={value.includes(d.dataset_id)} onChange={(e: { target: HTMLInputElement }) => pick(d, e.target.checked)} /></td>
-              <td>{d.dataset_name}<div className="small"><Mono>{d.dataset_id}</Mono></div>{d.synthetic && <Badge tone="demo">synthetic</Badge>}
+              <td title={d.dataset_id}>{datasetLabel(d.dataset_id)} {d.synthetic && <Badge tone="demo">synthetic</Badge>}
                 {d.preferred && <> <Badge tone="info">preferred</Badge></>}{d.identity?.identity_status === "provisional" && <> <Badge tone="warn">provisional identity</Badge></>}</td>
-              <td>{d.provider}</td><td>{d.instrument}</td><td>{d.timeframe}</td>
+              <td>{valueLabel(d.provider)}</td><td>{plainProse(d.instrument)}</td><td>{facetLabel("timeframe", d.timeframe)}</td>
               <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td>
-              <td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>
-              <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"} title={d.cost.reason}>{d.cost.status}</Badge>
-                {d.cost.profile && <div className="small muted">{d.cost.profile}</div>}</td>
+              <td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{qualityLabel(d.quality_status)}</Badge></td>
+              <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"} title={d.cost.reason}>{valueLabel(d.cost.status)}</Badge>
+                {d.cost.profile && <div className="small muted" title={d.cost.profile}>{humanize(d.cost.profile)}</div>}</td>
               <td className="small">{d.runnable ? <Badge tone="ok">eligible</Badge> : <><Badge tone="error">not eligible</Badge>{d.reasons.map((r) => <div key={r}>{r}</div>)}</>}
                 {d.limitations?.length ? <details><summary>caveats ({d.limitations.length})</summary>{d.limitations.map((l) => <div key={l}>{l}</div>)}</details> : null}</td>
             </tr>))}
@@ -117,9 +120,9 @@ export function PreferredNotice({ ready, testId }: { ready: Readiness; testId?: 
   if (!ready.preferred_dataset_id) return <p className="muted small" data-testid={testId}>No Preferred Research Dataset is set (Datasets page).</p>;
   if (!pref) return null;
   return pref.runnable
-    ? <p className="muted small" data-testid={testId}>Preselected: the workspace's Preferred Research Dataset <Mono>{pref.dataset_id}</Mono>
-        ({pref.provider} · {pref.instrument} · {pref.timeframe}). A default for new research only; stored runs are unchanged.</p>
-    : <Banner tone="warn" testId={testId}>The Preferred Research Dataset <Mono>{pref.dataset_id}</Mono> is not eligible here and was not
+    ? <p className="muted small" data-testid={testId}>Preselected: the workspace's Preferred Research Dataset <b title={pref.dataset_id}>{datasetLabel(pref.dataset_id)}</b>
+        ({valueLabel(pref.provider)} · {plainProse(pref.instrument)} · {facetLabel("timeframe", pref.timeframe)}). A default for new research only; stored runs are unchanged.</p>
+    : <Banner tone="warn" testId={testId}>The Preferred Research Dataset <b title={pref.dataset_id}>{datasetLabel(pref.dataset_id)}</b> is not eligible here and was not
         preselected: {pref.reasons.join("; ")}.</Banner>;
 }
 
@@ -128,19 +131,22 @@ export function ProvenanceCard({ sr }: { sr: StrategyResearch }) {
   const L = sr.lineage, S = sr.strategy;
   return (
     <Card title="Version and provenance" testId="lab-provenance">
-      <KeyValues rows={[["Strategy ID", <Mono>{S.strategy_id}</Mono>], ["Definition hash", <Mono>{S.definition_hash}</Mono>],
-        ["Logic hash", <Mono>{S.logic_hash}</Mono>],
-        ["Created from", <>{METHOD_LABEL[L.generation_method ?? ""] ?? L.generation_method ?? "—"}{L.generation_timestamp ? ` · ${shortTime(L.generation_timestamp)}` : ""}</>],
-        ["Parent", L.parent_strategy_id ? <><a href={href(`/strategies/${L.parent_strategy_id}`)}><Mono>{L.parent_strategy_id}</Mono></a>
-          <div className="small muted">parent definition hash <Mono title={String(L.parent_definition_hash ?? "") || undefined}>{L.parent_definition_hash?.slice(0, 16) ?? "—"}</Mono></div></> : <span className="muted">root (no parent)</span>],
+      <KeyValues rows={[["Strategy", strategyLabel(S.name)], ["Timeframe", facetLabel("timeframe", S.timeframe)],
+        ["Created from", <>{L.generation_method ? methodLabel(L.generation_method) : "—"}{L.generation_timestamp ? ` · ${shortTime(L.generation_timestamp)}` : ""}</>],
+        ["Parent", L.parent_strategy_id ? <a href={href(`/strategies/${L.parent_strategy_id}`)} title={L.parent_strategy_id}>Open the parent version</a>
+          : <span className="muted">root (no parent)</span>],
         ["Changes vs parent", changesText(L.changes) || "—"],
-        ["Variation batch", L.generation_batch ? <a href={href(`/variations/${L.generation_batch.batch_id}`)}><Mono>{L.generation_batch.batch_id}</Mono></a> : "—"],
+        ["Variation batch", L.generation_batch ? <a href={href(`/variations/${L.generation_batch.batch_id}`)} title={L.generation_batch.batch_id}>Open the variation batch</a> : "—"],
         ["Ancestry depth", String(L.ancestry.length)], ["Children", String(L.children.length)],
-        ["Parameters", Object.keys(S.parameters).length ? Object.entries(S.parameters).map(([k, v]) => `${k}=${fmt(v)}`).join(", ") : "none declared"],
+        ["Parameters", Object.keys(S.parameters).length ? Object.entries(S.parameters).map(([k, v]) => `${humanize(k)} ${plainValue(v)}`).join(", ") : "none declared"],
         ["Research state", <>{sr.validation_state.run_statuses.length ? sr.validation_state.run_statuses.map((s) => <ScopeBadge key={s} status={s} />) : <span className="muted">no stored runs</span>}
           {" "}<Badge tone="neutral">not validated</Badge></>]]} />
       <p className="muted small">{sr.validation_state.note} Stored versions are immutable: edits always create a new version with lineage.</p>
-      <details><summary>Machine-readable record (what an AI layer receives)</summary><pre className="code" data-testid="lab-provenance-json">{JSON.stringify(sr, null, 2)}</pre></details>
+      <TechDetails rows={[["Strategy ID", <Mono>{S.strategy_id}</Mono>], ["Definition hash", <Mono>{S.definition_hash}</Mono>],
+        ["Logic hash", <Mono>{S.logic_hash}</Mono>], ["Parent strategy ID", L.parent_strategy_id ? <Mono>{L.parent_strategy_id}</Mono> : null],
+        ["Parent definition hash", L.parent_definition_hash ? <Mono>{L.parent_definition_hash}</Mono> : null],
+        ["Variation batch ID", L.generation_batch ? <Mono>{L.generation_batch.batch_id}</Mono> : null]]} />
+      <TechDetails summary="Machine-readable record (what an AI layer receives)"><pre className="code" data-testid="lab-provenance-json">{JSON.stringify(sr, null, 2)}</pre></TechDetails>
     </Card>
   );
 }
@@ -149,13 +155,14 @@ export function RunsTable({ runs, testId = "lab-runs" }: { runs: RunSummary[]; t
   if (!runs.length) return <Empty>No stored runs for this version yet. Run a backtest or a validation.</Empty>;
   return (
     <TableWrap testId={testId}><table>
-      <thead><tr><th>Run</th><th>Scope</th><th>Dataset</th><th>Provider / TF</th><th>Costs</th><th>Trades</th><th>Net R</th><th>Expectancy</th><th>PF</th><th>Max DD R</th><th>Prop sims</th><th /></tr></thead>
+      <thead><tr><th>Run</th><th>Scope</th><th>Dataset</th><th>Provider / timeframe</th><th>Costs</th><th>Trades</th><th>{metricLabel("net_r")}</th>
+        <th>{metricLabel("expectancy_r")}</th><th>Profit factor</th><th>{metricLabel("max_drawdown_r")}</th><th>Prop simulations</th><th /></tr></thead>
       <tbody>{runs.map((r) => (
         <tr key={r.run_id}>
-          <td><a href={href(`/results/${r.run_id}`)}><Mono>{r.run_id}</Mono></a><div className="small muted">{shortTime(r.created_at)}</div></td>
+          <td><a href={href(`/results/${r.run_id}`)} title={r.run_id}>Backtest</a><div className="small muted">{shortTime(r.created_at)}</div></td>
           <td><ScopeBadge status={r.status} />{r.synthetic && <Badge tone="demo">synthetic</Badge>}</td>
-          <td className="small">{r.dataset_name ?? r.dataset_id}{r.parent_dataset_id && <div className="muted">window of {r.parent_dataset_id}</div>}</td>
-          <td className="small">{r.provider} · {r.timeframe}</td><td className="small" title={r.cost_basis ?? ""}>{r.cost_status}{r.cost_scenario ? ` · ${r.cost_scenario}` : ""}</td>
+          <td className="small" title={r.dataset_id}>{datasetLabel(r.dataset_id)}{r.parent_dataset_id && <div className="muted" title={r.parent_dataset_id}>window of {datasetLabel(r.parent_dataset_id)}</div>}</td>
+          <td className="small">{valueLabel(r.provider)} · {facetLabel("timeframe", r.timeframe)}</td><td className="small" title={r.cost_basis ?? ""}>{valueLabel(r.cost_status)}{r.cost_scenario ? ` · ${humanize(r.cost_scenario)}` : ""}</td>
           <td>{fmt(r.metrics.trade_count)}</td><td className="mono">{num(r.metrics.net_r, 2)}</td><td className="mono">{num(r.metrics.expectancy_r)}</td>
           <td className="mono">{num(r.metrics.profit_factor)}</td><td className="mono">{num(r.metrics.max_drawdown_r, 2)}</td><td>{r.prop_simulations}</td>
           <td className="row-actions"><a href={href(`/results/${r.run_id}`)}>Open</a><a href={href(`/prop?run=${r.run_id}`)}>Prop simulation</a></td>
@@ -182,11 +189,12 @@ export function BatchResearch({ strategyId, batches, preselect }: { strategyId: 
   return (
     <Card title="Run this version and a variation batch on datasets" testId="lab-batch">
       <p className="muted small">Uses the existing background search: one cell per strategy × dataset, datasets never merged, results stored as
-        normal IN_SAMPLE runs with progress and cancellation on the Research page. Trials are counted honestly per search.</p>
+        normal in-sample runs with progress and cancellation on the Research page. Trials are counted honestly per search.</p>
       <Field label="Variation batch">
         <Select value={batch} onChange={setBatch} testId="lab-batch-select" options={[{ value: "", label: "This version only (no batch)" },
-          ...batches.map((b) => ({ value: b, label: b }))]} />
+          ...batches.map((b, i) => ({ value: b, label: `Variation batch ${i + 1}${i === batches.length - 1 ? " (latest)" : ""}` }))]} />
       </Field>
+      {batches.length > 0 && <TechDetails rows={batches.map((b, i) => [`Variation batch ${i + 1}`, <Mono>{b}</Mono>] as [string, ReactNode])} />}
       {!batches.length && <p className="muted small">No variation batch from this version yet (Generate Variations tab).</p>}
       <DatasetPicker strategy={strategyId} multi value={ds} onChange={setDs} testId="lab-batch-ds" />
       <div className="actions"><Button kind="primary" onClick={start} busy={busy} busyLabel="Starting…" disabled={!ds.length} testId="lab-batch-start">
@@ -227,8 +235,8 @@ export function ValidationPanel({ strategyId, initialDataset }: { strategyId: st
   const needsSplit = kind === "oos" || (kind === "control" && oosCtl);
   return (
     <div data-testid="lab-validate">
-      <Banner tone="info">Validation runs this <b>fixed</b> version unchanged. OOS and walk-forward windows are recorded as runs with status
-        OUT_OF_SAMPLE / WALK_FORWARD (their train windows stay IN_SAMPLE). The random-entry control is a conditional null; its realizations are
+      <Banner tone="info">Validation runs this <b>fixed</b> version unchanged. Out-of-sample and walk-forward windows are recorded as runs with status
+        Out-of-sample / Walk-forward (their training windows stay In-sample). The random-entry control is a conditional null; its realizations are
         never stored as runs. Nothing here promotes or approves a strategy.</Banner>
       <Card title="1 · Dataset"><DatasetPicker strategy={strategyId} value={ds} onChange={setDs} testId="lab-val-ds" /></Card>
       <Card title="2 · Method">
@@ -238,7 +246,7 @@ export function ValidationPanel({ strategyId, initialDataset }: { strategyId: st
               {k === "oos" ? "Out-of-sample split" : k === "walkforward" ? "Walk-forward" : "Random-entry control"}</button>))}
         </div>
         <div className="grid3">
-          {needsSplit && <Field label="OOS split date (first out-of-sample day, UTC)" hint="Train = before this date; OOS = from it to the dataset end.">
+          {needsSplit && <Field label="Out-of-sample split date (first out-of-sample day, UTC)" hint="Training = before this date; out-of-sample = from it to the dataset end.">
             <TextInput value={split} onChange={setSplit} placeholder="YYYY-MM-DD" testId="lab-val-split" /></Field>}
           {kind === "walkforward" && <>
             <Field label="Train months"><NumberInput value={trainM} integer onChange={setTrainM} testId="lab-val-train" /></Field>
@@ -248,7 +256,7 @@ export function ValidationPanel({ strategyId, initialDataset }: { strategyId: st
           {kind === "control" && <>
             <Field label="Realizations"><NumberInput value={nCtl} integer onChange={setNCtl} testId="lab-val-n" /></Field>
             <Field label="Base seed"><NumberInput value={seed} integer onChange={setSeed} /></Field>
-            <Checkbox checked={oosCtl} onChange={setOosCtl} label="Restrict to the OOS window (needs the split date)" /></>}
+            <Checkbox checked={oosCtl} onChange={setOosCtl} label="Restrict to the out-of-sample window (needs the split date)" /></>}
         </div>
         <Button kind="primary" onClick={run} busy={busy} busyLabel="Running…" testId="lab-val-run"
           disabled={!ds.length || (needsSplit && !/^\d{4}-\d{2}-\d{2}$/.test(split))}>Run</Button>
@@ -265,17 +273,22 @@ function Labels({ labels }: { labels: string[] }) {
   return <>{labels.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{l}</Banner>)}</>;
 }
 
+const ROLE_LABEL: Record<string, string> = { train: "Training window", oos: "Out-of-sample window", test: "Test window" };
+const ordinal = (p: string) => { const n = Number(p); if (!Number.isInteger(n)) return p;
+  const t = n % 100 >= 11 && n % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th"; return `${n}${t}`; };
+
 function ValidationView({ rep }: { rep: ValidationReport }) {
   const mc = rep.monte_carlo_oos?.bootstrap as Record<string, any> | undefined; // eslint-disable-line @typescript-eslint/no-explicit-any
   return (
-    <Card title={<>{rep.validation === "oos" ? "Out-of-sample evaluation" : "Walk-forward evaluation"} <Mono>{rep.validation_id}</Mono></>} testId="lab-val-result">
+    <Card title={rep.validation === "oos" ? "Out-of-sample evaluation" : "Walk-forward evaluation"} testId="lab-val-result">
       <Labels labels={rep.labels} />
       <TableWrap><table>
-        <thead><tr><th>Window</th><th>Scope</th><th>Period</th><th>Run</th><th>Trades</th><th>Net R</th><th>Expectancy</th><th>PF</th><th>Max DD R</th><th /></tr></thead>
+        <thead><tr><th>Window</th><th>Scope</th><th>Period</th><th>Run</th><th>Trades</th><th>{metricLabel("net_r")}</th><th>{metricLabel("expectancy_r")}</th>
+          <th>Profit factor</th><th>{metricLabel("max_drawdown_r")}</th><th /></tr></thead>
         <tbody>{rep.windows.map((w, i) => (
-          <tr key={i}><td>{w.window.role}{w.segment !== undefined ? ` ${w.segment}` : ""}{w.partial ? " (partial)" : ""}</td><td><ScopeBadge status={w.status} /></td>
+          <tr key={i}><td>{ROLE_LABEL[w.window.role] ?? humanize(w.window.role)}{w.segment !== undefined ? ` ${w.segment}` : ""}{w.partial ? " (partial)" : ""}</td><td><ScopeBadge status={w.status} /></td>
             <td className="small">{w.window.start.slice(0, 10)} → {w.window.end.slice(0, 10)}</td>
-            <td>{w.run_id ? <a href={href(`/results/${w.run_id}`)}><Mono>{w.run_id}</Mono></a> : <span className="muted">not recorded</span>}</td>
+            <td>{w.run_id ? <a href={href(`/results/${w.run_id}`)} title={w.run_id}>Open run</a> : <span className="muted">not recorded</span>}</td>
             <td>{fmt(w.metrics.trade_count)}</td><td className="mono">{num(w.metrics.net_r, 2)}</td><td className="mono">{num(w.metrics.expectancy_r)}</td>
             <td className="mono">{num(w.metrics.profit_factor)}</td><td className="mono">{num(w.metrics.max_drawdown_r, 2)}</td>
             <td>{w.run_id && w.status !== "IN_SAMPLE" && <a href={href(`/prop?run=${w.run_id}`)}>Prop simulation</a>}</td></tr>))}
@@ -283,7 +296,10 @@ function ValidationView({ rep }: { rep: ValidationReport }) {
       {rep.oos_pooled && <p className="small">Pooled walk-forward test windows: {fmt(rep.oos_pooled.trade_count)} trades, net {num(rep.oos_pooled.net_r, 2)} R,
         expectancy {num(rep.oos_pooled.expectancy_r)} R.</p>}
       {mc && <p className="small muted">Seeded bootstrap of the out-of-sample trades ({fmt(mc.n_sims)} resamples): total R percentiles
-        {" "}{Object.entries(mc.total_r_percentiles ?? {}).map(([p, v]) => `p${p} ${num(v, 2)}`).join(" · ")}. Resampling observed trades; not a market simulation.</p>}
+        {" "}{Object.entries(mc.total_r_percentiles ?? {}).map(([p, v]) => `${ordinal(p)} percentile ${num(v, 2)}`).join(" · ")}. Resampling observed trades; not a market simulation.</p>}
+      <TechDetails rows={[["Validation ID", <Mono>{rep.validation_id}</Mono>], ["Strategy ID", <Mono>{rep.strategy_id}</Mono>],
+        ["Definition hash", <Mono>{rep.definition_hash}</Mono>], ["Dataset ID", <Mono>{rep.dataset_id}</Mono>],
+        ...rep.windows.filter((w) => w.run_id).map((w, i) => [`Run ID (${ROLE_LABEL[w.window.role] ?? humanize(w.window.role)}${w.segment !== undefined ? ` ${w.segment}` : ""}, row ${i + 1})`, <Mono>{w.run_id}</Mono>] as [string, ReactNode])]} />
     </Card>
   );
 }
@@ -291,9 +307,9 @@ function ValidationView({ rep }: { rep: ValidationReport }) {
 function ControlView({ rep }: { rep: ControlReport }) {
   const keys = ["net_r", "expectancy_r", "profit_factor", "max_drawdown_r", "trade_count"];
   return (
-    <Card title={<>Random-entry control <Mono>{rep.validation_id}</Mono></>} testId="lab-ctl-result">
+    <Card title="Random-entry control" testId="lab-ctl-result">
       <Labels labels={rep.labels} />
-      <KeyValues rows={[["Scope", <ScopeBadge status={rep.sample_status} />], ["Method", rep.control_config.method],
+      <KeyValues rows={[["Scope", <ScopeBadge status={rep.sample_status} />], ["Method", humanize(rep.control_config.method)],
         ["Realizations", String(rep.control_config.n_controls)], ["Base seed", String(rep.control_config.base_seed)],
         ["Period", rep.control_config.period ? rep.control_config.period.join(" → ") : "whole dataset"],
         ["Candidate signals (pre-cooldown / final)", `${rep.candidate.pre_cooldown_signals} / ${rep.candidate.signals}`],
@@ -301,10 +317,13 @@ function ControlView({ rep }: { rep: ControlReport }) {
       <TableWrap><table>
         <thead><tr><th>Metric</th><th>Candidate</th><th>Control median</th><th>Control p5 … p95</th><th>Fraction of controls exceeding candidate</th></tr></thead>
         <tbody>{keys.map((k) => { const c = rep.comparison[k] ?? {}; const p = c.percentiles ?? {};
-          return <tr key={k}><td>{k}</td><td className="mono">{num(c.candidate)}</td><td className="mono">{num(c.median)}</td>
+          return <tr key={k}><td>{metricLabel(k)}</td><td className="mono">{num(c.candidate)}</td><td className="mono">{num(c.median)}</td>
             <td className="mono">{num(p["5"])} … {num(p["95"])}</td><td className="mono">{fmt(c.fraction_of_controls_exceeding_candidate)}</td></tr>; })}
         </tbody></table></TableWrap>
       <p className="muted small">{String(rep.comparison.note ?? "")} Descriptive ranks within a conditional null; not p-values, not evidence for or against an edge.</p>
+      <TechDetails rows={[["Validation ID", <Mono>{rep.validation_id}</Mono>], ["Strategy ID", <Mono>{rep.candidate.strategy_id}</Mono>],
+        ["Definition hash", <Mono>{rep.candidate.definition_hash}</Mono>], ["Trades hash", <Mono>{rep.candidate.trades_hash}</Mono>],
+        ["Cost profile", rep.cost_profile ? <Mono>{rep.cost_profile}</Mono> : null]]} />
     </Card>
   );
 }
@@ -315,10 +334,10 @@ export const COMPARE_COLS: Col[] = [
   { key: "trade_count", label: "Trades", get: (r) => r.metrics.trade_count, numeric: true },
   { key: "gross_r", label: "Gross R", get: (r) => r.metrics.gross_r, numeric: true },
   { key: "net_r", label: "Net R", get: (r) => r.metrics.net_r, numeric: true },
-  { key: "cost_r", label: "Cost R", get: (r) => r.metrics.cost_r, numeric: true },
-  { key: "expectancy_r", label: "Expectancy R", get: (r) => r.metrics.expectancy_r, numeric: true },
+  { key: "cost_r", label: "Costs (R)", get: (r) => r.metrics.cost_r, numeric: true },
+  { key: "expectancy_r", label: "Net R per trade", get: (r) => r.metrics.expectancy_r, numeric: true },
   { key: "profit_factor", label: "Profit factor", get: (r) => r.metrics.profit_factor, numeric: true },
-  { key: "max_drawdown_r", label: "Max DD R", get: (r) => r.metrics.max_drawdown_r, numeric: true },
+  { key: "max_drawdown_r", label: "Max drawdown (R)", get: (r) => r.metrics.max_drawdown_r, numeric: true },
   { key: "breakeven", label: "Breakeven cost ×", get: (r) => r.breakeven_cost_multiplier, numeric: true },
 ];
 
@@ -347,7 +366,7 @@ export function CompareTable({ rows, selected, onSelect }: { rows: CompareRow[];
         <Select value={scope} onChange={setScope} ariaLabel="scope filter" testId="cmp-scope" options={[{ value: "", label: "All scopes" },
           ...Object.entries(SCOPE).map(([k, v]) => ({ value: k, label: v.label }))]} />
         <Select value={dataset} onChange={setDataset} ariaLabel="dataset filter" options={[{ value: "", label: "All datasets" },
-          ...[...new Set(rows.map((r) => r.dataset_id))].map((d) => ({ value: d, label: rows.find((r) => r.dataset_id === d)?.dataset_name ?? d }))]} />
+          ...[...new Set(rows.map((r) => r.dataset_id))].map((d) => ({ value: d, label: datasetLabel(d) }))]} />
         <NumberInput value={minTrades} integer onChange={setMinTrades} ariaLabel="minimum trades" testId="cmp-min-trades" />
         <TextInput value={text} onChange={setText} placeholder="Filter strategy / run" ariaLabel="text filter" />
       </div>
@@ -355,20 +374,20 @@ export function CompareTable({ rows, selected, onSelect }: { rows: CompareRow[];
         recommendation, and in-sample rows are not comparable in standing to out-of-sample ones.</p>
       <TableWrap testId="compare-table"><table>
         <thead><tr><th />{th("run_id", "Run")}{th("strategy_id", "Strategy")}{th("status", "Scope")}{th("dataset_id", "Dataset")}
-          {params.map((p) => th(`p:${p}`, p))}{COMPARE_COLS.map((c) => th(c.key, c.label))}<th>Sample</th><th>Costs</th><th>Prop</th></tr></thead>
+          {params.map((p) => th(`p:${p}`, humanize(p)))}{COMPARE_COLS.map((c) => th(c.key, c.label))}<th>Sample</th><th>Costs</th><th>Prop</th></tr></thead>
         <tbody>{shown.map((r) => (
           <tr key={r.run_id} data-testid={`cmp-row-${r.run_id}`}>
-            <td><input type="checkbox" aria-label={`select ${r.run_id}`} checked={selected.includes(r.run_id)}
+            <td><input type="checkbox" aria-label={`select run of ${strategyLabel(r.strategy_name)} from ${shortTime(r.created_at)}`} checked={selected.includes(r.run_id)}
               onChange={(e: { target: HTMLInputElement }) => toggle(r.run_id, e.target.checked)} /></td>
-            <td><a href={href(`/results/${r.run_id}`)}><Mono>{r.run_id}</Mono></a></td>
-            <td><a href={href(`/strategies/${r.strategy_id}`)}><Mono>{r.strategy_id}</Mono></a><div className="small muted">{r.strategy_name}
-              {r.generation_method ? ` · ${METHOD_LABEL[r.generation_method] ?? r.generation_method}` : ""}</div></td>
+            <td className="small"><a href={href(`/results/${r.run_id}`)} title={r.run_id}>{shortTime(r.created_at)}</a></td>
+            <td><a href={href(`/strategies/${r.strategy_id}`)} title={r.strategy_id}>{strategyLabel(r.strategy_name ?? "Unnamed strategy")}</a>
+              {r.generation_method ? <div className="small muted">{methodLabel(r.generation_method)}</div> : null}</td>
             <td><ScopeBadge status={r.status} />{r.synthetic && <Badge tone="demo">synthetic</Badge>}</td>
-            <td className="small">{r.dataset_name ?? r.dataset_id}</td>
-            {params.map((p) => <td key={p} className="mono">{fmt(r.parameters[p])}</td>)}
+            <td className="small" title={r.dataset_id}>{datasetLabel(r.dataset_id)}</td>
+            {params.map((p) => <td key={p} className="mono">{plainValue(r.parameters[p])}</td>)}
             {COMPARE_COLS.map((c) => <td key={c.key} className="mono" title={c.key === "breakeven" ? r.breakeven_note ?? undefined : undefined}>
               {num(c.get(r), c.key === "trade_count" ? 0 : 3)}</td>)}
-            <td className="small">{fmt(r.metrics.sample_label)}</td><td className="small" title={r.cost_basis ?? ""}>{r.cost_status}{r.cost_scenario ? ` · ${r.cost_scenario}` : ""}</td><td>{r.prop_simulations}</td>
+            <td className="small">{valueLabel(r.metrics.sample_label)}</td><td className="small" title={r.cost_basis ?? ""}>{valueLabel(r.cost_status)}{r.cost_scenario ? ` · ${humanize(r.cost_scenario)}` : ""}</td><td>{r.prop_simulations}</td>
           </tr>))}
         </tbody></table></TableWrap>
       {shown.some((r) => r.synthetic) && <Banner tone="demo">{SYNTHETIC_NOTICE}</Banner>}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { LibraryRow } from "../api/types";
 import { useApi } from "../app/context";
-import { humanize } from "../app/labels";
+import { facetLabel, strategyLabel } from "../app/labels";
 import { href } from "../app/router";
 import { BacktestPanel } from "../components/strategy";
 import { Empty, ErrorPanel, Field, Loading, Select } from "../components/ui";
@@ -24,7 +24,7 @@ export function RunBacktestPage() {
         <div className="grid3">
           <Field label="Strategy">
             <Select value={sid} onChange={setSid} placeholder="Choose a strategy…" testId="run-strategy"
-              options={rows.map((r) => ({ value: r.strategy_id, label: `${humanize(r.name)} · ${r.timeframe ?? "?"}` }))} />
+              options={rows.map((r) => ({ value: r.strategy_id, label: `${strategyLabel(r.name)} · ${r.timeframe ? facetLabel("timeframe", r.timeframe) : "timeframe not set"}` }))} />
           </Field>
         </div>
         {sid ? <BacktestPanel key={sid} strategy={sid} /> : <p className="muted small">Choose a strategy to see which datasets it can run on.</p>}

@@ -4,7 +4,8 @@ import type { PropAccountResult, PropConfigRow, PropSimRow, PropSimulation, RunR
 import { href, useRoute } from "../app/router";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { useApi, useApp } from "../app/context";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Kpi, Loading, Mono, Scope, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
+import { datasetLabel, facetLabel, humanize, keyLabel, plainProse, profileLabel, statusLabel, strategyLabel, valueLabel } from "../app/labels";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Kpi, Loading, Mono, Scope, Select, TableWrap, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
 import { BarChart, LineChart } from "../components/charts";
 
 /** Phase 6: prop-account rules replayed over a STORED run's trades. The strategy result and the
@@ -18,6 +19,16 @@ interface AccountDraft { account_id: string; config: string; start: string }
 const tone = (s: string) => s === "TARGET_REACHED" ? "ok" : s === "INCOMPLETE" || s === "ACTIVE" ? "info" : "error";
 const yes = (b: boolean | null | undefined) => b == null ? "—" : b ? "yes" : "no";
 const usd = (v: unknown) => typeof v === "number" ? v.toFixed(2) : fmt(v);
+/** Backend prose that mentions rule / config keys ("min_trading_days", "evaluation.drawdown.mode") with the keys as words. */
+const prose = plainProse;
+const runLabel = (id: string | null | undefined) => (id ? humanize(id) : "—");
+/** Machine ids behind the rows above, in the collapsed Technical details block. */
+const IdTable = ({ head, rows }: { head: string[]; rows: (string | null | undefined)[][] }) => (
+  <TechDetails><TableWrap><table className="dense"><thead><tr>{head.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+    <tbody>{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="small"><Mono>{c ?? "—"}</Mono></td>)}</tr>)}</tbody></table></TableWrap></TechDetails>);
+const COL_LABEL: Record<string, string> = { trade_no: "Trade", day: "Day", entry_ts: "Entry time", exit_ts: "Exit time", net_usd: "Net P&L (USD)",
+  peak_balance: "Peak balance", intratrade_low_bound: "Worst open balance (bound)", day_pnl: "Day P&L", daily_loss_headroom: "Daily-loss headroom",
+  drawdown_floor: "Drawdown floor", drawdown_headroom: "Drawdown headroom", target_progress: "Target progress" };
 
 function PropWorkspace() {
   const { toast } = useApp();
@@ -35,7 +46,7 @@ function PropWorkspace() {
   if (cfgs.error) return <ErrorPanel error={cfgs.error} />;
   if (!runs.data || !cfgs.data) return <Loading label="Loading runs and prop rule sets…" />;
   const valid = cfgs.data.filter((c) => c.valid);
-  const cfgOptions = [...valid.map((c) => ({ value: c.id as string, label: `${c.id}${c.synthetic_test_only ? " (synthetic test-only)" : ""}` })),
+  const cfgOptions = [...valid.map((c) => ({ value: c.id as string, label: `${profileLabel(c.id, c.name)}${c.synthetic_test_only ? " (synthetic test-only)" : ""}` })),
     { value: "__custom__", label: "Custom rule set (YAML below)" }];
   const setAcc = (i: number, patch: Partial<AccountDraft>) => setAccounts(accounts.map((a, j) => j === i ? { ...a, ...patch } : a));
   const run = () => {
@@ -43,7 +54,7 @@ function PropWorkspace() {
     const body = { run_id: runId, record: true, accounts: accounts.map((a) => ({
       account_id: a.account_id || undefined, config: a.config === "__custom__" ? custom : a.config, start: a.start || undefined })) };
     api.post<PropSimulation>("/api/prop/simulate", body)
-      .then((r) => { setResult(r); sims.reload(); toast("ok", `Simulation ${r.simulation_id} recorded`); })
+      .then((r) => { setResult(r); sims.reload(); toast("ok", "Simulation recorded"); })
       .catch((e: ApiError) => setErr(e)).finally(() => setBusy(false));
   };
   const ready = runId && accounts.every((a) => a.config && (a.config !== "__custom__" || custom.trim()));
@@ -58,7 +69,7 @@ function PropWorkspace() {
           or <ChooseWorkspaceLink /> that holds your runs.</Banner>}
         <Field label="Source result (stored run)" hint="Results page lists every stored run with its status and dataset.">
           <Select value={runId} onChange={setRunId} testId="prop-run" placeholder="Choose a run…"
-            options={runs.data.map((r) => ({ value: r.run_id, label: `${r.run_id} · ${r.strategy_name ?? r.strategy_id} · ${r.dataset_id} · ${r.status}${r.synthetic ? " · SYNTHETIC" : ""}` }))} />
+            options={runs.data.map((r) => ({ value: r.run_id, label: `${runLabel(r.run_id)} · ${r.strategy_name ? strategyLabel(r.strategy_name) : "Unnamed strategy"} · ${datasetLabel(r.dataset_id)} · ${statusLabel(r.status)}${r.synthetic ? " · SYNTHETIC" : ""}` }))} />
         </Field>
         <TableWrap testId="prop-accounts"><table>
           <thead><tr><th>Account</th><th>Rule set</th><th>Start (UTC, optional)</th><th /></tr></thead>
@@ -72,10 +83,10 @@ function PropWorkspace() {
           <Button small onClick={() => setAccounts([...accounts, { ...accounts[accounts.length - 1], account_id: `A${accounts.length + 1}` }])} testId="prop-add-account">Add account</Button>
         </div>
         {accounts.some((a) => a.config === "__custom__") && (
-          <Field label="Custom rule set (YAML)" wide hint={<>Start from a shipped example below; see PROP_SIMULATION.md for every field. Validated by the backend.</>}>
+          <Field label="Custom rule set (YAML)" wide hint={<>Start from a shipped example below; the prop simulation guide describes every field. Validated by the backend.</>}>
             <textarea className="input mono" rows={16} value={custom} data-testid="prop-custom"
               onChange={(e: { target: HTMLTextAreaElement }) => setCustom(e.target.value)} />
-            <div className="actions">{valid.map((c) => <Button key={c.file} small onClick={() => setCustom(c.text)}>Load {c.id}</Button>)}</div>
+            <div className="actions">{valid.map((c) => <Button key={c.file} small onClick={() => setCustom(c.text)}>Load {profileLabel(c.id, c.name)}</Button>)}</div>
           </Field>)}
         <div className="actions"><Button kind="primary" onClick={run} busy={busy} busyLabel="Simulating…" disabled={!ready} testId="prop-run-btn">Run simulation</Button></div>
         {err && <ErrorPanel error={err} title="Simulation refused" testId="prop-error" />}
@@ -87,11 +98,13 @@ function PropWorkspace() {
           <TableWrap testId="prop-sims"><table>
             <thead><tr><th>Simulation</th><th>Created</th><th>Source run</th><th>Dataset</th><th>Accounts</th></tr></thead>
             <tbody>{sims.data.map((s) => (
-              <tr key={s.simulation_id}><td><a href={href(`/prop/${s.simulation_id}`)}><Mono>{s.simulation_id}</Mono></a></td>
-                <td className="small">{shortTime(s.created_at)}</td><td><a href={href(`/results/${s.source_run_id}`)}><Mono>{s.source_run_id}</Mono></a></td>
-                <td><Mono>{s.dataset_id}</Mono></td>
-                <td>{s.accounts.map((a) => <span key={a.account_id}>{a.account_id} <Badge tone={tone(a.status)}>{a.status}</Badge> </span>)}</td></tr>))}
+              <tr key={s.simulation_id}><td><a href={href(`/prop/${s.simulation_id}`)}>Open simulation</a></td>
+                <td className="small">{shortTime(s.created_at)}</td><td><a href={href(`/results/${s.source_run_id}`)}>{runLabel(s.source_run_id)}</a></td>
+                <td>{datasetLabel(s.dataset_id)}</td>
+                <td>{s.accounts.map((a) => <span key={a.account_id}>{a.account_id} <Badge tone={tone(a.status)}>{statusLabel(a.status)}</Badge> </span>)}</td></tr>))}
             </tbody></table></TableWrap>)}
+        {!!sims.data?.length && <IdTable head={["Simulation", "Source run", "Strategy", "Dataset"]}
+          rows={sims.data.map((s) => [s.simulation_id, s.source_run_id, s.strategy_id, s.dataset_id])} />}
       </Card>
     </div>
   );
@@ -99,17 +112,18 @@ function PropWorkspace() {
 
 function RuleSets({ rows }: { rows: PropConfigRow[] }) {
   return (
-    <Card title="Rule sets (configs/prop)">
+    <Card title="Rule sets">
       <p className="muted small">Versioned YAML rule sets. The shipped examples are SYNTHETIC and TEST-ONLY — they describe no real
         firm. Enter a real program's rules yourself from its current official documentation.</p>
-      {!rows.length ? <Empty>No rule sets in configs/prop.</Empty> : (
+      {!rows.length ? <Empty>No rule sets in the workspace's prop rule folder.</Empty> : <>
         <TableWrap testId="prop-configs"><table>
-          <thead><tr><th>File</th><th>Id</th><th>Name</th><th>Valid</th><th>Hash</th></tr></thead>
+          <thead><tr><th>Rule set</th><th>Valid</th><th>Problems</th></tr></thead>
           <tbody>{rows.map((c) => (
-            <tr key={c.file}><td><Mono>{c.file}</Mono></td><td>{c.id ?? "—"}{c.synthetic_test_only && <> <Badge tone="demo">synthetic test-only</Badge></>}</td>
-              <td>{c.name}</td><td>{c.valid ? <Badge tone="ok">valid</Badge> : <Badge tone="error" title={c.errors.join("; ")}>invalid</Badge>}</td>
-              <td><Mono title={String(c.config_hash ?? "") || undefined}>{c.config_hash?.slice(0, 12) ?? "—"}</Mono></td></tr>))}
-          </tbody></table></TableWrap>)}
+            <tr key={c.file}><td>{profileLabel(c.id, c.name)}{c.synthetic_test_only && <> <Badge tone="demo">synthetic test-only</Badge></>}</td>
+              <td>{c.valid ? <Badge tone="ok">valid</Badge> : <Badge tone="error">invalid</Badge>}</td>
+              <td className="small">{c.errors.length ? c.errors.map(prose).join("; ") : <span className="muted">none</span>}</td></tr>))}
+          </tbody></table></TableWrap>
+        <IdTable head={["File", "Id", "Config hash"]} rows={rows.map((c) => [c.file, c.id, c.config_hash])} /></>}
     </Card>
   );
 }
@@ -118,7 +132,8 @@ function SavedSimulation({ id }: { id: string }) {
   const { data, error } = useApi<PropSimulation>(`/api/prop/simulations/${id}`, [id]);
   if (error) return <ErrorPanel error={error} />;
   if (!data) return <Loading label="Loading simulation…" />;
-  return <div className="page"><header className="page-head"><h1>Prop simulation <Mono>{id}</Mono></h1></header>
+  return <div className="page"><header className="page-head"><div><h1>Prop simulation</h1>
+    <div className="subtitle small">Recorded {shortTime(data.created_at)}</div></div></header>
     <p><a href={href("/prop")}>Back to prop simulation</a></p><SimulationView sim={data} /></div>;
 }
 
@@ -129,36 +144,43 @@ function SimulationView({ sim }: { sim: PropSimulation }) {
       {sim.labels.map((l) => <Banner key={l} tone={l.startsWith("SYNTHETIC") ? "demo" : "warn"}>{l}</Banner>)}
       <PropOverview sim={sim} />
       <Card title="Strategy result (source run, unchanged)" testId="prop-strategy-result">
-        <KeyValues rows={[["Run", <a href={href(`/results/${L.source_run_id}`)}><Mono>{L.source_run_id}</Mono></a>], ["Run status", <Badge>{L.source_run_status}</Badge>],
-          ["Trades", fmt(S.trade_count)], ["Net R", fmt(S.net_r)], ["Net USD", usd(S.net_usd)], ["Expectancy (R)", fmt(S.expectancy_r)],
+        <KeyValues rows={[["Run", <a href={href(`/results/${L.source_run_id}`)}>{runLabel(L.source_run_id)}</a>], ["Run status", <Badge>{statusLabel(L.source_run_status)}</Badge>],
+          ["Trades", fmt(S.trade_count)], ["Net R", fmt(S.net_r)], ["Net P&L (USD)", usd(S.net_usd)], ["Expectancy (R)", fmt(S.expectancy_r)],
           ["Profit factor", fmt(S.profit_factor)], ["Max drawdown (R)", fmt(S.max_drawdown_r)], ["Max drawdown (USD)", usd(S.max_drawdown_usd)],
-          ["Sample", fmt(S.sample_label)]]} />
+          ["Sample", valueLabel(S.sample_label)]]} />
+        <TechDetails rows={[["Run id", <Mono>{L.source_run_id}</Mono>]]} />
       </Card>
       <Card title="Prop-account results" testId="prop-account-results">
         <TableWrap><table>
-          <thead><tr><th>Account</th><th>Rules</th><th>Outcome</th><th>Start bal.</th><th>Target</th><th>End bal.</th><th>Net P&L</th><th>Net R</th>
-            <th>Trades</th><th>Days</th><th>Target reached</th><th>DD breach</th><th>Daily-loss breach</th><th>Max acct DD</th><th>Max daily loss</th>
+          <thead><tr><th>Account</th><th>Rules</th><th>Outcome</th><th>Starting balance</th><th>Target</th><th>Ending balance</th><th>Net P&L</th><th>Net R</th>
+            <th>Trades</th><th>Trading days</th><th>Target reached</th><th>Drawdown breach</th><th>Daily-loss breach</th><th>Max account drawdown</th><th>Max daily loss</th>
             <th>Time to target</th><th>Time to breach</th><th>Violation</th></tr></thead>
           <tbody>{sim.accounts.map(({ summary: a }) => (
             <tr key={a.account_id} data-testid={`prop-acc-${a.account_id}`}>
               <td>{a.account_id}{a.account_start && <div className="small muted">from {a.account_start.slice(0, 16)}</div>}</td>
-              <td><Mono>{a.prop_config_id}</Mono></td><td><Badge tone={tone(a.status)}>{a.status}</Badge></td>
+              <td>{profileLabel(a.prop_config_id)}</td><td><Badge tone={tone(a.status)}>{statusLabel(a.status)}</Badge></td>
               <td>{usd(a.starting_balance)}</td><td>{usd(a.target_usd)}</td><td>{usd(a.ending_balance)}</td><td>{usd(a.net_pnl_usd)}</td><td>{fmt(a.net_r)}</td>
               <td>{a.trade_count}{a.trades_not_processed ? <span className="small muted"> (+{a.trades_not_processed} after end)</span> : null}</td>
               <td>{a.trading_days}</td><td>{yes(a.profit_target_reached)}</td><td>{yes(a.drawdown_breach)}</td><td>{yes(a.daily_loss_breach)}</td>
               <td>{usd(a.max_drawdown_usd_closed)}{a.max_drawdown_usd_intratrade_bound != null && <div className="small muted">bound {usd(a.max_drawdown_usd_intratrade_bound)}</div>}</td>
               <td>{usd(a.max_daily_loss_usd_closed)}{a.max_daily_loss_usd_intratrade_bound != null && <div className="small muted">bound {usd(a.max_daily_loss_usd_intratrade_bound)}</div>}</td>
-              <td className="small">{a.time_to_target ? `${a.time_to_target.trading_days} d · ${a.time_to_target.at.slice(0, 16)}` : "—"}</td>
-              <td className="small">{a.time_to_breach ? `${a.time_to_breach.trading_days} d · ${a.time_to_breach.at.slice(0, 16)}` : "—"}</td>
-              <td className="small">{a.violation_reason ?? (a.incomplete_reasons.join("; ") || "—")}</td></tr>))}
+              <td className="small">{a.time_to_target ? `${a.time_to_target.trading_days} trading days · ${a.time_to_target.at.slice(0, 16)}` : "—"}</td>
+              <td className="small">{a.time_to_breach ? `${a.time_to_breach.trading_days} trading days · ${a.time_to_breach.at.slice(0, 16)}` : "—"}</td>
+              <td className="small">{a.violations.length ? a.violations.map((v) => `${humanize(v.rule)}: ${prose(v.detail)}`).join("; ")
+                : a.violation_reason ? prose(a.violation_reason) : (a.incomplete_reasons.map(prose).join("; ") || "—")}</td></tr>))}
           </tbody></table></TableWrap>
+        <IdTable head={["Account", "Rule set id", "Rule set hash"]} rows={sim.accounts.map(({ summary: a }) => [a.account_id, a.prop_config_id, a.prop_config_hash])} />
       </Card>
       {sim.accounts.map((acc) => <AccountDetail key={acc.summary.account_id} acc={acc} />)}
-      <Card title="Lineage"><KeyValues rows={[["Simulation", <Mono>{sim.simulation_id}</Mono>], ["Recorded", yes(sim.recorded)],
-        ["Strategy", <a href={href(`/strategies/${L.strategy_id}`)}><Mono>{L.strategy_id}</Mono></a>], ["Definition hash", <Mono>{L.definition_hash ?? L.definition_hash_note}</Mono>],
-        ["Dataset", <Mono>{L.dataset_id}</Mono>], ["Provider / instrument / TF", `${L.provider} / ${L.instrument} / ${L.timeframe}`],
-        ["Source period", `${L.source_period?.dataset_start} → ${L.source_period?.dataset_end}`], ["Cost profile", `${L.cost_profile} (${L.cost_status})`],
-        ["Trades hash (verified)", <Mono title={String(L.trades_hash)}>{String(L.trades_hash).slice(0, 16)}</Mono>], ["Ordering", L.ordering], ["Simulator", L.simulator_version]]} /></Card>
+      <Card title="Lineage"><KeyValues rows={[["Recorded", yes(sim.recorded)],
+        ["Strategy", <a href={href(`/strategies/${L.strategy_id}`)}>Open strategy</a>], ["Dataset", datasetLabel(L.dataset_id)],
+        ["Provider / instrument / timeframe", `${humanize(L.provider)} / ${humanize(L.instrument)} / ${facetLabel("timeframe", L.timeframe)}`],
+        ["Source period", `${L.source_period?.dataset_start} → ${L.source_period?.dataset_end}`], ["Cost profile", `${humanize(L.cost_profile)} (${valueLabel(L.cost_status)})`],
+        ["Trades hash", L.trades_hash ? "verified against the stored run" : "—"], ["Trade ordering", prose(L.ordering)]]} />
+        <TechDetails rows={[["Simulation", <Mono>{sim.simulation_id}</Mono>], ["Strategy", <Mono>{L.strategy_id}</Mono>],
+          ["Definition hash", <Mono>{L.definition_hash ?? L.definition_hash_note}</Mono>], ["Dataset", <Mono>{L.dataset_id}</Mono>],
+          ["Provider / instrument / timeframe", <Mono>{`${L.provider} / ${L.instrument} / ${L.timeframe}`}</Mono>], ["Cost profile", <Mono>{L.cost_profile}</Mono>],
+          ["Trades hash (verified)", <Mono>{String(L.trades_hash)}</Mono>], ["Simulator", <Mono>{L.simulator_version}</Mono>]]} /></Card>
     </div>
   );
 }
@@ -187,7 +209,7 @@ function PropOverview({ sim }: { sim: PropSimulation }) {
         <Kpi label="Days to target (median)" value={days.length ? String(days.sort((x, y) => x - y)[Math.floor(days.length / 2)]) : "—"} sub="trading days" />
       </div>
       {accs.length > 1 && <div style={{ marginTop: 10 }}><h4>Outcome distribution</h4>
-        <BarChart categories={keys} unit="accounts" signed={false} series={[{ id: "n", label: "Accounts", values: keys.map((k) => statuses[k]), color: "var(--c2)" }]} /></div>}
+        <BarChart categories={keys.map(statusLabel)} unit="accounts" signed={false} series={[{ id: "n", label: "Accounts", values: keys.map((k) => statuses[k]), color: "var(--c2)" }]} /></div>}
     </Card>
   );
 }
@@ -219,28 +241,29 @@ function AccountDetail({ acc }: { acc: PropAccountResult }) {
   const cols = ["trade_no", "day", "entry_ts", "exit_ts", "contracts", "net_usd", "balance", "peak_balance", "drawdown", "intratrade_low_bound",
     "day_pnl", "daily_loss_headroom", "drawdown_floor", "drawdown_headroom", "target_progress", "trading_days", "status", "skipped"];
   return (
-    <Card title={<>Account {a.account_id} · <Badge tone={tone(a.status)}>{a.status}</Badge></>}
+    <Card title={<>Account {a.account_id} · <Badge tone={tone(a.status)}>{statusLabel(a.status)}</Badge></>}
       actions={<Button small onClick={() => setOpen(!open)} testId={`prop-detail-${a.account_id}`}>{open ? "Hide progression" : "Show progression"}</Button>}>
       <AccountChart acc={acc} />
       {a.violations.length ? (
         <TableWrap testId={`prop-violations-${a.account_id}`}><table>
           <thead><tr><th>Rule</th><th>At</th><th>Trade</th><th>Detection</th><th>Detail</th></tr></thead>
-          <tbody>{a.violations.map((v, i) => <tr key={i}><td><Badge tone="error">{v.rule}</Badge></td><td className="small">{v.at}</td>
-            <td>{v.trade_no}</td><td>{v.detection}</td><td className="small">{v.detail}</td></tr>)}</tbody></table></TableWrap>
+          <tbody>{a.violations.map((v, i) => <tr key={i}><td><Badge tone="error">{humanize(v.rule)}</Badge></td><td className="small">{v.at}</td>
+            <td>{v.trade_no}</td><td>{humanize(v.detection)}</td><td className="small">{prose(v.detail)}</td></tr>)}</tbody></table></TableWrap>
       ) : <p className="muted small">No rule violations.</p>}
-      <p className="muted small">Detection: {a.detection} · trades crossing the daily reset: {a.trades_crossing_reset} · force-closed at end of data:
+      <p className="muted small">Detection: {humanize(a.detection).toLowerCase()} · trades crossing the daily reset: {a.trades_crossing_reset} · force-closed at end of data:
         {" "}{a.trades_end_of_data} · skipped after a daily-loss pause: {a.trades_skipped_daily_loss_pause}
         {a.payout_eligible != null && <> · payout eligible (per rule set): {yes(a.payout_eligible)}</>}
         {a.best_day_share_of_profit != null && <> · best-day share of profit: {a.best_day_share_of_profit.toFixed(3)}</>}</p>
       {open && <>
         <h3>Days</h3>
-        <TableWrap><table><thead><tr><th>Day</th><th>Start bal.</th><th>P&L</th><th>Worst P&L bound</th><th>Trades</th><th>End bal.</th></tr></thead>
+        <TableWrap><table><thead><tr><th>Day</th><th>Starting balance</th><th>P&L</th><th>Worst P&L bound</th><th>Trades</th><th>Ending balance</th></tr></thead>
           <tbody>{acc.days.map((d, i) => <tr key={i}><td>{fmt(d.day)}</td><td>{usd(d.start_balance)}</td><td>{usd(d.pnl)}</td>
             <td>{usd(d.worst_pnl_bound)}</td><td>{fmt(d.trades)}</td><td>{usd(d.end_balance)}</td></tr>)}</tbody></table></TableWrap>
         <h3>Per-trade progression</h3>
-        <TableWrap testId={`prop-progression-${a.account_id}`}><table><thead><tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+        <TableWrap testId={`prop-progression-${a.account_id}`}><table><thead><tr>{cols.map((c) => <th key={c}>{COL_LABEL[c] ?? keyLabel(c)}</th>)}</tr></thead>
           <tbody>{acc.progression.map((p, i) => <tr key={i}>{cols.map((c) => <td key={c} className="mono small">
-            {typeof p[c] === "number" && !["trade_no", "trading_days", "contracts"].includes(c) ? (p[c] as number).toFixed(c === "target_progress" ? 3 : 2) : fmt(p[c])}</td>)}</tr>)}</tbody></table></TableWrap>
+            {typeof p[c] === "number" && !["trade_no", "trading_days", "contracts"].includes(c) ? (p[c] as number).toFixed(c === "target_progress" ? 3 : 2)
+              : c === "status" ? statusLabel(p[c]) : typeof p[c] === "boolean" ? valueLabel(p[c]) : fmt(p[c])}</td>)}</tr>)}</tbody></table></TableWrap>
       </>}
     </Card>
   );

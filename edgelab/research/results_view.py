@@ -251,7 +251,17 @@ def rules_in_plain_english(svc, doc: Mapping, rec: Mapping | None) -> list[dict]
     """The strategy's rules as plain sentences, from its stored definition (and the run's recorded engine settings)."""
     from edgelab.strategy import presentation as pr
     d = doc.get("definition") or {}
-    entry, ex = d.get("entry") or {}, d.get("exit") or {}
+    params = d.get("parameters") or {}
+
+    def resolve(x):                                          # "$stop_atr" -> the parameter's value (text only)
+        if isinstance(x, str) and x.startswith("$") and isinstance(params.get(x[1:]), Mapping):
+            return params[x[1:]].get("value", params[x[1:]].get("default", x))
+        if isinstance(x, Mapping):
+            return {k: resolve(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [resolve(v) for v in x]
+        return x
+    entry, ex = resolve(d.get("entry") or {}), resolve(d.get("exit") or {})
     gp = ((doc.get("lineage") or [{}])[0] or {}).get("generation_parameters") or {}
     row = {"definition": d, "variation": gp.get("variation"), "family_id": doc.get("family_id"),
            "strategy_id": doc.get("strategy_id")}
