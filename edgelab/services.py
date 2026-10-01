@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from edgelab.core.config import load_config
+from edgelab.core.fsutil import atomic_write_text
 from edgelab.data.calendar import load_calendars
 from edgelab.data.importer import ImportOptions, import_dataset, inspect_file, load_validated
 from edgelab.data.store import open_store
@@ -352,9 +353,7 @@ class Services:
             names.pop(run_record_id, None)
         d = campaign.runs_dir(self, campaign_id)
         d.mkdir(parents=True, exist_ok=True)
-        tmp = d / "names.json.tmp"
-        tmp.write_text(json.dumps(names, indent=1, sort_keys=True), encoding="utf-8")
-        tmp.replace(d / "names.json")
+        atomic_write_text(d / "names.json", json.dumps(names, indent=1, sort_keys=True))
         return {"campaign_id": campaign_id, "run_record_id": run_record_id, "name": names.get(run_record_id)}
 
     RESET_TABLES = ("trades", "metrics", "runs", "search_cells", "search_batches", "protocol_trials", "protocol_proposals",

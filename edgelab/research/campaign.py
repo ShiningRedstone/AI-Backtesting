@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from edgelab.core.fsutil import atomic_write_text
 from edgelab.core.identity import hash_obj
 
 CAMPAIGN_FORMAT = 1
@@ -734,7 +735,11 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids:
     def emit(**kw) -> None:
         rec.update(kw)
         rec["updated_at"] = _now()
-        save_run_record(svc, rec)
+        try:
+            save_run_record(svc, rec)
+        except PermissionError:                  # Windows: the file stayed open elsewhere through every retry. A progress
+            if rec["status"] not in ("preflight", "running"):   # update is skipped (the next one rewrites the whole
+                raise                                           # record); a final status is never lost silently
         if on_progress is not None:
             on_progress(dict(rec))
 
@@ -970,9 +975,8 @@ def scopes_dir(svc, cid: str) -> Path:
 def save_scope(svc, cid: str, rid: str, ids: list[str]) -> None:
     d = runs_dir(svc, cid)
     d.mkdir(parents=True, exist_ok=True)
-    tmp = d / f"{rid}.scope.json.tmp"
-    tmp.write_text(json.dumps({"run_record_id": rid, "campaign_id": cid, "strategy_ids": list(ids)}))
-    tmp.replace(d / f"{rid}.scope.json")
+    atomic_write_text(d / f"{rid}.scope.json",
+                      json.dumps({"run_record_id": rid, "campaign_id": cid, "strategy_ids": list(ids)}))
 
 
 def load_scope(svc, cid: str, rid: str) -> dict:
@@ -1032,9 +1036,7 @@ def new_run_record(spec: Mapping, families: list[str], n: int, source: str) -> d
 def save_run_record(svc, rec: Mapping) -> None:
     d = runs_dir(svc, rec["campaign_id"])
     d.mkdir(parents=True, exist_ok=True)
-    tmp = d / (rec["run_record_id"] + ".json.tmp")
-    tmp.write_text(json.dumps(rec, indent=1, sort_keys=True, default=str))
-    tmp.replace(d / (rec["run_record_id"] + ".json"))
+    atomic_write_text(d / (rec["run_record_id"] + ".json"), json.dumps(rec, indent=1, sort_keys=True, default=str))
 
 
 def run_records(svc, cid: str) -> list[dict]:

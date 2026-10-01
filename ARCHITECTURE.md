@@ -1971,3 +1971,15 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
     main window's first load or on exit, and closes itself if the parent dies or after 180 s. A failure only means
     no splash.
   - CI checks that the splash ends on its own.
+
+### ADR-80 Workspace files written while pages read them (Windows "Access is denied")
+- **Field failure.** A research run stopped with `PermissionError: [WinError 5] Access is denied:
+  '...\runs\CR_....json.tmp' -> '...\runs\CR_....json'`. The run rewrites its run record after every strategy, and
+  since ADR-78 page requests read the same file without waiting for the service lock. On Windows a file cannot be
+  replaced while any other handle (a page read, antivirus, the search indexer) has it open.
+- **Fix.** `edgelab/core/fsutil.py`: `atomic_write_text` writes a unique temp file per write (two writers never share
+  one) and `replace_with_retry` retries the move on `PermissionError` with a short backoff (about 6 s in total).
+  Used for run records, run scopes and run names (`names.json`).
+- A progress update (status preflight/running) that still cannot be written after every retry is skipped; the next
+  update rewrites the whole record. A final status (completed, failed, cancelled, ...) is never skipped.
+- No change to what a research run computes or stores in the database.

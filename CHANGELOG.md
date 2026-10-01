@@ -3,6 +3,13 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Research runs no longer stop on "Access is denied" (ADR-80)
+
+| Item | Status |
+|---|---|
+| Run record / scope / run-name files: unique temp file per write, move retried while Windows reports the file in use (a page reading it, antivirus); a progress update that still fails is skipped, a final status never | IMPLEMENTED, TESTED (simulated WinError 5; old code fails the same test) |
+| Behaviour, results, research logic | UNCHANGED |
+
 ## Version 0.3.0
 
 | Item | Status |
