@@ -20,3 +20,13 @@
   the most specific group with >= 3 observations ((family, timeframe) -> timeframe -> all), summed (workers 1);
   fewer than 3 successful observations -> "estimating" with no number. Preflight time is measured separately.
   Progress and ETA are recomputed from the persisted cells at every completed cell and stored in the run record.
+
+### ADR-71 `storage.backend: auto` means the SQLite store
+- **Problem.** `open_store` resolved `auto` to DuckDB whenever the `duckdb` package was importable (it is listed in
+  `requirements.txt`). Installing requirements therefore silently switched an existing SQLite workspace to a new, empty
+  DuckDB store, and the research pages failed with `SearchStorageUnsupported` (search storage is SQLite-only).
+- **Decision.** `auto` opens the SQLite store; DuckDB is opened only for an explicit `storage.backend: duckdb`. The
+  config files and therefore the research config hash are unchanged; `runtime.inspect_workspace` no longer reports
+  `auto` + installed duckdb as a problem. DuckDB remains available and contract-tested when selected explicitly.
+- **Also.** `web.bundle.bundle_status` reports an unreadable `static/build-info.json` (e.g. merge-conflict markers) as
+  `built: false` with an `error` instead of failing `/api/status`.

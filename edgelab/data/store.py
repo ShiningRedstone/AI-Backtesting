@@ -1,7 +1,7 @@
 """Persistent storage for datasets, runs, trades and metrics.
 
 Target architecture: DuckDB + Parquet (columnar, fast analytical scans).
-Fallback: SQLite (stdlib), used automatically when duckdb is not installed.
+Default: SQLite (stdlib) for `storage.backend: auto`; DuckDB only when configured explicitly (ADR-71).
 Both implement the same interface and are exercised by the same test suite
 (tests/test_store.py skips DuckDB when the package is absent).
 
@@ -531,13 +531,10 @@ def open_store(cfg: dict, root: str | Path | None = None) -> ResultStore:
     scfg = cfg["storage"]
     root = Path(root) if root else Path(scfg.get("root", "."))
     backend = scfg["backend"]
-    if backend in ("auto", "duckdb"):
-        try:
-            import duckdb  # noqa: F401
-            return DuckDBStore(root / scfg["duckdb_path"], root / scfg["parquet_dir"])
-        except ImportError:
-            if backend == "duckdb":
-                raise
-            log.event("store_fallback", severity="WARNING",
-                      error="duckdb not installed; using SQLite fallback")
+    # "auto" is the SQLite store (ADR-71): research searches, the desktop runtime and every recorded
+    # workspace use it, and merely installing duckdb must not switch a workspace to an empty DuckDB store.
+    # DuckDB is opened only when `storage.backend: duckdb` is set explicitly.
+    if backend == "duckdb":
+        import duckdb  # noqa: F401
+        return DuckDBStore(root / scfg["duckdb_path"], root / scfg["parquet_dir"])
     return SQLiteStore(root / scfg["sqlite_path"])

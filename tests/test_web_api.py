@@ -267,6 +267,18 @@ class TestWebConfigAndDemo(unittest.TestCase):
         self.assertTrue(s["built"], "run `npm run build` in web/")
         self.assertTrue(s["up_to_date"], "edgelab/web/static is stale: run `npm run build` in web/")
 
+    def test_unreadable_build_info_is_reported_not_raised(self):
+        from unittest import mock
+        from edgelab.web import bundle
+        static = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, static, True)
+        (static / "build-info.json").write_text('{\n<<<<<<< Updated upstream\n "source_sha256": "a"\n}\n')
+        with mock.patch.object(bundle, "STATIC", static):
+            s = bundle.bundle_status()
+        self.assertFalse(s["built"])
+        self.assertFalse(s["up_to_date"])
+        self.assertIn("unreadable", s["error"])
+
     def test_typescript_typecheck(self):
         tsc = shutil.which("tsc")
         if not tsc:

@@ -90,6 +90,22 @@ class TestDuckDBStore(StoreContract, unittest.TestCase):
         return DuckDBStore(root / "t.duckdb", root / "pq")
 
 
+class TestOpenStoreBackend(unittest.TestCase):
+    """ADR-71: `auto` is the SQLite store even when duckdb is installed (searches are SQLite-only)."""
+    def test_auto_is_sqlite_even_with_duckdb_installed(self):
+        import sys
+        import types
+        from unittest import mock
+        from edgelab.data.store import open_store
+        root = Path(tempfile.mkdtemp())
+        cfg = {"storage": {"backend": "auto", "duckdb_path": "x.duckdb", "parquet_dir": "pq", "sqlite_path": "x.sqlite"}}
+        with mock.patch.dict(sys.modules, {"duckdb": types.ModuleType("duckdb")}):    # "installed"
+            store = open_store(cfg, root)
+        self.assertEqual(store.backend, "sqlite")
+        self.assertFalse((root / "x.duckdb").exists())
+        store.close()
+
+
 class TestReproducibility(unittest.TestCase):
     def test_identical_inputs_identical_trades(self):
         ds = small_ds()

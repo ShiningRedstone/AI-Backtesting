@@ -3,6 +3,13 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Fix: `storage.backend: auto` stays on SQLite; unreadable build-info no longer breaks /api/status (ADR-71)
+
+| Item | Status |
+|---|---|
+| `open_store`: `auto` opens the SQLite store even when duckdb is installed (DuckDB only when configured explicitly); fixes `SearchStorageUnsupported` on the research pages after `pip install -r requirements.txt`. Config files and config hash unchanged | IMPLEMENTED, TESTED |
+| `bundle_status`: an unreadable `build-info.json` is reported (`built: false`, `error`) instead of an HTTP 400 on `/api/status` | IMPLEMENTED, TESTED |
+
 ## Web UI visual redesign (presentation only, version unchanged 0.2.0)
 
 | Item | Status |

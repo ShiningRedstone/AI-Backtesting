@@ -255,7 +255,7 @@ def inspect_workspace(path: str | Path) -> dict:
     st = cfg["storage"]
     data_root = root / st.get("root", "data")
     backend = st.get("backend", "auto")
-    if backend == "duckdb" or (backend == "auto" and _duckdb_available()):
+    if backend == "duckdb":
         out["problems"].append(f"storage backend {backend!r} would use DuckDB; the desktop app uses the SQLite store "
                                "(set storage.backend: sqlite)")
     out["store_backend"] = "sqlite"
@@ -288,11 +288,6 @@ def inspect_workspace(path: str | Path) -> dict:
     out["valid"] = not out["problems"]
     out["empty"] = out["valid"] and not out["has_store"] and out["strategies"] == 0
     return out
-
-
-def _duckdb_available() -> bool:
-    import importlib.util
-    return importlib.util.find_spec("duckdb") is not None
 
 
 def create_workspace(path: str | Path) -> dict:

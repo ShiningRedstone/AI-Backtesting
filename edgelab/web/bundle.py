@@ -35,7 +35,12 @@ def bundle_status() -> dict:
     info_path = STATIC / "build-info.json"
     if not info_path.exists():
         return {"built": False, "up_to_date": False}
-    info = json.loads(info_path.read_text())
+    try:
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:  # e.g. merge-conflict markers left in the file
+        return {"built": False, "up_to_date": False,
+                "error": f"edgelab/web/static/build-info.json is unreadable ({exc}); restore it with "
+                         "`git restore --source=HEAD -- edgelab/web/static` or run `npm run build` in web/"}
     current = source_hash() if (WEB / "src").is_dir() and not is_frozen() else None
     import edgelab
     version_ok = info.get("app_version") == edgelab.__version__
