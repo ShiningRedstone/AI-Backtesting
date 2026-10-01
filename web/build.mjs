@@ -44,6 +44,7 @@ fs.mkdirSync(out, { recursive: true });
 const finish = () => {
   fs.copyFileSync(path.join(here, "index.html"), path.join(out, "index.html"));
   fs.copyFileSync(path.join(here, "src/styles.css"), path.join(out, "styles.css"));
+  fs.cpSync(path.join(here, "src/fonts"), path.join(out, "fonts"), { recursive: true });   // self-hosted fonts + OFL texts
   const react = require(require.resolve("react/package.json", { paths: searchPaths })).version;
   fs.writeFileSync(path.join(out, "build-info.json"), JSON.stringify({
     source_sha256: sourceHash(), built_at: new Date().toISOString(), esbuild: esbuild.version, react,

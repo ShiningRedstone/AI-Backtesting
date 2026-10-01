@@ -54,6 +54,19 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 | AI Discovery | Placeholder: no model is connected | — |
 | Settings | Read-only configuration: cost profile status, engine config, sessions, instruments | config |
 
+## Visual design
+
+The UI is presentation only: the redesign changed styles and markup, not routes, actions, API calls, labels or numbers.
+
+- **Theme.** Dark only (`color-scheme: dark`); the earlier light palette was removed on purpose rather than kept half-working. Tokens (colours, radii, type, icons) live on `:root` in `web/src/styles.css`.
+- **Colour roles.** Near-black surfaces (`--bg`, `--surface`, `--surface-2`, `--surface-3`) with hairline borders. The warm accent (`--accent-*`, `--accent-gradient`) is decorative and appears on at most one "featured" surface per screen (the Dashboard's quick-actions card). Status colours (`--ok`, `--warn`, `--error`, `--info`, `--demo`) are separate from the accent, and every status chip and banner also carries text and an icon, so colour never carries meaning alone.
+- **Components.** The primary action is a silver pill; secondary actions are dark pills; destructive actions use the error colour and are never silver. Inputs are 10px-radius dark fields. `<details>` sections render as "+"/"−" accordions and keep their previous default open/closed state. Numeric table columns are right-aligned with tabular figures. Truncated hashes show the full value on hover. The trades table has a sticky header inside its own scroll area.
+- **Density.** Only the Dashboard uses display-size type and the ambient glow/grid (static CSS, no animation). Work screens keep 14px body and 13px tables, and the builder uses compact fields.
+- **Motion.** Transitions of 150–200ms on hover and focus only; all of them are disabled under `prefers-reduced-motion`. Data is never animated.
+- **Fonts.** Self-hosted under `web/src/fonts/` with their SIL Open Font License texts, then copied by `build.mjs` to `edgelab/web/static/fonts/`; the app makes no third-party requests.
+  - Inter 4.1 `InterVariable.woff2` (weights 100–900, optical-size axis 14–32). It is registered as both `Inter` and `Inter Display`; display headings use `"opsz" 32`, and body text uses single-storey *a* (`cv11`).
+  - JetBrains Mono 2.304 Regular/Medium, used for IDs, hashes, DSL/YAML and numeric inputs, with slashed zero and ligatures off, so `==`, `!=` and `>=` read exactly as typed.
+
 ## Strategy Builder
 
 - **One format.** The builder state *is* the DSL document (`STRATEGY_DSL.md`). There is no UI-specific schema and no frontend serializer: the YAML preview, canonical form and identity are rendered by the backend on every edit (debounced), and the Validate button calls the same validator as the CLI.
@@ -142,7 +155,7 @@ Errors are returned as `{"error": {"kind", "message", "issues"?, "reason"?, "det
 ```bash
 cd web
 npm install            # react, react-dom, esbuild, typescript, @types/react (network needed)
-npm run build          # -> edgelab/web/static/{app.js, styles.css, index.html, build-info.json}
+npm run build          # -> edgelab/web/static/{app.js, styles.css, index.html, build-info.json, fonts/}
 npm run watch          # rebuild on change
 npm run typecheck      # tsc --noEmit
 ```

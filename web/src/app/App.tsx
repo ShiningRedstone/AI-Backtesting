@@ -68,6 +68,13 @@ function StatusDot() {
   );
 }
 
+const BrandMark = () => (
+  <span className="brand-mark" aria-hidden="true">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2.5h4M7 2.5v4.2L3.6 12.4a1 1 0 0 0 .9 1.6h7a1 1 0 0 0 .9-1.6L9 6.7V2.5M5.2 10h5.6" /></svg>
+  </span>
+);
+
 function Toasts() {
   const { toasts, dismiss } = useApp();
   return (
@@ -109,7 +116,7 @@ function ShellBody() {
     <div className={`shell${menu ? " menu-open" : ""}`}>
       <header className="topbar">
         <button className="hamburger" aria-label="menu" aria-expanded={menu} onClick={() => setMenu(!menu)} data-testid="menu-toggle">☰</button>
-        <a className="brand" href={href("/")}>EdgeLab</a>
+        <a className="brand" href={href("/")}><BrandMark /><span className="brand-name">EdgeLab</span></a>
         {demo && <Badge tone="demo">DEMO</Badge>}
         <Search />
         <span className="spacer" />

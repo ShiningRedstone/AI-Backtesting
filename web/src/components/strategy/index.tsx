@@ -137,7 +137,7 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
       {ready.datasets.length > 0 && (
         <TableWrap testId="dataset-select">
           <table>
-            <thead><tr><th /><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Range</th><th>Bars</th>
+            <thead><tr><th /><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Range</th><th className="num">Bars</th>
               <th>Price basis</th><th>Validation</th><th>Costs</th><th>Status</th></tr></thead>
             <tbody>{ready.datasets.map((d) => (
               <tr key={d.dataset_id} className={d.runnable ? "" : "disabled-row"} data-testid={`ds-${d.dataset_id}`}>
@@ -145,7 +145,7 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
                   checked={pick === d.dataset_id} onChange={() => setPick(d.dataset_id)} /></td>
                 <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}</td>
                 <td>{d.instrument}</td><td>{d.asset_type}</td><td>{d.provider}</td><td>{d.timeframe}</td>
-                <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td><td>{fmt(d.n_bars)}</td>
+                <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td><td className="num">{fmt(d.n_bars)}</td>
                 <td>{d.price_basis}</td><td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>
                 <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"}>{d.cost.status}</Badge></td>
                 <td className="small">{d.runnable ? "ready" : d.reasons.map((r) => <div key={r}>{r}</div>)}</td>
@@ -178,7 +178,7 @@ export function BacktestView({ result }: { result: BacktestResult }) {
       <KeyValues rows={[
         ["Run", result.run_id ? <a href={href(`/results/${result.run_id}`)}><Mono>{result.run_id}</Mono></a> : "not recorded"],
         ["Strategy", <Mono>{result.strategy_id}</Mono>], ["Dataset", <Mono>{result.dataset_id}</Mono>],
-        ["Cost profile status", result.cost_status], ["Signals", fmt(result.n_signals)], ["Trades hash", <Mono>{result.trades_hash.slice(0, 16)}…</Mono>],
+        ["Cost profile status", result.cost_status], ["Signals", fmt(result.n_signals)], ["Trades hash", <Mono title={result.trades_hash}>{result.trades_hash.slice(0, 16)}…</Mono>],
         ["Exit reasons", Object.entries(result.exit_reasons).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"],
         ["Skipped signals", Object.entries(result.skipped).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"]]} />
       <MetricsView metrics={result.metrics} />

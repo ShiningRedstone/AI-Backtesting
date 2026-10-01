@@ -22,41 +22,54 @@ export function DashboardPage() {
     { label: "Run Single Backtest", to: "/strategies", enabled: s.strategies > 0 && s.datasets > 0,
       why: s.datasets ? "save a strategy first" : "import a dataset first", testId: "qa-backtest" },
   ];
+  const sha = s.code_version.source_sha256;
   return (
     <div className="page">
-      <header className="page-head"><h1>Dashboard</h1></header>
-      <div className="grid-cards">
-        <Card title="System status" testId="system-status">
-          <KeyValues rows={[
-            ["Backend", <Badge tone="ok">{s.backend}</Badge>],
-            ["Workspace", <>{s.demo ? <Badge tone="demo">demo</Badge> : <Badge>research</Badge>} <span className="small mono">{s.root}</span></>],
-            ["Software version", <Mono>{s.code_version.git_commit?.slice(0, 10) ?? "no git"}{s.code_version.dirty ? " (modified)" : ""}</Mono>],
-            ["Source hash", <Mono>{s.code_version.source_sha256?.slice(0, 12)}</Mono>],
-            ["Frontend build", build ? <span className="small">{shortTime(build.built_at)} · React {build.react}</span> : null],
-            ["Tests", s.test_status ?? <span className="muted">Not available — run <code>python scripts/run_tests.py</code></span>],
-            ["Store", s.store_backend], ["Config hash", <Mono>{s.config_hash.slice(0, 12)}</Mono>]]} />
-        </Card>
-        <Card title="Workspace">
-          <div className="stats">
-            <a href={href("/datasets")}><b data-testid="count-datasets">{s.datasets}</b><span>datasets</span></a>
-            <a href={href("/strategies")}><b data-testid="count-strategies">{s.strategies}</b><span>saved strategies</span></a>
-            <a href={href("/families")}><b>{s.families}</b><span>strategy families</span></a>
-            <a href={href("/variations")}><b>{s.variation_batches}</b><span>variation batches</span></a>
-            <a href={href("/results")}><b>{s.runs}</b><span>recorded runs</span></a>
+      <header className="hero">
+        <h1>Dashboard</h1>
+        <p className="lede">Status of this research workspace and the actions its current contents allow.</p>
+        <div className="hero-meta">
+          {s.demo ? <Badge tone="demo">demo workspace</Badge> : <Badge>research workspace</Badge>}
+          <span className="muted small">Research tool · no live trading · no broker connections</span>
+        </div>
+      </header>
+      <section className="card featured">
+        <div className="split">
+          <div className="split-copy">
+            <h2>Quick actions</h2>
+            <p className="lede">Each action is enabled only when its prerequisites exist in this workspace.</p>
+            <div className="quick">
+              {actions.map((a) => (
+                <Button key={a.label} kind={a.label === "Create Strategy" ? "primary" : "secondary"} disabled={!a.enabled}
+                  title={a.enabled ? undefined : a.why} onClick={() => go(a.to)} testId={a.testId}>{a.label}</Button>
+              ))}
+            </div>
+            {actions.filter((a) => !a.enabled).map((a) => <p key={a.label} className="muted small why">{a.label}: {a.why}.</p>)}
           </div>
-          <KeyValues rows={[["Last run", s.last_run ? <a href={href(`/results/${s.last_run.run_id}`)}><Mono>{String(s.last_run.run_id)}</Mono></a> : "none yet"],
-            ["Last research run (Phase 4)", <span className="muted">Not available — batch research arrives in Phase 4</span>]]} />
-        </Card>
-        <Card title="Quick actions">
-          <div className="quick">
-            {actions.map((a) => (
-              <Button key={a.label} kind={a.label === "Create Strategy" ? "primary" : "secondary"} disabled={!a.enabled}
-                title={a.enabled ? undefined : a.why} onClick={() => go(a.to)} testId={a.testId}>{a.label}</Button>
-            ))}
+          <div className="widget">
+            <h2 className="widget-title">Workspace</h2>
+            <div className="stats">
+              <a href={href("/datasets")}><b data-testid="count-datasets">{s.datasets}</b><span>datasets</span></a>
+              <a href={href("/strategies")}><b data-testid="count-strategies">{s.strategies}</b><span>saved strategies</span></a>
+              <a href={href("/families")}><b>{s.families}</b><span>strategy families</span></a>
+              <a href={href("/variations")}><b>{s.variation_batches}</b><span>variation batches</span></a>
+              <a href={href("/results")}><b>{s.runs}</b><span>recorded runs</span></a>
+            </div>
+            <KeyValues rows={[["Last run", s.last_run ? <a href={href(`/results/${s.last_run.run_id}`)}><Mono>{String(s.last_run.run_id)}</Mono></a> : "none yet"],
+              ["Last research run (Phase 4)", <span className="muted">Not available — batch research arrives in Phase 4</span>]]} />
           </div>
-          {actions.filter((a) => !a.enabled).map((a) => <p key={a.label} className="muted small">{a.label}: {a.why}.</p>)}
-        </Card>
-      </div>
+        </div>
+      </section>
+      <Card title="System status" testId="system-status">
+        <KeyValues rows={[
+          ["Backend", <Badge tone="ok">{s.backend}</Badge>],
+          ["Workspace", <>{s.demo ? <Badge tone="demo">demo</Badge> : <Badge>research</Badge>} <span className="small mono">{s.root}</span></>],
+          ["Software version", <Mono title={s.code_version.git_commit ?? undefined}>{s.code_version.git_commit?.slice(0, 10) ?? "no git"}{s.code_version.dirty ? " (modified)" : ""}</Mono>],
+          ["Source hash", <Mono title={sha ?? undefined}>{sha?.slice(0, 12)}</Mono>],
+          ["Frontend build", build ? <span className="small">{shortTime(build.built_at)} · React {build.react}</span> : null],
+          ["Tests", s.test_status ?? <span className="muted">Not available — run <code>python scripts/run_tests.py</code></span>],
+          ["Store", s.store_backend], ["Config hash", <Mono title={s.config_hash}>{s.config_hash.slice(0, 12)}</Mono>]]} />
+      </Card>
     </div>
   );
 }
@@ -100,7 +113,7 @@ export function LibraryPage() {
       ) : (
         <TableWrap testId="library-table">
           <table>
-            <thead><tr><th>Name</th><th>Strategy ID</th><th>Family</th><th>TF</th><th>Created</th><th>Parent</th><th>Params</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Strategy ID</th><th>Family</th><th>TF</th><th>Created</th><th>Parent</th><th className="num">Params</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.strategy_id} className={r.archived ? "disabled-row" : ""} data-testid={`row-${r.strategy_id}`}>
                 <td><a href={href(`/strategies/${r.strategy_id}`)}>{r.name}</a></td>
@@ -108,7 +121,7 @@ export function LibraryPage() {
                 <td><a href={href(`/families/${r.family_id}`)}>{r.family_id}</a></td>
                 <td>{r.timeframe}</td><td className="small">{shortTime(r.created_at)}</td>
                 <td>{r.parent_strategy_id ? <a href={href(`/strategies/${r.parent_strategy_id}`)}><Mono>{r.parent_strategy_id}</Mono></a> : <span className="muted">—</span>}</td>
-                <td>{r.n_parameters}</td>
+                <td className="num">{r.n_parameters}</td>
                 <td>{r.archived ? <Badge tone="warn">archived</Badge> : <Badge tone="ok">valid</Badge>} <Badge>{METHOD_LABEL[r.generation_method] ?? r.generation_method}</Badge></td>
                 <td className="row-actions">
                   <a href={href(`/strategies/${r.strategy_id}`)}>Open</a>

@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Phase 3.5 follow-up: web UI visual redesign (presentation only)
+
+| Item | Status |
+|---|---|
+| Dark-first design tokens, restyled shell, components and all pages; Dashboard hero and featured quick-actions card; status chips and banners with text and icons | IMPLEMENTED, TESTED (browser) |
+| Self-hosted Inter 4.1 (variable, opsz) and JetBrains Mono 2.304 with OFL texts; `build.mjs` copies `web/src/fonts/` to `edgelab/web/static/fonts/` | IMPLEMENTED, TESTED |
+| Markup-only additions: brand mark, empty-state icon tile, `num` class on numeric columns, full-value `title` on truncated hashes, `TableWrap className`, `Mono title` | IMPLEMENTED |
+| Light colour scheme | REMOVED (dark only, deliberate) |
+| Backend, API, services, calculations, identities, datasets, labels and disclaimers | UNCHANGED |
+
 ## Phase 3.5: Strategy Builder & research UI
 
 | Item | Status |

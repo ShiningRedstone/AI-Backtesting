@@ -4,7 +4,7 @@ import type { DatasetRow } from "../api/types";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, IconTile, KeyValues, Loading, Mono, Select, TableWrap, TextInput, fmt } from "../components/ui";
 
 interface ConfigView {
   demo: boolean; root: string; config_hash: string; backtest: Record<string, unknown>;
@@ -32,13 +32,13 @@ export function DatasetsPage() {
         <Empty>No datasets. Import one (existing Phase 2 pipeline) — EdgeLab never fabricates market data.</Empty>
       ) : (
         <TableWrap testId="datasets-table"><table>
-          <thead><tr><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Start</th><th>End</th><th>Bars</th>
+          <thead><tr><th>Dataset</th><th>Instrument</th><th>Asset</th><th>Provider</th><th>TF</th><th>Start</th><th>End</th><th className="num">Bars</th>
             <th>Validation</th><th>Price basis</th><th>Spread</th><th>Costs</th><th /></tr></thead>
           <tbody>{data.map((d) => (
             <tr key={d.dataset_id}>
               <td><Mono>{d.dataset_id}</Mono>{d.synthetic && <> <Badge tone="demo">synthetic</Badge></>}</td>
               <td>{d.instrument}</td><td>{d.asset_type}</td><td>{d.provider}</td><td>{d.timeframe}</td>
-              <td className="small">{d.start?.slice(0, 16)}</td><td className="small">{d.end?.slice(0, 16)}</td><td>{fmt(d.n_bars)}</td>
+              <td className="small">{d.start?.slice(0, 16)}</td><td className="small">{d.end?.slice(0, 16)}</td><td className="num">{fmt(d.n_bars)}</td>
               <td><Badge tone={d.quality_status === "FAIL" ? "error" : d.quality_status === "WARN" ? "warn" : "ok"}>{d.quality_status}</Badge></td>
               <td>{d.price_basis}</td><td>{d.has_spread ? "per bar" : "none"}</td>
               <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"} title={d.cost.reason}>{d.cost.status}</Badge></td>
@@ -66,9 +66,9 @@ function DatasetDetail({ id }: { id: string }) {
         .map(([k, v]) => [k, <span className="mono small">{fmt(v)}</span>])} />
       <KeyValues rows={[["Manifest hash", <Mono>{data.manifest_hash}</Mono>], ["Derived datasets", data.derived_datasets.join(", ") || "none"]]} />
       {checks.length > 0 && <TableWrap><table>
-        <thead><tr><th>Validation check</th><th>Status</th><th>Count</th><th>Detail</th></tr></thead>
+        <thead><tr><th>Validation check</th><th>Status</th><th className="num">Count</th><th>Detail</th></tr></thead>
         <tbody>{checks.map((c) => <tr key={c.name}><td>{c.name}</td><td><Badge tone={c.status === "FAIL" ? "error" : c.status === "WARN" ? "warn" : "ok"}>{c.status}</Badge></td>
-          <td>{fmt(c.count)}</td><td className="small">{c.detail}</td></tr>)}</tbody>
+          <td className="num">{fmt(c.count)}</td><td className="small">{c.detail}</td></tr>)}</tbody>
       </table></TableWrap>}
     </Card>
   );
@@ -129,7 +129,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 export function ResearchPage() {
   return (
     <div className="page" data-testid="research-page">
-      <header className="page-head"><h1>Research Engine</h1><Badge tone="info">planned · Phase 4</Badge></header>
+      <header className="page-head"><div className="page-head-title"><IconTile icon="planned" /><h1>Research Engine</h1></div><Badge tone="info">planned · Phase 4</Badge></header>
       <Banner tone="info">Batch research is coming in Phase 4. Nothing on this page runs yet.</Banner>
       <div className="flow" aria-label="planned research flow">
         <div className="flow-step done">Strategy / Variation batch<span>available now</span></div>
@@ -152,7 +152,7 @@ export function ResearchPage() {
 export function DiscoveryPage() {
   return (
     <div className="page" data-testid="discovery-page">
-      <header className="page-head"><h1>AI Strategy Discovery</h1><Badge tone="info">planned · later phase</Badge></header>
+      <header className="page-head"><div className="page-head-title"><IconTile icon="planned" /><h1>AI Strategy Discovery</h1></div><Badge tone="info">planned · later phase</Badge></header>
       <Banner tone="info">Coming in a later phase. No AI model is connected, and none is called anywhere in EdgeLab.</Banner>
       <Card title="How AI proposals will be handled">
         <div className="flow">
@@ -193,8 +193,8 @@ export function SettingsPage() {
         <Card title="Sessions"><TableWrap><table><thead><tr><th>Name</th><th>Timezone</th><th>Start</th><th>End</th></tr></thead>
           <tbody>{Object.values(c.sessions).map((s) => <tr key={s.name}><td>{s.name}</td><td>{s.timezone}</td><td>{s.start}</td><td>{s.end}</td></tr>)}</tbody>
         </table></TableWrap></Card>
-        <Card title="Instruments"><TableWrap><table><thead><tr><th>Symbol</th><th>Class</th><th>Tick</th><th>Point value</th><th>Calendar</th></tr></thead>
-          <tbody>{Object.entries(c.instruments).map(([k, v]) => <tr key={k}><td>{k}</td><td>{v.asset_class}</td><td>{v.tick_size}</td><td>{v.point_value}</td><td>{v.calendar}</td></tr>)}</tbody>
+        <Card title="Instruments"><TableWrap><table><thead><tr><th>Symbol</th><th>Class</th><th className="num">Tick</th><th className="num">Point value</th><th>Calendar</th></tr></thead>
+          <tbody>{Object.entries(c.instruments).map(([k, v]) => <tr key={k}><td>{k}</td><td>{v.asset_class}</td><td className="num">{v.tick_size}</td><td className="num">{v.point_value}</td><td>{v.calendar}</td></tr>)}</tbody>
         </table></TableWrap></Card>
       </div>
       {c.demo && <p className="muted small">{SYNTHETIC_NOTICE}</p>}
