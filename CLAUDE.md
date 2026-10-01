@@ -57,6 +57,8 @@ independent); an unused protocol is superseded (`create_protocol(supersedes=)`, 
 Prop profiles v4 (metadata-only correction). Manifest FM_3B0B01CFC81AB15E (10,000) verified reproducible.
 ADR-68: frozen-manifest campaign launcher `research/campaign.py` (`research campaign-freeze|check|run|status`): one strategy = one
 cell = one trial through the protocol-gated search, workers 1, discovery only, resumable; preflight is read-only.
+ADR-69: desktop "Research runs" page (`web/src/pages/Runs.tsx`, `/api/campaigns*`) launches/monitors frozen campaigns by family scope
+through the same runner (`campaign.run_scope` -> `run_search(include=)`); run history in `<data>/campaigns/<CMP>/runs/`.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

@@ -25,6 +25,15 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Packaged Windows build + update on Windows | NOT VERIFIED HERE (must be built and exercised on Windows) |
 | Publishing a GitHub Release | NOT DONE (maintainer action) |
 | Code signing, delta updates, installer | NOT IMPLEMENTED |
+## Desktop Research Runs (ADR-69)
+
+| Item | Status |
+|---|---|
+| Research runs page: frozen campaigns, governance header, family scope selector (catalog order, Select all / Clear all, counts), run / resume, live progress, cancel, run history, stored results by family and strategy (links to the existing run report) | IMPLEMENTED, TESTED (synthetic workspace; browser smoke) |
+| `run_search(include=, on_cell=)` run scope and progress hook (sequential; defaults unchanged) | IMPLEMENTED, TESTED |
+| Campaign background jobs in the existing JobManager; lock-free status; restart reconciliation of run records | IMPLEMENTED, TESTED |
+| Durable run records `<data>/campaigns/<CMP>/runs/` | IMPLEMENTED, TESTED |
+
 ## Frozen-manifest discovery campaign launcher (ADR-68)
 
 | Item | Status |

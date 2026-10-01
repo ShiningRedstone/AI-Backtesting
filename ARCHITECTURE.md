@@ -1667,3 +1667,20 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   without ATR (`atr_period: null`) or `exit.no_progress` (flattened); a library copy saved through `save_strategy` would not
   compile. The campaign therefore stores the exact manifest definition; the DSL is unchanged (changing the normal form would
   change definition hashes). Fixing `save_strategy`'s round trip is a separate task.
+
+### ADR-69 Desktop Research Runs (control and presentation layer over the campaign runner)
+- **Entry point:** "Research runs" (nav, and "Run research" on Home) -> `web/src/pages/Runs.tsx` -> `/api/campaigns*`
+  -> `Services` -> `research/campaign.py::run_scope` -> `research/batch.run_search` (the same runner as the CLI
+  `research campaign-run`, which now calls `run_scope` for the whole campaign). No evaluation logic in the UI.
+- **Family scope:** families come from the frozen manifest's catalog (`header.families`, catalog order, never ranked).
+  A scope maps to the manifest rows' own strategy ids; "Select all" = every frozen strategy. `run_search(include=)` executes
+  only the scope's cells of the SAME frozen search; other cells stay `pending`, the batch ends `partial`. Search id, cell ids,
+  trial keys, protocol gate, budget check (counted on the scope's remaining cells) and resume are unchanged.
+- **Background job:** `JobManager.start_campaign` (same one-job-at-a-time rule, service lock, cancel flag; workers 1). The
+  preflight runs under the service lock; the live status is in memory and served lock-free, so polling never waits for
+  the research. Cancel stops between cells; a running cell finishes and is recorded; nothing else is marked done.
+- **Persistence:** authoritative results stay in the workspace store (runs, trades, metrics, prop audit in the run record,
+  search cells, protocol trial ledger). Run history is a durable JSON record per run in
+  `<data>/campaigns/<CMP>/runs/CR_*.json`, rewritten atomically at every step (status, scope, counts, current strategy,
+  errors, timestamps, protocol/manifest/search ids). On app start, records left `preflight`/`running` become
+  `interrupted` (resumable). Provenance for every strategy result is served from the campaign spec + run record.

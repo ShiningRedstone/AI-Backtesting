@@ -19,6 +19,7 @@ export function HomePage() {
           <div className="subtitle small">System facts and stored results. A positive backtest is a historical result under stated assumptions,
             never a verdict that a strategy is profitable.</div></div>
         <div className="actions">
+          <Button kind="primary" onClick={() => go("/runs")} testId="qa-run-research">Run research</Button>
           <Button onClick={() => go("/explorer")}>Strategy explorer</Button>
           <Button onClick={() => go("/dashboard")}>Research dashboard</Button>
           <Button kind="primary" onClick={() => go("/builder?new=1")} testId="qa-create">New strategy</Button>

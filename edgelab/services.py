@@ -625,6 +625,34 @@ class Services:
         from edgelab.research import campaign
         return _jsonable(campaign.status(self, campaign_id))
 
+    # ------------------------------------------------------------ desktop research runs (ADR-69): control layer only
+    def campaigns(self) -> list[dict]:
+        """Frozen campaigns of this workspace with durable progress and latest run (read-only)."""
+        from edgelab.research import campaign
+        return _jsonable(campaign.list_campaigns(self))
+
+    def campaign_detail(self, campaign_id: str) -> dict:
+        from edgelab.research import campaign
+        return _jsonable(campaign.detail(self, campaign_id))
+
+    def campaign_family_results(self, campaign_id: str, family_id: str) -> dict:
+        from edgelab.research import campaign
+        return _jsonable(campaign.family_results(self, campaign_id, family_id))
+
+    def campaign_strategy_result(self, campaign_id: str, strategy_id: str) -> dict:
+        from edgelab.research import campaign
+        return _jsonable(campaign.strategy_result(self, campaign_id, strategy_id))
+
+    def start_campaign_job(self, campaign_id: str, families: list[str] | None = None, max_failures: int = 0) -> dict:
+        """Run a frozen campaign (families=None: all) in the background; the same runner as `campaign-run`."""
+        return _jsonable(self.jobs.start_campaign(campaign_id, families, int(max_failures)))
+
+    def campaign_job(self, job_id: str) -> dict:
+        return _jsonable(self.jobs.campaign_status(job_id))
+
+    def active_job(self) -> dict:
+        return _jsonable({"job": self.jobs.active()})
+
     def validate_search(self, spec: Any) -> dict:
         """Structural check of a search spec (keys, types, values); references are checked by plan."""
         from edgelab.research.search import canonical_search_spec, search_hash, validate_search_spec

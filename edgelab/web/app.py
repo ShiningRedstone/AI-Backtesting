@@ -36,6 +36,8 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
 AI_GEN_ID = re.compile(r"^AIG_[0-9A-F]{12}$")
 AI_PROP_ID = re.compile(r"^AIP_[0-9A-F]{12}$")
 PROTOCOL_ID = re.compile(r"^RP_[0-9A-F]{12}$")
+CAMPAIGN_ID = re.compile(r"^CMP_[0-9A-F]{12}$")
+FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 
 
@@ -108,6 +110,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         from edgelab.prop.rules import PropConfigError
         from edgelab.prop.simulator import PropDataError
         from edgelab.research.jobs import JobConflict
+        from edgelab.research.campaign import CampaignError
         from edgelab.research.ranking import RankingError
         from edgelab.research.search import SearchSpecError
         from edgelab.strategy.compiler import StrategyCompileError
@@ -152,7 +155,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                  (PropDataError, 422, "prop_data",
                   "The stored trades cannot support these account rules honestly; nothing was simulated."),
                  (RankingError, 422, "ranking", "The ranking request was refused."),
-                 (JobConflict, 409, "job_conflict", "Another search job is still active; one runs at a time."),
+                 (JobConflict, 409, "job_conflict", "Another research job is still active; one runs at a time."),
+                 (CampaignError, 422, "campaign", "The campaign request was refused."),
                  (SearchStorageUnsupported, 409, "search_storage_unsupported",
                   "Research searches need the SQLite result store."),
                  (ImportFailed, 422, "import_failed", "The import was refused."),
@@ -648,6 +652,53 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.post("/api/research/jobs/<jid>/cancel")
     def research_job_cancel(jid):
         return jsonify(call(svc.cancel_job, _id(jid, JOB_ID, "job id")))
+
+    # ------------------------------------------------------------------ research runs: frozen campaigns (ADR-69)
+    @app.get("/api/campaigns")
+    def campaigns_list():
+        return jsonify(call(svc.campaigns))
+
+    @app.get("/api/campaigns/active-job")
+    def campaigns_active_job():                     # lock-free: in-memory job table only
+        return jsonify(svc.active_job())
+
+    @app.get("/api/campaigns/<cid>")
+    def campaigns_detail(cid):
+        return jsonify(call(svc.campaign_detail, _id(cid, CAMPAIGN_ID, "campaign id")))
+
+    @app.get("/api/campaigns/<cid>/check")
+    def campaigns_check(cid):
+        return jsonify(call(svc.campaign_check, _id(cid, CAMPAIGN_ID, "campaign id")))
+
+    @app.get("/api/campaigns/<cid>/families/<fid>")
+    def campaigns_family(cid, fid):
+        return jsonify(call(svc.campaign_family_results, _id(cid, CAMPAIGN_ID, "campaign id"),
+                            _id(fid, FAMILY_ID, "family id")))
+
+    @app.get("/api/campaigns/<cid>/strategies/<sid>")
+    def campaigns_strategy(cid, sid):
+        return jsonify(call(svc.campaign_strategy_result, _id(cid, CAMPAIGN_ID, "campaign id"),
+                            _id(sid, STRATEGY_ID, "strategy id")))
+
+    @app.post("/api/campaigns/<cid>/jobs")
+    def campaigns_start(cid):
+        b = body()
+        fams = b.get("families")
+        if fams is not None and (not isinstance(fams, list) or not all(isinstance(f, str) and FAMILY_ID.match(f)
+                                                                       for f in fams)):
+            raise _bad("families must be null (all families) or a list of family ids")
+        mf = b.get("max_failures", 0)
+        if not isinstance(mf, int) or isinstance(mf, bool) or not 0 <= mf <= 1000:
+            raise _bad("max_failures must be an integer 0..1000")
+        return jsonify(call(svc.start_campaign_job, _id(cid, CAMPAIGN_ID, "campaign id"), fams, mf)), 202
+
+    @app.get("/api/campaigns/jobs/<jid>")
+    def campaigns_job(jid):                         # lock-free: never waits for the running research
+        return jsonify(svc.campaign_job(_id(jid, JOB_ID, "job id")))
+
+    @app.post("/api/campaigns/jobs/<jid>/cancel")
+    def campaigns_job_cancel(jid):                  # sets a flag; the running cell finishes, nothing is marked done
+        return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
     @app.get("/api/research/searches")
     def research_searches():

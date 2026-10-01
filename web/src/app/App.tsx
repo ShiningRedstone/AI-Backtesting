@@ -19,6 +19,7 @@ import { ExplorerPage } from "../pages/Explorer";
 import { ControlsPage } from "../pages/Controls";
 import { PipelinePage } from "../pages/Pipeline";
 import { PaperPage } from "../pages/Paper";
+import { RunsPage } from "../pages/Runs";
 import { UpdateDialog, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
@@ -38,6 +39,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     { path: "/variations", label: "Variations", match: "variations", icon: "grid" },
   ] },
   { section: "Research", items: [
+    { path: "/runs", label: "Research runs ▶", match: "runs", icon: "flask" },
     { path: "/research", label: "Experiments", match: "research", icon: "flask" },
     { path: "/results", label: "Results", match: "results", icon: "list" },
     { path: "/compare", label: "Compare", match: "compare", icon: "compare" },
@@ -140,6 +142,7 @@ function Page() {
     case "variations": return <VariationsPage />;
     case "datasets": return <DatasetsPage />;
     case "research": return <ResearchPage />;
+    case "runs": return <RunsPage />;
     case "results": return <ResultsPage />;
     case "prop": return <PropPage />;
     case "compare": return <ComparePage />;

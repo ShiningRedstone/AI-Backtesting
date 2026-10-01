@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from edgelab.core.identity import hash_obj
 
@@ -574,31 +574,315 @@ def check(svc, cid: str) -> dict:
 
 # ======================================================================================== run
 def run(svc, cid: str, *, workers: int = REQUIRED_WORKERS, max_failures: int = 0, _preflight: Mapping | None = None) -> dict:
-    """Preflight, then the protocol-gated search of the frozen spec (resumes; stops after ``max_failures`` failed cells)."""
+    """Preflight, then the protocol-gated search of the frozen spec (resumes; stops after ``max_failures`` failed cells).
+    The whole campaign scope (CLI ``campaign-run``)."""
+    out = run_scope(svc, cid, workers=workers, max_failures=max_failures, _preflight=_preflight, source="cli")
+    return {k: out[k] for k in ("campaign_id", "search_id", "status", "ledger", "complete", "failed_cells",
+                                "n_failed_cells", "note", "run_record_id")}
+
+
+def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int = REQUIRED_WORKERS, max_failures: int = 0,
+              lock=None, cancel: Callable[[], bool] | None = None, on_progress: Callable[[dict], None] | None = None,
+              _preflight: Mapping | None = None, source: str = "cli") -> dict:
+    """Run a family SCOPE (None = every family) of a frozen campaign: preflight, then the SAME frozen search with only the
+    scope's cells executing (``batch.run_search(include=...)``). Out-of-scope cells stay pending for a later run; the
+    search id, cell ids, trial keys and budget accounting are the campaign's own. A durable run record (history) is
+    written to <data>/campaigns/<CMP>/runs/ at every step; the authoritative results are the usual store rows."""
+    from contextlib import nullcontext
     from edgelab.research.batch import run_search
+    guard = lock if lock is not None else nullcontext()
     if workers != REQUIRED_WORKERS:
         raise CampaignError("WORKERS_NOT_ALLOWED", f"this campaign runs with workers={REQUIRED_WORKERS} only", workers=workers)
-    load(svc, cid)                                              # CAMPAIGN_TAMPERED / NOT_FOUND before anything else
-    rep = _preflight or check(svc, cid)
-    if not rep["ready"]:
-        raise CampaignError("PREFLIGHT_FAILED", "preflight failed; nothing was evaluated",
-                            failed=[c for c in rep["checks"] if not c["ok"]])
-    spec = load(svc, cid)
+    spec = load(svc, cid)                                       # CAMPAIGN_TAMPERED / NOT_FOUND before anything else
+    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    ids, fams = scope_ids(header, rows, families)
+    fam_of = {r["strategy_id"]: r["family_id"] for r in rows}
     sid = spec["search"]["search_id"]
+    rec = new_run_record(spec, fams, len(ids), source)
+    rec["all_families"] = families is None
 
-    def stop() -> bool:
-        b = svc.store.get_search_batch(sid) or {}
-        return int(b.get("n_failed") or 0) > max_failures
+    def emit(**kw) -> None:
+        rec.update(kw)
+        rec["updated_at"] = _now()
+        save_run_record(svc, rec)
+        if on_progress is not None:
+            on_progress(dict(rec))
 
-    out = run_search(svc, spec["search"]["spec"], REQUIRED_WORKERS, cancel=stop)
-    led = ledger(svc, spec)
-    failed = [{"strategy_id": c["strategy_id"], "error": c["error"]} for c in svc.store.list_search_cells(sid)
-              if c["status"] == "failed"]
-    return {"campaign_id": cid, "search_id": sid, "status": out["status"], "ledger": led,
-            "complete": led["campaign_trials"] == spec["manifest"]["n_strategies"],
-            "failed_cells": failed[:100], "n_failed_cells": len(failed),
+    emit(status="preflight", phase=f"preflight: verifying {spec['manifest']['n_strategies']:,} frozen strategies, "
+                                   "datasets, protocol and prop profiles (no backtest)")
+    try:
+        if _preflight is None:
+            with guard:
+                _preflight = check(svc, cid)
+        if not _preflight["ready"]:
+            failed = [c for c in _preflight["checks"] if not c["ok"]]
+            emit(status="failed", phase="preflight failed; nothing was evaluated", finished_at=_now(),
+                 errors=[{"check": c["check"], "detail": c["detail"]} for c in failed][:50])
+            raise CampaignError("PREFLIGHT_FAILED", "preflight failed; nothing was evaluated", failed=failed,
+                                run_record_id=rec["run_record_id"])
+        with guard:
+            before = progress(svc, spec, ids)
+        emit(status="running", phase="running", started_at=_now(), totals=before,
+             counts={"completed_this_run": 0, "failed_this_run": 0, "skipped_completed": 0})
+
+        def on_cell(event: str, c: Mapping, k: int, total: int) -> None:
+            cnt = dict(rec["counts"])
+            if event == "start":
+                emit(current={"strategy_id": c["strategy_id"], "family_id": fam_of.get(c["strategy_id"]),
+                              "timeframe": c.get("strategy_timeframe"), "dataset_id": c["dataset_id"],
+                              "index": k + 1, "of": total, "started_at": _now()})
+                return
+            if event == "skip":
+                cnt["skipped_completed"] += 1
+            elif c["_status"] == "completed":
+                cnt["completed_this_run"] += 1
+            else:
+                cnt["failed_this_run"] += 1
+                errs = list(rec["errors"])[-49:] + [{"strategy_id": c["strategy_id"], "error": c.get("_error"),
+                                                     "at": _now()}]
+                rec["errors"] = errs
+            emit(counts=cnt, current=None if event != "done" else rec.get("current"))
+
+        def stop() -> bool:
+            if cancel is not None and cancel():
+                return True
+            with guard:
+                b = svc.store.get_search_batch(sid) or {}
+            return int(b.get("n_failed") or 0) > max_failures
+
+        out = run_search(svc, spec["search"]["spec"], REQUIRED_WORKERS, lock=lock, cancel=stop,
+                         include=None if families is None else set(ids), on_cell=on_cell)
+    except CampaignError:
+        raise
+    except BaseException as exc:                              # infrastructure failure: recorded, never a trial
+        emit(status="failed", phase="stopped by an error", finished_at=_now(),
+             errors=list(rec["errors"])[-49:] + [{"error": f"{type(exc).__name__}: {exc}", "at": _now()}])
+        raise
+    with guard:
+        led = ledger(svc, spec)
+        after = progress(svc, spec, ids)
+        failed = [{"strategy_id": c["strategy_id"], "error": c["error"]} for c in svc.store.list_search_cells(sid)
+                  if c["status"] == "failed"]
+    user_cancel = cancel is not None and cancel()
+    final = ("cancelled" if user_cancel else "stopped_on_failure" if out["status"] == "cancelled"
+             else "completed" if after["remaining"] == 0 else "incomplete")
+    emit(status=final, phase=final, finished_at=_now(), totals=after, current=None, batch_status=out["status"])
+    return {"campaign_id": cid, "search_id": sid, "status": out["status"], "run_status": final, "ledger": led,
+            "scope": after, "complete": led["campaign_trials"] == spec["manifest"]["n_strategies"],
+            "failed_cells": failed[:100], "n_failed_cells": len(failed), "run_record_id": rec["run_record_id"],
             "note": ("failed cells are infrastructure/runtime errors: recorded as failed protocol events, NOT counted as "
                      "trials, retried by the next campaign-run; completed cells are never re-evaluated")}
+
+
+# ======================================================================================== scope / progress / history
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def family_order(header: Mapping, rows: list[Mapping]) -> list[str]:
+    """Families in the manifest catalog's own order (never a ranking)."""
+    order = [f["family_id"] for f in header.get("families") or []]
+    extra = sorted({r["family_id"] for r in rows} - set(order))
+    return [f for f in order if any(r["family_id"] == f for r in rows)] + extra
+
+
+def scope_ids(header: Mapping, rows: list[Mapping], families: list[str] | None) -> tuple[list[str], list[str]]:
+    """(strategy ids, families) of a run scope; None = every family. The frozen ids are used as they are."""
+    allf = family_order(header, rows)
+    if families is None:
+        return [r["strategy_id"] for r in rows], allf
+    fams = list(dict.fromkeys(families))
+    unknown = [f for f in fams if f not in allf]
+    if unknown or not fams:
+        raise CampaignError("UNKNOWN_FAMILY" if unknown else "EMPTY_SCOPE",
+                            "select at least one family of this campaign's manifest", unknown=unknown,
+                            available=allf)
+    want = set(fams)
+    return [r["strategy_id"] for r in rows if r["family_id"] in want], [f for f in allf if f in want]
+
+
+def _cells(svc, spec: Mapping) -> dict[str, dict]:
+    sid = spec["search"]["search_id"]
+    if not svc.store.get_search_batch(sid):
+        return {}
+    return {c["strategy_id"]: c for c in svc.store.list_search_cells(sid, current=True)
+            if c["status"] != "ineligible"}
+
+
+def progress(svc, spec: Mapping, ids: list[str]) -> dict:
+    """Durable progress of a scope from the search's stored cells (the authoritative state)."""
+    cells = _cells(svc, spec)
+    by: dict[str, int] = {}
+    for s in ids:
+        st = (cells.get(s) or {}).get("status", "not_started")
+        by[st] = by.get(st, 0) + 1
+    done = by.get("completed", 0)
+    return {"strategies": len(ids), "completed": done, "failed": by.get("failed", 0),
+            "remaining": len(ids) - done, "by_status": by,
+            "fraction_done": round(done / len(ids), 6) if ids else None}
+
+
+def runs_dir(svc, cid: str) -> Path:
+    return campaigns_dir(svc) / cid / "runs"
+
+
+def new_run_record(spec: Mapping, families: list[str], n: int, source: str) -> dict:
+    import uuid
+    rid = "CR_" + _now()[:19].replace("-", "").replace(":", "").replace("T", "_") + "_" + uuid.uuid4().hex[:6].upper()
+    return {"object": "edgelab.campaign_run", "run_record_id": rid, "campaign_id": campaign_id(spec), "source": source,
+            "search_id": spec["search"]["search_id"], "protocol_id": spec["protocol"]["protocol_id"],
+            "protocol_version": spec["protocol"]["protocol_version"], "manifest_id": spec["manifest"]["manifest_id"],
+            "families": list(families), "all_families": None, "n_scope": n, "created_at": _now(), "started_at": None,
+            "finished_at": None, "updated_at": None, "status": "created", "phase": "", "current": None,
+            "counts": {"completed_this_run": 0, "failed_this_run": 0, "skipped_completed": 0}, "totals": None,
+            "errors": [], "workers": REQUIRED_WORKERS, "holdout": "disabled"}
+
+
+def save_run_record(svc, rec: Mapping) -> None:
+    d = runs_dir(svc, rec["campaign_id"])
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / (rec["run_record_id"] + ".json.tmp")
+    tmp.write_text(json.dumps(rec, indent=1, sort_keys=True, default=str))
+    tmp.replace(d / (rec["run_record_id"] + ".json"))
+
+
+def run_records(svc, cid: str) -> list[dict]:
+    d = runs_dir(svc, cid)
+    out = []
+    for f in sorted(d.glob("CR_*.json")) if d.is_dir() else []:
+        try:
+            out.append(json.loads(f.read_text()))
+        except (OSError, ValueError):
+            continue
+    return sorted(out, key=lambda r: r.get("created_at") or "", reverse=True)
+
+
+def reconcile_run_records(svc) -> list[str]:
+    """Run records left 'preflight'/'running' by a process that is gone -> 'interrupted' (resumable)."""
+    fixed = []
+    root = campaigns_dir(svc)
+    for d in sorted(root.glob("CMP_*")) if root.is_dir() else []:
+        for rec in run_records(svc, d.name):
+            if rec.get("status") in ("created", "preflight", "running"):
+                rec.update(status="interrupted", phase="interrupted (the app or process stopped); resumable",
+                           current=None, updated_at=_now())
+                save_run_record(svc, rec)
+                fixed.append(rec["run_record_id"])
+    return fixed
+
+
+def list_campaigns(svc) -> list[dict]:
+    """Every frozen campaign in the workspace with its durable progress and latest run (read-only)."""
+    out = []
+    root = campaigns_dir(svc)
+    for d in sorted(root.glob("CMP_*")) if root.is_dir() else []:
+        try:
+            spec = load(svc, d.name)
+        except CampaignError as exc:
+            out.append({"campaign_id": d.name, "error": exc.to_dict()})
+            continue
+        ids = spec["search"]["spec"]["strategies"]["ids"]
+        recs = run_records(svc, d.name)
+        out.append({**summary(spec), "progress": progress(svc, spec, ids), "n_runs": len(recs),
+                    "latest_run": recs[0] if recs else None})
+    return out
+
+
+def summary(spec: Mapping) -> dict:
+    """Governance header of a campaign (what controls every run of it)."""
+    ex = spec["execution"]
+    return {"campaign_id": campaign_id(spec), "created_from": "frozen campaign spec", "stage": spec["stage"],
+            "manifest": {k: spec["manifest"][k] for k in ("manifest_id", "n_strategies", "strategies_sha256",
+                                                          "factory_version", "variation_space_version")},
+            "protocol": dict(spec["protocol"]), "search_id": spec["search"]["search_id"],
+            "discovery": {"trading_dates": spec["discovery"]["trading_dates"], "period": spec["discovery"]["period"]},
+            "datasets": {tf: {"dataset_id": v["dataset_id"], "content_hash": v["content_hash"]}
+                         for tf, v in sorted(spec["dataset_resolution"]["by_timeframe"].items())},
+            "execution": {"workers": ex["workers"], "max_cells": ex["max_cells"], "holdout": ex["holdout"],
+                          "account": ex["account"], "execution_contract": ex["execution_contract"],
+                          "max_quantity": ex["max_quantity"], "trials_per_strategy": ex["trials_per_strategy"]},
+            "prop_simulation": spec["prop_simulation"], "config_hash": spec["config_hash"]}
+
+
+def detail(svc, cid: str) -> dict:
+    """Campaign governance + per-family scope progress (catalog order) + run history."""
+    spec = load(svc, cid)
+    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    cells = _cells(svc, spec)
+    meta = {f["family_id"]: f for f in header.get("families") or []}
+    fams = []
+    for fid in family_order(header, rows):
+        mine = [r for r in rows if r["family_id"] == fid]
+        tfs: dict[str, int] = {}
+        for r in mine:
+            tf = str(r["definition"]["timeframe"])
+            tfs[tf] = tfs.get(tf, 0) + 1
+        by: dict[str, int] = {}
+        for r in mine:
+            st = (cells.get(r["strategy_id"]) or {}).get("status", "not_started")
+            by[st] = by.get(st, 0) + 1
+        m = meta.get(fid, {})
+        fams.append({"family_id": fid, "name": m.get("name", fid), "group": m.get("group"),
+                     "hypothesis": m.get("hypothesis"), "n_strategies": len(mine), "timeframes": tfs,
+                     "completed": by.get("completed", 0), "failed": by.get("failed", 0),
+                     "remaining": len(mine) - by.get("completed", 0)})
+    ids = [r["strategy_id"] for r in rows]
+    return {**summary(spec), "families": fams, "progress": progress(svc, spec, ids), "runs": run_records(svc, cid),
+            "prop_results_available": any(c["status"] == "completed" for c in cells.values()),
+            "note": "family selection is a run scope, not a quality filter; families are listed in catalog order"}
+
+
+HEADLINE_KEYS = ("trade_count", "net_r", "expectancy_r", "profit_factor", "max_drawdown_r", "sample_label")
+
+
+def family_results(svc, cid: str, family_id: str) -> dict:
+    """Stored per-strategy results of one family (manifest order; nothing is re-run, nothing is ranked)."""
+    spec = load(svc, cid)
+    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    mine = [r for r in rows if r["family_id"] == family_id]
+    if not mine:
+        raise CampaignError("UNKNOWN_FAMILY", f"{family_id} is not a family of this campaign")
+    by_tf = spec["dataset_resolution"]["by_timeframe"]
+    cells = _cells(svc, spec)
+    out = []
+    for r in mine:
+        c = cells.get(r["strategy_id"]) or {}
+        head = json.loads(c["headline_json"]) if c.get("headline_json") else {}
+        tf = str(r["definition"]["timeframe"])
+        out.append({"strategy_id": r["strategy_id"], "logic_hash": r["logic_hash"], "name": r["definition"].get("name"),
+                    "timeframe": tf, "dataset_id": by_tf.get(tf, {}).get("dataset_id"),
+                    "status": c.get("status", "not_started"), "run_id": c.get("run_id"), "error": c.get("error"),
+                    "trades_hash": c.get("trades_hash"), "headline": {k: head.get(k) for k in HEADLINE_KEYS}})
+    return {"campaign_id": cid, "family_id": family_id, "n": len(out), "strategies": out,
+            "note": "historical results under the campaign's stated assumptions, in manifest order (not ranked)"}
+
+
+def strategy_result(svc, cid: str, strategy_id: str) -> dict:
+    """One strategy's stored result with full provenance (base metrics + prop audit; nothing is re-run)."""
+    spec = load(svc, cid)
+    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    row = next((r for r in rows if r["strategy_id"] == strategy_id), None)
+    if row is None:
+        raise CampaignError("UNKNOWN_STRATEGY", f"{strategy_id} is not in this campaign")
+    c = _cells(svc, spec).get(strategy_id) or {}
+    out = {"campaign_id": cid, "strategy_id": strategy_id, "family_id": row["family_id"], "status": c.get("status", "not_started"),
+           "error": c.get("error"), "run_id": c.get("run_id"),
+           "provenance": {"protocol_id": spec["protocol"]["protocol_id"], "protocol_version": spec["protocol"]["protocol_version"],
+                          "campaign_id": cid, "search_id": spec["search"]["search_id"],
+                          "manifest_id": spec["manifest"]["manifest_id"], "strategies_sha256": spec["manifest"]["strategies_sha256"],
+                          "logic_hash": row["logic_hash"], "definition_hash": row["definition_hash"],
+                          "config_hash": spec["config_hash"], "account": spec["execution"]["account"],
+                          "execution_contract": spec["execution"]["execution_contract"],
+                          "prop_profiles": spec["prop_simulation"]["profiles"]}}
+    if c.get("run_id") and svc.store.has_run(c["run_id"]):
+        rec, trades = svc.store.load_run(c["run_id"])
+        out.update({"dataset": rec.get("dataset"), "metrics": rec.get("metrics") or rec.get("headline_metrics"),
+                    "trades_hash": rec.get("trades_hash"), "n_trades": int(len(trades)), "prop": rec.get("prop"),
+                    "run_status": rec.get("status"), "created_at": rec.get("created_at")})
+        out["provenance"].update(dataset_id=(rec.get("dataset") or {}).get("dataset_id"),
+                                 dataset_content_hash=(rec.get("dataset") or {}).get("content_hash"))
+    return out
 
 
 def status(svc, cid: str) -> dict:

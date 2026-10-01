@@ -55,6 +55,19 @@ class Job:
                 "cancel_requested": self.cancel_requested.is_set()}
 
 
+class CampaignJob(Job):
+    """A frozen-campaign run (ADR-69): the campaign's own preflight + its frozen search, scoped to selected families."""
+
+    def __init__(self, job_id: str, campaign_id: str, search_id: str, families: list[str] | None):
+        super().__init__(job_id, search_id, {})
+        self.kind, self.campaign_id, self.families = "campaign", campaign_id, families
+        self.live: dict = {"status": "queued", "phase": "queued - starting the background worker"}
+
+    def snapshot(self) -> dict:
+        return {**super().snapshot(), "kind": "campaign", "campaign_id": self.campaign_id,
+                "families": self.families, "live": dict(self.live)}
+
+
 class JobManager:
     def __init__(self, services, lock):
         self.services, self.lock = services, lock
@@ -72,6 +85,8 @@ class JobManager:
             ids = [b["search_id"] for b in store.list_search_batches() if b["status"] == "running"]
             for sid in ids:
                 store.update_search_batch(sid, status="interrupted", finished_at=_now())
+        from edgelab.research.campaign import reconcile_run_records
+        self.interrupted_campaign_runs = reconcile_run_records(self.services)
         return ids
 
     # ------------------------------------------------------------------ jobs
@@ -114,14 +129,74 @@ class JobManager:
         job.finished_at = _now()
         job._set(final)
 
+    # ------------------------------------------------------------------ campaign jobs (ADR-69)
+    def start_campaign(self, campaign_id: str, families: list[str] | None, max_failures: int = 0) -> dict:
+        """Run a frozen campaign (or a family scope of it) in the background; the same one-job-at-a-time rule."""
+        from edgelab.research import campaign as C
+        spec = C.load(self.services, campaign_id)               # refuses unknown / tampered campaigns up front
+        with self.lock:
+            _, header, rows = C.load_manifest(self.services, spec["manifest"]["manifest_id"])
+        C.scope_ids(header, rows, families)                     # refuses unknown families up front
+        with self._mu:
+            if self._active is not None and self._active.state in ACTIVE:
+                raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
+            job = CampaignJob("JOB_" + uuid.uuid4().hex[:12].upper(), campaign_id, spec["search"]["search_id"],
+                              None if families is None else list(families))
+            self._jobs[job.job_id] = job
+            self._active = job
+            self._thread = threading.Thread(target=self._work_campaign, args=(job, max_failures),
+                                            name=f"edgelab-{job.job_id}", daemon=True)
+            self._thread.start()
+        return job.snapshot()
+
+    def _work_campaign(self, job: CampaignJob, max_failures: int) -> None:
+        from edgelab.research import campaign as C
+        job.started_at = _now()
+        job._set("running")
+        job.live = {**job.live, "status": "preflight", "phase": "starting the preflight"}
+
+        def on_progress(rec: dict) -> None:
+            job.live = {**rec, "job_id": job.job_id}
+
+        try:
+            out = C.run_scope(self.services, job.campaign_id, families=job.families, max_failures=max_failures,
+                              lock=self.lock, cancel=job.cancel_requested.is_set, on_progress=on_progress,
+                              source="desktop")
+            final = "cancelled" if out["run_status"] == "cancelled" else "completed"
+        except BaseException as exc:                         # recorded, never swallowed silently
+            job.error = f"{type(exc).__name__}: {exc}"
+            final = "failed"
+            try:
+                with self.lock:
+                    b = self.services.store.get_search_batch(job.search_id)
+                    if b is not None and b["status"] == "running":
+                        self.services.store.update_search_batch(job.search_id, status="failed", finished_at=_now())
+            except Exception as exc2:
+                job.error += f" (and the batch could not be marked failed: {type(exc2).__name__}: {exc2})"
+        job.finished_at = _now()
+        job._set(final)
+
+    def campaign_status(self, job_id: str) -> dict:
+        """Lock-free: the in-memory live record of a campaign job (durable copy: the run record file)."""
+        job = self._get(job_id)
+        if not isinstance(job, CampaignJob):
+            raise KeyError(job_id)
+        return job.snapshot()
+
+    def active(self) -> dict | None:
+        a = self._active
+        return None if a is None else a.snapshot()
+
     def cancel(self, job_id: str) -> dict:
         job = self._get(job_id)
         if job.state in ACTIVE:
             job.cancel_requested.set()
-        return self.status(job_id)
+        return job.snapshot() if isinstance(job, CampaignJob) else self.status(job_id)
 
     def status(self, job_id: str) -> dict:
         job = self._get(job_id)
+        if isinstance(job, CampaignJob):
+            return job.snapshot()
         return {**job.snapshot(), "progress": self.progress(job.search_id)}
 
     def progress(self, search_id: str) -> dict:

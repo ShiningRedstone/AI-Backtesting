@@ -44,7 +44,7 @@ import os
 from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Collection, Mapping
 
 from edgelab.research.search import SearchPlan, SearchSpecError, canonical_search_spec, plan_search
 
@@ -129,17 +129,27 @@ def resolve_workers(canon: Mapping, workers: int | None) -> int:
 
 # ============================================================ runner
 def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None,
-               cancel: Callable[[], bool] | None = None) -> dict:
+               cancel: Callable[[], bool] | None = None, include: Collection[str] | None = None,
+               on_cell: Callable[..., None] | None = None) -> dict:
     """Plan and run a search. `workers` (default: the spec's `workers`) > 1 computes cells in
     worker processes; results are always written by this process in plan order. Optional hooks
     for the background job manager (both default to the plain synchronous behaviour):
       lock   - the service lock; held ONLY around store/library operations, never while a cell's
                backtest runs (`_run_cell` takes it around its own dataset load and run record).
       cancel - checked before each cell starts; once it returns True no new cell starts, the
-               remaining pending cells become `cancelled` and the batch ends `cancelled`."""
+               remaining pending cells become `cancelled` and the batch ends `cancelled`.
+      include - a run SCOPE (strategy ids, sequential only): only these eligible cells execute in this
+               call; every other cell stays `pending` in the same search for a later call, and the batch
+               ends `partial` if any remain. The plan, cell ids, budget accounting and resume are the
+               search's own (a scope never creates another search or another trial key).
+      on_cell - progress hook on_cell(event, cell, index, total): "start" before a cell runs, "done"
+               after it is recorded (status in cell["_status"]), "skip" for an already-completed cell."""
     guard = lock if lock is not None else nullcontext()
     canon = canonical_search_spec(spec)                    # refuses an invalid spec before anything else
     n_workers = resolve_workers(canon, workers)
+    if include is not None and n_workers != 1:
+        raise SearchSpecError("a run scope (include) needs workers 1")
+    scope = None if include is None else set(include)
     store = services.store
     store._require_search_storage()
     with guard:
@@ -160,7 +170,8 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
         budget = getattr(services, "_protocol_budget_check", None)
         if budget is not None and plan.protocol_id:
             budget(plan.protocol_id, [c for c in plan.eligible_cells()
-                                      if not (prior.get(c["cell_id"]) and prior[c["cell_id"]]["status"] == "completed")])
+                                      if (scope is None or c["strategy_id"] in scope)
+                                      and not (prior.get(c["cell_id"]) and prior[c["cell_id"]]["status"] == "completed")])
 
     from edgelab.core.identity import code_version
     counts = {"n_planned": plan.counts["planned"], "n_eligible": plan.counts["eligible"],
@@ -191,6 +202,9 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
     sources = {s["strategy_id"]: s["sources"] for s in plan.strategies}
     period = None if plan.period is None else (plan.period["start"], plan.period["end"])
     eligible = plan.eligible_cells()
+    out_of_scope = [] if scope is None else [c for c in eligible if c["strategy_id"] not in scope]
+    if scope is not None:
+        eligible = [c for c in eligible if c["strategy_id"] in scope]
     pids: set[int] = set()
 
     def record(c: dict, lineage: tuple, outcome: dict) -> None:
@@ -240,7 +254,11 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                     else:
                         lin = _lineage(services.library, c["strategy_id"], sources[c["strategy_id"]])
                 if skip:
+                    if on_cell is not None:
+                        on_cell("skip", c, k, len(eligible))
                     continue
+                if on_cell is not None:
+                    on_cell("start", c, k, len(eligible))
                 try:                                        # the backtest runs WITHOUT the service lock
                     out = services._run_cell(c["strategy_id"], c["dataset_id"], record=True,
                                              parent_strategy_id=lin[0], mutation=lin[1],
@@ -250,6 +268,9 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                 except Exception as exc:                    # recorded per cell, never silently dropped
                     out = {"error": f"{type(exc).__name__}: {exc}"}
                 record(c, lin, out)
+                if on_cell is not None:
+                    on_cell("done", {**c, "_status": "failed" if "error" in out else "completed",
+                                     "_error": out.get("error")}, k, len(eligible))
         else:
             status = _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prior, done,
                                    sources, period, counts, record, cancel_rest, pids)
@@ -257,6 +278,8 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
         with guard:
             store.update_search_batch(sid, status="failed", finished_at=_now())
         raise
+    if status == "completed" and out_of_scope and not all(done(prior.get(c["cell_id"])) for c in out_of_scope):
+        status = "partial"                                  # cells outside this run's scope are still pending
     with guard:
         store.update_search_batch(sid, status=status, finished_at=_now())
         out = search_summary(store, sid)
