@@ -17,7 +17,7 @@ import dataclasses
 import re
 import traceback
 from pathlib import Path
-from typing import Any, Callable
+from typing import Mapping, Any, Callable
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -37,6 +37,7 @@ AI_GEN_ID = re.compile(r"^AIG_[0-9A-F]{12}$")
 AI_PROP_ID = re.compile(r"^AIP_[0-9A-F]{12}$")
 PROTOCOL_ID = re.compile(r"^RP_[0-9A-F]{12}$")
 CAMPAIGN_ID = re.compile(r"^CMP_[0-9A-F]{12}$")
+RUN_RECORD_ID = re.compile(r"^CR_\d{8}_\d{6}_[0-9A-F]{6}$")
 FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 
@@ -435,7 +436,13 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def backtest():
         b = body()
         did = _id(b.get("dataset_id"), SAFE_ID, "dataset id")
-        return jsonify(call(svc.backtest_strategy, strategy_source(b.get("strategy")), did, True))
+        per = b.get("period")                        # ADR-70: optional explicit {start, end}; the protocol gate still decides
+        period = None
+        if per is not None:
+            if not (isinstance(per, Mapping) and isinstance(per.get("start"), str) and isinstance(per.get("end"), str)):
+                raise _bad("period must be {start, end} ISO timestamps")
+            period = (per["start"], per["end"])
+        return jsonify(call(svc.backtest_strategy, strategy_source(b.get("strategy")), did, True, period))
 
     @app.get("/api/results")
     def results():
@@ -687,10 +694,24 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if fams is not None and (not isinstance(fams, list) or not all(isinstance(f, str) and FAMILY_ID.match(f)
                                                                        for f in fams)):
             raise _bad("families must be null (all families) or a list of family ids")
+        sids = b.get("strategy_ids")
+        if sids is not None and (not isinstance(sids, list) or not all(isinstance(x, str) and STRATEGY_ID.match(x)
+                                                                       for x in sids)):
+            raise _bad("strategy_ids must be null or a list of frozen STR_ ids")
+        if fams is not None and sids is not None:
+            raise _bad("give families or strategy_ids, not both")
         mf = b.get("max_failures", 0)
         if not isinstance(mf, int) or isinstance(mf, bool) or not 0 <= mf <= 1000:
             raise _bad("max_failures must be an integer 0..1000")
-        return jsonify(call(svc.start_campaign_job, _id(cid, CAMPAIGN_ID, "campaign id"), fams, mf)), 202
+        return jsonify(call(svc.start_campaign_job, _id(cid, CAMPAIGN_ID, "campaign id"), fams, mf, sids)), 202
+
+    @app.get("/api/campaigns/<cid>/tree")
+    def campaigns_tree(cid):
+        return jsonify(call(svc.campaign_tree, _id(cid, CAMPAIGN_ID, "campaign id")))
+
+    @app.get("/api/campaigns/<cid>/runs/<rid>/scope")
+    def campaigns_run_scope(cid, rid):
+        return jsonify(call(svc.campaign_run_scope, _id(cid, CAMPAIGN_ID, "campaign id"), _id(rid, RUN_RECORD_ID, "run record id")))
 
     @app.get("/api/campaigns/jobs/<jid>")
     def campaigns_job(jid):                         # lock-free: never waits for the running research

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -209,8 +210,9 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
 
     def record(c: dict, lineage: tuple, outcome: dict) -> None:
         """Persist one executed cell (parent only, plan order)."""
+        timing = outcome.get("_timing") or {}
         if "error" in outcome:
-            row = cell_row(c, status="failed", error=outcome["error"])
+            row = cell_row(c, status="failed", error=outcome["error"], **timing)
             counts["n_failed"] += 1
         else:
             run_id = outcome.get("run_id") or services._record_cell(
@@ -220,7 +222,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
             met = outcome["metrics"]
             headline = {k: v for k, v in met.items() if not isinstance(v, (dict, tuple, list))}
             row = cell_row(c, status="completed", run_id=run_id, trades_hash=outcome["result"].trades_hash,
-                           headline_json=_dumps(headline))
+                           headline_json=_dumps(headline), **timing)
         counts["n_evaluated"] += 1
         counts["n_trials"] += 1
         with guard:
@@ -259,6 +261,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                     continue
                 if on_cell is not None:
                     on_cell("start", c, k, len(eligible))
+                t_start, t0 = _now(), time.perf_counter()
                 try:                                        # the backtest runs WITHOUT the service lock
                     out = services._run_cell(c["strategy_id"], c["dataset_id"], record=True,
                                              parent_strategy_id=lin[0], mutation=lin[1],
@@ -267,6 +270,8 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                                              **({} if lock is None else {"lock": lock}))
                 except Exception as exc:                    # recorded per cell, never silently dropped
                     out = {"error": f"{type(exc).__name__}: {exc}"}
+                out["_timing"] = {"started_at": t_start, "finished_at": _now(),
+                                  "duration_s": round(time.perf_counter() - t0, 3)}   # ADR-70: observed, persisted
                 record(c, lin, out)
                 if on_cell is not None:
                     on_cell("done", {**c, "_status": "failed" if "error" in out else "completed",

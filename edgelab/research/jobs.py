@@ -58,14 +58,16 @@ class Job:
 class CampaignJob(Job):
     """A frozen-campaign run (ADR-69): the campaign's own preflight + its frozen search, scoped to selected families."""
 
-    def __init__(self, job_id: str, campaign_id: str, search_id: str, families: list[str] | None):
+    def __init__(self, job_id: str, campaign_id: str, search_id: str, families: list[str] | None,
+                 strategy_ids: list[str] | None = None):
         super().__init__(job_id, search_id, {})
-        self.kind, self.campaign_id, self.families = "campaign", campaign_id, families
+        self.kind, self.campaign_id, self.families, self.strategy_ids = "campaign", campaign_id, families, strategy_ids
         self.live: dict = {"status": "queued", "phase": "queued - starting the background worker"}
 
     def snapshot(self) -> dict:
         return {**super().snapshot(), "kind": "campaign", "campaign_id": self.campaign_id,
-                "families": self.families, "live": dict(self.live)}
+                "families": self.families, "n_strategy_ids": None if self.strategy_ids is None else len(self.strategy_ids),
+                "live": dict(self.live)}
 
 
 class JobManager:
@@ -130,18 +132,20 @@ class JobManager:
         job._set(final)
 
     # ------------------------------------------------------------------ campaign jobs (ADR-69)
-    def start_campaign(self, campaign_id: str, families: list[str] | None, max_failures: int = 0) -> dict:
+    def start_campaign(self, campaign_id: str, families: list[str] | None, max_failures: int = 0,
+                       strategy_ids: list[str] | None = None) -> dict:
         """Run a frozen campaign (or a family scope of it) in the background; the same one-job-at-a-time rule."""
         from edgelab.research import campaign as C
         spec = C.load(self.services, campaign_id)               # refuses unknown / tampered campaigns up front
         with self.lock:
             _, header, rows = C.load_manifest(self.services, spec["manifest"]["manifest_id"])
-        C.scope_ids(header, rows, families)                     # refuses unknown families up front
+        C.scope_ids(header, rows, families, strategy_ids)       # refuses unknown families / ids up front
         with self._mu:
             if self._active is not None and self._active.state in ACTIVE:
                 raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
             job = CampaignJob("JOB_" + uuid.uuid4().hex[:12].upper(), campaign_id, spec["search"]["search_id"],
-                              None if families is None else list(families))
+                              None if families is None else list(families),
+                              None if strategy_ids is None else list(strategy_ids))
             self._jobs[job.job_id] = job
             self._active = job
             self._thread = threading.Thread(target=self._work_campaign, args=(job, max_failures),
@@ -159,7 +163,8 @@ class JobManager:
             job.live = {**rec, "job_id": job.job_id}
 
         try:
-            out = C.run_scope(self.services, job.campaign_id, families=job.families, max_failures=max_failures,
+            out = C.run_scope(self.services, job.campaign_id, families=job.families, strategy_ids=job.strategy_ids,
+                              max_failures=max_failures,
                               lock=self.lock, cancel=job.cancel_requested.is_set, on_progress=on_progress,
                               source="desktop")
             final = "cancelled" if out["run_status"] == "cancelled" else "completed"

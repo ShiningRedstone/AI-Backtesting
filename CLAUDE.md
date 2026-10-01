@@ -59,6 +59,9 @@ ADR-68: frozen-manifest campaign launcher `research/campaign.py` (`research camp
 cell = one trial through the protocol-gated search, workers 1, discovery only, resumable; preflight is read-only.
 ADR-69: desktop "Research runs" page (`web/src/pages/Runs.tsx`, `/api/campaigns*`) launches/monitors frozen campaigns by family scope
 through the same runner (`campaign.run_scope` -> `run_search(include=)`); run history in `<data>/campaigns/<CMP>/runs/`.
+ADR-70: research browser tree (frozen strategy-id scopes), `strategy/presentation.py` (display names / explanations, identity untouched),
+per-cell timing in `search_cells` + data-based ETA (`campaign.estimate_remaining`, "estimating" below 3 observations); the governance
+layer stays strict (windowless / holdout-reaching requests refused); ad-hoc UI paths request the protocol's `discovery_period`.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

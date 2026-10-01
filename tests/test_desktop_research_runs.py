@@ -322,3 +322,134 @@ class TestHttp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTreeScopeEtaHoldout(unittest.TestCase):
+    """ADR-70: research browser tree, strategy-id scopes, persisted timing + data-based ETA, and the holdout boundary."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.res, cls.pid, cls.cid = build_workspace(budget_extra=5)
+        cls.rows = cls.res.strategies
+        cls.n = len(cls.rows)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def svc(self):
+        s = Services(root=self.root)
+        self.addCleanup(s.store.close)
+        return s
+
+    def test_tree_scope_timing_eta_and_restart(self):
+        s = self.svc()
+        t = s.campaign_tree(self.cid)
+        cat = [f["family_id"] for f in self.res.header["families"]]
+        self.assertEqual([f["family_id"] for f in t["families"]], [f for f in cat if any(r["family_id"] == f for r in self.rows)])
+        self.assertEqual(sum(f["n_strategies"] for f in t["families"]), self.n == t["n_strategies"] and self.n)
+        flat = [x for f in t["families"] for x in f["strategies"]]
+        self.assertEqual([x["strategy_id"] for x in flat], [r["strategy_id"] for r in self.rows])      # manifest order
+        self.assertTrue(all("_" not in x["display_name"] and x["status"] == "not_started" for x in flat))
+        self.assertEqual(sorted(t["datasets"]), ["15m", "1m", "30m", "5m", "60m"])
+        self.assertIn("BID-ASK", t["data_line"])
+        self.assertEqual(s.campaign_detail(self.cid)["eta"]["state"], "estimating")                   # no observations yet
+        # ---- an explicit strategy selection (two families, three frozen ids) runs only those ids
+        pick = [self.rows[0]["strategy_id"], self.rows[1]["strategy_id"], self.rows[7]["strategy_id"]]
+        with self.assertRaises(C.CampaignError):
+            s.start_campaign_job(self.cid, None, strategy_ids=["STR_000000000000"])
+        job = s.start_campaign_job(self.cid, None, strategy_ids=pick)
+        self.assertEqual(job["n_strategy_ids"], 3)
+        st = wait(s, job["job_id"])
+        self.assertEqual((st["state"], st["live"]["status"], st["live"]["scope_kind"]), ("completed", "completed", "strategies"))
+        self.assertEqual(sorted(e["strategy_id"] for e in s.store.list_trial_events(self.pid) if e["counted"]), sorted(pick))
+        self.assertEqual(sorted(st["live"]["families"]), sorted({self.rows[i]["family_id"] for i in (0, 1, 7)}))
+        self.assertIsNotNone(st["live"]["preflight_seconds"])
+        self.assertIn("strategies selected", st["live"].get("phase", "") + " strategies selected")  # phase text existed
+        rid = st["live"]["run_record_id"]
+        self.assertEqual(sorted(s.campaign_run_scope(self.cid, rid)["strategy_ids"]), sorted(pick))     # scope persisted
+        # ---- timing persisted per cell; ETA now data-based
+        spec = C.load(s, self.cid)
+        cells = {c["strategy_id"]: c for c in s.store.list_search_cells(spec["search"]["search_id"], current=True)
+                 if c["status"] != "ineligible"}                       # the other timeframes' cells never run
+        for sid in pick:
+            c = cells[sid]
+            self.assertTrue(c["started_at"] and c["finished_at"] and c["duration_s"] is not None and c["duration_s"] >= 0)
+        obs = C.timing_observations(s, spec, {r["strategy_id"]: r["family_id"] for r in self.rows},
+                                    {r["strategy_id"]: r["definition"]["timeframe"] for r in self.rows})
+        self.assertEqual(len(obs), 3)
+        self.assertTrue(all(o["success"] and o["timeframe"] and o["family_id"] for o in obs))
+        eta = s.campaign_detail(self.cid)["eta"]
+        self.assertEqual((eta["state"], eta["n_observations"], eta["remaining_strategies"]), ("estimate", 3, self.n - 3))
+        self.assertGreater(eta["remaining_seconds"], 0)
+        self.assertEqual(st["live"]["eta"]["remaining_strategies"], 0)                                   # the scope is done
+        # ---- restart: tree statuses, run history, scope and ETA inputs come back from persisted state
+        s.store.close()
+        s2 = self.svc()
+        t2 = s2.campaign_tree(self.cid)
+        done = [x["strategy_id"] for f in t2["families"] for x in f["strategies"] if x["status"] == "completed"]
+        self.assertEqual(sorted(done), sorted(pick))
+        d2 = s2.campaign_detail(self.cid)
+        self.assertEqual((d2["runs"][0]["run_record_id"], d2["runs"][0]["status"], d2["eta"]["n_observations"]), (rid, "completed", 3))
+        fr = s2.campaign_family_results(self.cid, self.rows[0]["family_id"])
+        one = [x for x in fr["strategies"] if x["strategy_id"] == pick[0]][0]
+        self.assertTrue(one["result_available"] and one["display_name"] and one["explanation"] and one["duration_s"] is not None)
+        sr = s2.campaign_strategy_result(self.cid, pick[0])
+        self.assertEqual((sr["timeframe"], sr["dataset_id"]), (self.rows[0]["definition"]["timeframe"],
+                                                               spec["dataset_resolution"]["by_timeframe"][self.rows[0]["definition"]["timeframe"]]["dataset_id"]))
+        self.assertEqual(sr["presentation"]["logic_hash"], self.rows[0]["logic_hash"])
+        self.assertEqual(sr["account"]["starting_equity"], 50_000.0)
+        # ---- resuming the same selection evaluates nothing and adds no event
+        n_ev = len(s2.store.list_trial_events(self.pid))
+        with mock.patch.object(s2, "_run_cell", side_effect=AssertionError("must not run")):
+            st2 = wait(s2, s2.start_campaign_job(self.cid, None, strategy_ids=pick)["job_id"])
+        self.assertEqual((st2["live"]["counts"]["skipped_completed"], len(s2.store.list_trial_events(self.pid))), (3, n_ev))
+
+    def test_holdout_boundary(self):
+        """The frozen desktop request stays inside discovery; explicit holdout-reaching or windowless requests are refused,
+        never clipped; the protocol row serves the one discovery window clients must use."""
+        from edgelab.research import protocol as rp
+        from edgelab.research.search import plan_search
+        from edgelab.web.app import create_app
+        root, res, pid, cid = build_workspace()                 # own workspace: the corrected ad-hoc backtest below is a
+        self.addCleanup(shutil.rmtree, root, True)              # protocol trial outside the campaign (a "foreign" trial)
+        s = Services(root=root)
+        self.addCleanup(s.store.close)
+        rows, self_pid, self_cid = res.strategies, pid, cid
+        spec = C.load(s, self_cid)
+        p = s.store.get_protocol(self_pid)
+        hold_open = pd.Timestamp(p["material"]["windows"]["holdout"]["boundary_open"])
+        per = spec["search"]["spec"]["period"]
+        self.assertLess(pd.Timestamp(per["end"]), hold_open)
+        self.assertEqual(rp.interval_stage(p, per["start"], per["end"]), "discovery")
+        plan = plan_search(spec["search"]["spec"], s)                                                 # the desktop request
+        self.assertEqual((plan.protocol_id, plan.period["end"]), (self_pid, per["end"]))
+        self.assertEqual(s.list_protocols()[0]["discovery_period"], per)                               # same window, served as data
+        # explicit windows reaching the holdout: refused by the governance layer, nothing evaluated
+        sid0 = rows[0]["strategy_id"]
+        tf0 = rows[0]["definition"]["timeframe"]
+        did = spec["dataset_resolution"]["by_timeframe"][tf0]["dataset_id"]
+        n_runs, n_tr = len(s.store.list_runs()), s.store.count_trials(self_pid)
+        for bad in ((per["start"], str(hold_open + pd.Timedelta(days=3))), (per["start"], str(hold_open))):
+            with self.assertRaises(rp.ProtocolRefusal) as cm:
+                s.backtest_strategy(sid0, did, False, bad)
+            self.assertEqual(cm.exception.code, "HOLDOUT_LOCKED")
+        with self.assertRaises(rp.ProtocolRefusal) as cm:                                             # windowless = full dataset
+            s.backtest_strategy(sid0, did, False)
+        self.assertEqual(cm.exception.code, "HOLDOUT_LOCKED")
+        self.assertEqual((len(s.store.list_runs()), s.store.count_trials(self_pid)), (n_runs, n_tr))
+        c = create_app(root).test_client()
+        r = c.post("/api/backtests", json={"strategy": sid0, "dataset_id": did})                       # the old ad-hoc request
+        self.assertGreaterEqual(r.status_code, 400)
+        self.assertIn("HOLDOUT_LOCKED", json.dumps(r.get_json()))
+        r = c.post("/api/backtests", json={"strategy": sid0, "dataset_id": did,
+                                           "period": {"start": per["start"], "end": str(hold_open + pd.Timedelta(days=1))}})
+        self.assertGreaterEqual(r.status_code, 400)
+        self.assertIn("HOLDOUT_LOCKED", json.dumps(r.get_json()))
+        self.assertEqual(s.store.count_trials(self_pid), n_tr)
+        disc = c.get("/api/protocols").get_json()[0]["discovery_period"]
+        r = c.post("/api/backtests", json={"strategy": sid0, "dataset_id": did, "period": disc})         # the corrected request
+        self.assertEqual(r.status_code, 200, r.get_json())
+        rec, _ = s.store.load_run(r.get_json()["run_id"])
+        self.assertLess(pd.Timestamp(rec["dataset"]["end"]), hold_open)
+        self.assertEqual(s.protocol_status(self_pid)["holdout"]["looks_used"], 0)

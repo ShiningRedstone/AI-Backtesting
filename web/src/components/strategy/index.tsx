@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
-import type { BacktestResult, Change, DatasetRow, Readiness, VariantRow, VariationPreview, VariationResult } from "../../api/types";
+import type { ProtocolRecordRow, BacktestResult, Change, DatasetRow, Readiness, VariantRow, VariationPreview, VariationResult } from "../../api/types";
 import { href } from "../../app/router";
 import { useApp } from "../../app/context";
 import type { ParamDecl, StrategyDoc } from "../../dsl/types";
@@ -112,6 +112,11 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [runErr, setRunErr] = useState<ApiError | null>(null);
+  const [protocol, setProtocol] = useState<ProtocolRecordRow | null>(null);
+  useEffect(() => {                                   // ADR-70: the governed window comes from the protocol record (data)
+    api.get<ProtocolRecordRow[]>("/api/protocols").then((rows) => setProtocol(rows.find((p) => p.status === "ACTIVE") ?? null))
+      .catch(() => setProtocol(null));
+  }, []);
   useEffect(() => {
     api.post<Readiness>("/api/backtests/readiness", { strategy }).then((r) => {
       setReady(r); setErr(null);
@@ -125,7 +130,10 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
   const anyRunnable = ready.datasets.some((d) => d.runnable);
   const run = async () => {
     setRunning(true); setRunErr(null); setResult(null);
-    try { setResult(await api.post<BacktestResult>("/api/backtests", { strategy, dataset_id: pick })); }
+    try {
+      const period = protocol?.discovery_period;        // explicit discovery window under a protocol; never the holdout
+      setResult(await api.post<BacktestResult>("/api/backtests", { strategy, dataset_id: pick, ...(period ? { period } : {}) }));
+    }
     catch (e) { setRunErr(e as ApiError); }
     finally { setRunning(false); }
   };
@@ -133,6 +141,9 @@ export function BacktestPanel({ strategy }: { strategy: string | StrategyDoc }) 
     <div className="backtest" data-testid="backtest-panel">
       <p className="muted small">One causality-checked run through the existing engine (Phase 1), recorded in the run registry with status IN_SAMPLE.
         Strategy timeframe: <b>{ready.strategy_timeframe ?? "?"}</b>. Only validated, timeframe-compatible datasets with configured costs can be selected.</p>
+      {protocol && <p className="small" data-testid="bt-protocol-window">Research protocol <Mono>{protocol.protocol_id}</Mono> governs this instrument:
+        the run uses its <b>discovery window</b> {protocol.discovery_trading_dates?.join(" → ")} and counts as a protocol trial;
+        the holdout {protocol.holdout_trading_dates?.join(" → ")} stays locked.</p>}
       {!ready.datasets.length && (
         <Banner tone="warn" testId="no-datasets"><b>No compatible validated dataset available.</b> Import a dataset first
           (<a href={href("/datasets")}>Datasets</a>).</Banner>)}

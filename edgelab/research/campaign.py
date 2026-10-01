@@ -581,7 +581,8 @@ def run(svc, cid: str, *, workers: int = REQUIRED_WORKERS, max_failures: int = 0
                                 "n_failed_cells", "note", "run_record_id")}
 
 
-def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int = REQUIRED_WORKERS, max_failures: int = 0,
+def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids: list[str] | None = None,
+              workers: int = REQUIRED_WORKERS, max_failures: int = 0,
               lock=None, cancel: Callable[[], bool] | None = None, on_progress: Callable[[dict], None] | None = None,
               _preflight: Mapping | None = None, source: str = "cli") -> dict:
     """Run a family SCOPE (None = every family) of a frozen campaign: preflight, then the SAME frozen search with only the
@@ -595,11 +596,17 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int 
         raise CampaignError("WORKERS_NOT_ALLOWED", f"this campaign runs with workers={REQUIRED_WORKERS} only", workers=workers)
     spec = load(svc, cid)                                       # CAMPAIGN_TAMPERED / NOT_FOUND before anything else
     _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
-    ids, fams = scope_ids(header, rows, families)
+    ids, fams = scope_ids(header, rows, families, strategy_ids)
+    whole = families is None and strategy_ids is None
+    by_id = {r["strategy_id"]: r for r in rows}
     fam_of = {r["strategy_id"]: r["family_id"] for r in rows}
     sid = spec["search"]["search_id"]
     rec = new_run_record(spec, fams, len(ids), source)
-    rec["all_families"] = families is None
+    rec["all_families"] = whole
+    rec["scope_kind"] = "all" if whole else "families" if strategy_ids is None else "strategies"
+    save_scope(svc, cid, rec["run_record_id"], ids)                 # the selected scope, persisted once
+    rec["scope_file"] = f"{rec['run_record_id']}.scope.json"
+    remaining_rows = [by_id[i] for i in ids]
 
     def emit(**kw) -> None:
         rec.update(kw)
@@ -608,8 +615,10 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int 
         if on_progress is not None:
             on_progress(dict(rec))
 
-    emit(status="preflight", phase=f"preflight: verifying {spec['manifest']['n_strategies']:,} frozen strategies, "
-                                   "datasets, protocol and prop profiles (no backtest)")
+    import time as _time
+    t_pre = _time.perf_counter()
+    emit(status="preflight", phase=f"Preparing research - {len(ids):,} strategies selected; verifying the frozen campaign "
+                                   f"({spec['manifest']['n_strategies']:,} strategies, datasets, protocol, prop profiles; no backtest)")
     try:
         if _preflight is None:
             with guard:
@@ -622,13 +631,18 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int 
                                 run_record_id=rec["run_record_id"])
         with guard:
             before = progress(svc, spec, ids)
-        emit(status="running", phase="running", started_at=_now(), totals=before,
+            est = estimate(svc, spec, remaining_rows, before)
+        emit(status="running", phase="Running research", started_at=_now(), totals=before, eta=est,
+             preflight_seconds=round(_time.perf_counter() - t_pre, 3),
              counts={"completed_this_run": 0, "failed_this_run": 0, "skipped_completed": 0})
 
         def on_cell(event: str, c: Mapping, k: int, total: int) -> None:
+            from edgelab.strategy.presentation import display_name
             cnt = dict(rec["counts"])
             if event == "start":
+                row = by_id.get(c["strategy_id"], {})
                 emit(current={"strategy_id": c["strategy_id"], "family_id": fam_of.get(c["strategy_id"]),
+                              "display_name": display_name(row) if row else c["strategy_id"],
                               "timeframe": c.get("strategy_timeframe"), "dataset_id": c["dataset_id"],
                               "index": k + 1, "of": total, "started_at": _now()})
                 return
@@ -641,7 +655,13 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int 
                 errs = list(rec["errors"])[-49:] + [{"strategy_id": c["strategy_id"], "error": c.get("_error"),
                                                      "at": _now()}]
                 rec["errors"] = errs
-            emit(counts=cnt, current=None if event != "done" else rec.get("current"))
+            if event == "done":
+                with guard:                                  # progress and ETA from the PERSISTED cells
+                    tot = progress(svc, spec, ids)
+                    est = estimate(svc, spec, remaining_rows, tot)
+                emit(counts=cnt, totals=tot, eta=est, current=None)
+            else:
+                emit(counts=cnt)
 
         def stop() -> bool:
             if cancel is not None and cancel():
@@ -651,7 +671,7 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int 
             return int(b.get("n_failed") or 0) > max_failures
 
         out = run_search(svc, spec["search"]["spec"], REQUIRED_WORKERS, lock=lock, cancel=stop,
-                         include=None if families is None else set(ids), on_cell=on_cell)
+                         include=None if whole else set(ids), on_cell=on_cell)
     except CampaignError:
         raise
     except BaseException as exc:                              # infrastructure failure: recorded, never a trial
@@ -666,7 +686,8 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, workers: int 
     user_cancel = cancel is not None and cancel()
     final = ("cancelled" if user_cancel else "stopped_on_failure" if out["status"] == "cancelled"
              else "completed" if after["remaining"] == 0 else "incomplete")
-    emit(status=final, phase=final, finished_at=_now(), totals=after, current=None, batch_status=out["status"])
+    emit(status=final, phase=final, finished_at=_now(), totals=after, current=None, batch_status=out["status"],
+         eta=estimate(svc, spec, remaining_rows, after))
     return {"campaign_id": cid, "search_id": sid, "status": out["status"], "run_status": final, "ledger": led,
             "scope": after, "complete": led["campaign_trials"] == spec["manifest"]["n_strategies"],
             "failed_cells": failed[:100], "n_failed_cells": len(failed), "run_record_id": rec["run_record_id"],
@@ -687,9 +708,22 @@ def family_order(header: Mapping, rows: list[Mapping]) -> list[str]:
     return [f for f in order if any(r["family_id"] == f for r in rows)] + extra
 
 
-def scope_ids(header: Mapping, rows: list[Mapping], families: list[str] | None) -> tuple[list[str], list[str]]:
-    """(strategy ids, families) of a run scope; None = every family. The frozen ids are used as they are."""
+def scope_ids(header: Mapping, rows: list[Mapping], families: list[str] | None,
+              strategy_ids: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """(strategy ids, families) of a run scope: explicit frozen strategy ids, or whole families, or None = everything.
+    The frozen ids are used exactly as they are (manifest order); unknown ids or families are refused."""
     allf = family_order(header, rows)
+    if strategy_ids is not None:
+        want = set(strategy_ids)
+        known = {r["strategy_id"] for r in rows}
+        unknown = sorted(want - known)
+        if unknown or not want:
+            raise CampaignError("UNKNOWN_STRATEGY" if unknown else "EMPTY_SCOPE",
+                                "select at least one frozen strategy of this campaign's manifest", unknown=unknown[:20],
+                                n_unknown=len(unknown))
+        ids = [r["strategy_id"] for r in rows if r["strategy_id"] in want]
+        fams = sorted({r["family_id"] for r in rows if r["strategy_id"] in want}, key=allf.index)
+        return ids, fams
     if families is None:
         return [r["strategy_id"] for r in rows], allf
     fams = list(dict.fromkeys(families))
@@ -723,6 +757,131 @@ def progress(svc, spec: Mapping, ids: list[str]) -> dict:
             "fraction_done": round(done / len(ids), 6) if ids else None}
 
 
+MIN_OBS = 3            # observations a timing group needs before its median is used
+
+
+def timing_observations(svc, spec: Mapping, fam_of: Mapping[str, str], tf_of: Mapping[str, str]) -> list[dict]:
+    """Persisted per-cell execution durations of this campaign's search (completed cells of every run, current or not)."""
+    sid = spec["search"]["search_id"]
+    if not svc.store.get_search_batch(sid):
+        return []
+    out = []
+    for c in svc.store.list_search_cells(sid):
+        if c.get("duration_s") is None or c["status"] not in ("completed", "failed"):
+            continue
+        out.append({"strategy_id": c["strategy_id"], "family_id": fam_of.get(c["strategy_id"]),
+                    "timeframe": tf_of.get(c["strategy_id"]), "started_at": c.get("started_at"),
+                    "finished_at": c.get("finished_at"), "duration_s": float(c["duration_s"]),
+                    "success": c["status"] == "completed"})
+    return out
+
+
+def _median(xs: list[float]) -> float:
+    xs = sorted(xs)
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+def estimate_remaining(observations: list[Mapping], remaining: list[Mapping], min_obs: int = MIN_OBS) -> dict:
+    """Data-based ETA for `remaining` [{family_id, timeframe}] from observed durations (workers = 1, so a plain sum).
+    Each remaining strategy uses the median of the most specific group with >= min_obs observations:
+    (family, timeframe) -> timeframe -> all. Fewer than min_obs observations in total -> state 'estimating' (no number)."""
+    ok = [o for o in observations if o.get("success") and o.get("duration_s") is not None]
+    base = {"state": "estimating", "n_observations": len(ok), "min_observations": min_obs, "workers": 1,
+            "remaining_strategies": len(remaining), "remaining_seconds": None, "basis": None,
+            "note": "estimate from observed execution durations of this campaign; not an exact completion time"}
+    if len(ok) < min_obs or not remaining:
+        if not remaining:
+            base.update(state="estimate", remaining_seconds=0.0, basis={"all": {"n": len(ok)}})
+        return base
+    by_ft: dict[tuple, list[float]] = {}
+    by_tf: dict[str, list[float]] = {}
+    for o in ok:
+        by_ft.setdefault((o.get("family_id"), o.get("timeframe")), []).append(o["duration_s"])
+        by_tf.setdefault(o.get("timeframe"), []).append(o["duration_s"])
+    overall = _median([o["duration_s"] for o in ok])
+    total = 0.0
+    used = {"family_timeframe": 0, "timeframe": 0, "all": 0}
+    for r in remaining:
+        k = (r.get("family_id"), r.get("timeframe"))
+        if len(by_ft.get(k, [])) >= min_obs:
+            total += _median(by_ft[k])
+            used["family_timeframe"] += 1
+        elif len(by_tf.get(r.get("timeframe"), [])) >= min_obs:
+            total += _median(by_tf[r.get("timeframe")])
+            used["timeframe"] += 1
+        else:
+            total += overall
+            used["all"] += 1
+    base.update(state="estimate", remaining_seconds=round(total, 1),
+                basis={"groups_used": used, "overall_median_s": round(overall, 3),
+                       "median_by_timeframe_s": {tf: round(_median(v), 3) for tf, v in sorted(by_tf.items()) if len(v) >= min_obs}})
+    return base
+
+
+def estimate(svc, spec: Mapping, scope_rows: list[Mapping], prog: Mapping | None = None) -> dict:
+    """ETA for the not-yet-completed strategies of a scope, from this campaign's persisted cell timings."""
+    cells = _cells(svc, spec)
+    fam_of = {r["strategy_id"]: r["family_id"] for r in scope_rows}
+    tf_of = {r["strategy_id"]: str(r["definition"]["timeframe"]) for r in scope_rows}
+    remaining = [{"family_id": r["family_id"], "timeframe": tf_of[r["strategy_id"]]} for r in scope_rows
+                 if (cells.get(r["strategy_id"]) or {}).get("status") != "completed"]
+    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    all_fam = {r["strategy_id"]: r["family_id"] for r in rows}
+    all_tf = {r["strategy_id"]: str(r["definition"]["timeframe"]) for r in rows}
+    obs = timing_observations(svc, spec, all_fam, all_tf)
+    return estimate_remaining(obs, remaining)
+
+
+def scopes_dir(svc, cid: str) -> Path:
+    return runs_dir(svc, cid)
+
+
+def save_scope(svc, cid: str, rid: str, ids: list[str]) -> None:
+    d = runs_dir(svc, cid)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"{rid}.scope.json.tmp"
+    tmp.write_text(json.dumps({"run_record_id": rid, "campaign_id": cid, "strategy_ids": list(ids)}))
+    tmp.replace(d / f"{rid}.scope.json")
+
+
+def load_scope(svc, cid: str, rid: str) -> dict:
+    p = runs_dir(svc, cid) / f"{rid}.scope.json"
+    if not p.exists():
+        raise CampaignError("SCOPE_NOT_FOUND", f"no persisted scope for run {rid}")
+    return json.loads(p.read_text())
+
+
+def tree(svc, cid: str) -> dict:
+    """The research browser: All strategies -> families (catalog order) -> strategies (manifest order), with presentation
+    names, timeframes and persisted status. Frozen ids only; nothing is ranked."""
+    from edgelab.strategy.presentation import display_name
+    spec = load(svc, cid)
+    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    cells = _cells(svc, spec)
+    meta = {f["family_id"]: f for f in header.get("families") or []}
+    by_tf = spec["dataset_resolution"]["by_timeframe"]
+    fams = []
+    for fid in family_order(header, rows):
+        mine = [r for r in rows if r["family_id"] == fid]
+        m = meta.get(fid, {})
+        strategies = []
+        for r in mine:
+            c = cells.get(r["strategy_id"]) or {}
+            tf = str(r["definition"]["timeframe"])
+            strategies.append({"strategy_id": r["strategy_id"], "display_name": display_name(r), "timeframe": tf,
+                               "status": c.get("status", "not_started"), "run_id": c.get("run_id")})
+        fams.append({"family_id": fid, "name": m.get("name", fid), "group": m.get("group"), "hypothesis": m.get("hypothesis"),
+                     "n_strategies": len(mine), "completed": sum(1 for x in strategies if x["status"] == "completed"),
+                     "failed": sum(1 for x in strategies if x["status"] == "failed"), "strategies": strategies})
+    ids = [r["strategy_id"] for r in rows]
+    return {"campaign_id": cid, "n_strategies": len(rows), "families": fams, "progress": progress(svc, spec, ids),
+            "datasets": {tf: v["dataset_id"] for tf, v in sorted(by_tf.items())},
+            "data_line": "Nasdaq / canonical BID-ASK research data (Dukascopy USATECH index CFD proxy); each strategy runs on "
+                         "the dataset of its own frozen timeframe",
+            "note": "run scope browser: families in catalog order, strategies in manifest order; not a ranking"}
+
+
 def runs_dir(svc, cid: str) -> Path:
     return campaigns_dir(svc) / cid / "runs"
 
@@ -736,7 +895,8 @@ def new_run_record(spec: Mapping, families: list[str], n: int, source: str) -> d
             "families": list(families), "all_families": None, "n_scope": n, "created_at": _now(), "started_at": None,
             "finished_at": None, "updated_at": None, "status": "created", "phase": "", "current": None,
             "counts": {"completed_this_run": 0, "failed_this_run": 0, "skipped_completed": 0}, "totals": None,
-            "errors": [], "workers": REQUIRED_WORKERS, "holdout": "disabled"}
+            "errors": [], "workers": REQUIRED_WORKERS, "holdout": "disabled", "eta": None, "preflight_seconds": None,
+            "scope_kind": None, "scope_file": None}
 
 
 def save_run_record(svc, rec: Mapping) -> None:
@@ -751,6 +911,8 @@ def run_records(svc, cid: str) -> list[dict]:
     d = runs_dir(svc, cid)
     out = []
     for f in sorted(d.glob("CR_*.json")) if d.is_dir() else []:
+        if f.name.endswith(".scope.json"):
+            continue
         try:
             out.append(json.loads(f.read_text()))
         except (OSError, ValueError):
@@ -828,8 +990,12 @@ def detail(svc, cid: str) -> dict:
                      "completed": by.get("completed", 0), "failed": by.get("failed", 0),
                      "remaining": len(mine) - by.get("completed", 0)})
     ids = [r["strategy_id"] for r in rows]
-    return {**summary(spec), "families": fams, "progress": progress(svc, spec, ids), "runs": run_records(svc, cid),
+    recs = run_records(svc, cid)
+    return {**summary(spec), "families": fams, "progress": progress(svc, spec, ids), "runs": recs,
+            "eta": estimate(svc, spec, rows), "latest_run": recs[0] if recs else None,
             "prop_results_available": any(c["status"] == "completed" for c in cells.values()),
+            "data_line": "Nasdaq / canonical BID-ASK research data (Dukascopy USATECH index CFD proxy); dataset chosen "
+                         "automatically from each strategy's frozen timeframe",
             "note": "family selection is a run scope, not a quality filter; families are listed in catalog order"}
 
 
@@ -838,6 +1004,7 @@ HEADLINE_KEYS = ("trade_count", "net_r", "expectancy_r", "profit_factor", "max_d
 
 def family_results(svc, cid: str, family_id: str) -> dict:
     """Stored per-strategy results of one family (manifest order; nothing is re-run, nothing is ranked)."""
+    from edgelab.strategy.presentation import display_name, explanation
     spec = load(svc, cid)
     _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
     mine = [r for r in rows if r["family_id"] == family_id]
@@ -851,10 +1018,19 @@ def family_results(svc, cid: str, family_id: str) -> dict:
         head = json.loads(c["headline_json"]) if c.get("headline_json") else {}
         tf = str(r["definition"]["timeframe"])
         out.append({"strategy_id": r["strategy_id"], "logic_hash": r["logic_hash"], "name": r["definition"].get("name"),
+                    "display_name": display_name(r), "explanation": explanation(r),
                     "timeframe": tf, "dataset_id": by_tf.get(tf, {}).get("dataset_id"),
                     "status": c.get("status", "not_started"), "run_id": c.get("run_id"), "error": c.get("error"),
-                    "trades_hash": c.get("trades_hash"), "headline": {k: head.get(k) for k in HEADLINE_KEYS}})
-    return {"campaign_id": cid, "family_id": family_id, "n": len(out), "strategies": out,
+                    "duration_s": c.get("duration_s"), "trades_hash": c.get("trades_hash"),
+                    "result_available": bool(c.get("run_id")), "headline": {k: head.get(k) for k in HEADLINE_KEYS}})
+    fmeta = {f["family_id"]: f for f in header.get("families") or []}.get(family_id, {})
+    tfs: dict[str, int] = {}
+    for r in mine:
+        tfs[str(r["definition"]["timeframe"])] = tfs.get(str(r["definition"]["timeframe"]), 0) + 1
+    return {"campaign_id": cid, "family_id": family_id, "name": fmeta.get("name", family_id), "group": fmeta.get("group"),
+            "hypothesis": fmeta.get("hypothesis"), "n": len(out), "timeframes": tfs,
+            "completed": sum(1 for x in out if x["status"] == "completed"),
+            "remaining": sum(1 for x in out if x["status"] != "completed"), "strategies": out,
             "note": "historical results under the campaign's stated assumptions, in manifest order (not ranked)"}
 
 
@@ -865,8 +1041,16 @@ def strategy_result(svc, cid: str, strategy_id: str) -> dict:
     row = next((r for r in rows if r["strategy_id"] == strategy_id), None)
     if row is None:
         raise CampaignError("UNKNOWN_STRATEGY", f"{strategy_id} is not in this campaign")
+    from edgelab.strategy.presentation import present
     c = _cells(svc, spec).get(strategy_id) or {}
-    out = {"campaign_id": cid, "strategy_id": strategy_id, "family_id": row["family_id"], "status": c.get("status", "not_started"),
+    tf = str(row["definition"]["timeframe"])
+    fmeta = {f["family_id"]: f for f in header.get("families") or []}.get(row["family_id"], {})
+    out = {"campaign_id": cid, "strategy_id": strategy_id, "family_id": row["family_id"],
+           "family_name": fmeta.get("name", row["family_id"]), "status": c.get("status", "not_started"),
+           "presentation": present(row), "timeframe": tf,
+           "dataset_id": spec["dataset_resolution"]["by_timeframe"].get(tf, {}).get("dataset_id"),
+           "sizing": row["definition"].get("sizing"), "account": spec["execution"]["account"],
+           "execution_contract": spec["execution"]["execution_contract"], "duration_s": c.get("duration_s"),
            "error": c.get("error"), "run_id": c.get("run_id"),
            "provenance": {"protocol_id": spec["protocol"]["protocol_id"], "protocol_version": spec["protocol"]["protocol_version"],
                           "campaign_id": cid, "search_id": spec["search"]["search_id"],

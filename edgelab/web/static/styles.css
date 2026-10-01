@@ -537,3 +537,11 @@ table.steps td:first-child { width: 2em; text-align: center; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* ADR-70 research browser tree */
+.tree { margin-top: 12px; }
+.tree-node { padding: 6px 0; border-top: 1px solid var(--border); display: block; width: 100%; }
+.tree-node .tree-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tree-node .tree-name .linklike { width: 1.4em; text-align: center; }
+.tree-children { list-style: none; margin: 6px 0 0 2.4em; padding: 0; display: grid; gap: 4px; }
+.tree-children li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

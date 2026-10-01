@@ -25,6 +25,16 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Packaged Windows build + update on Windows | NOT VERIFIED HERE (must be built and exercised on Windows) |
 | Publishing a GitHub Release | NOT DONE (maintainer action) |
 | Code signing, delta updates, installer | NOT IMPLEMENTED |
+## Research browser, clean names, ETA, discovery-window contract (ADR-70)
+
+| Item | Status |
+|---|---|
+| Folder-tree research browser (All strategies / families / strategies, tri-state selection, counts, manifest order), selection by frozen strategy ids, persisted run scope, read-only data line (no dataset picker) | IMPLEMENTED, TESTED |
+| Deterministic display names, explanations and key parameters (`strategy/presentation.py`) | IMPLEMENTED, TESTED |
+| Per-cell timing persisted in `search_cells`; data-based ETA with "Estimating..." fallback; preflight timing | IMPLEMENTED, TESTED |
+| Live progress from persisted cells (display name, family, timeframe, elapsed, errors, ETA); restart reconstruction | IMPLEMENTED, TESTED |
+| Holdout error: ad-hoc paths now request the protocol's discovery window explicitly (`/api/backtests` period, Experiments default); governance unchanged and strict | IMPLEMENTED, TESTED |
+
 ## Desktop Research Runs (ADR-69)
 
 | Item | Status |

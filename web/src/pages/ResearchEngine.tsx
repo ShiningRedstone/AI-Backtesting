@@ -7,7 +7,7 @@ import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
 import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, IssueList, KeyValues, Kpi, Loading, Mono,
   NumberInput, Select, TableWrap, TextInput, fmt, shortTime } from "../components/ui";
-import type { ProtocolStatus } from "../api/types";
+import type { ProtocolRecordRow, ProtocolStatus } from "../api/types";
 
 // Phase 4 research: plan and run strategy x dataset searches over the /api/research service contracts.
 // Every number shown here is an IN-SAMPLE measurement under stated assumptions; nothing is validated.
@@ -63,7 +63,10 @@ function SearchSetup() {
   const [fams, setFams] = useState<string[]>([]);
   const [pbs, setPbs] = useState("");
   const [dsIds, setDsIds] = useState<string[]>([]);
-  const [periodMode, setPeriodMode] = useState<"none" | "common" | "explicit">("none");
+  const protocols = useApi<ProtocolRecordRow[]>("/api/protocols");
+  const activeProtocol = (protocols.data ?? []).find((p) => p.status === "ACTIVE") ?? null;
+  const [periodMode, setPeriodMode] = useState<"none" | "common" | "explicit" | "protocol">("none");
+  useEffect(() => { if (activeProtocol) setPeriodMode("protocol"); }, [activeProtocol?.protocol_id]);   // ADR-70 default
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [metric, setMetric] = useState<RankingMetric>("expectancy_r");
@@ -86,6 +89,7 @@ function SearchSetup() {
     if (seed !== undefined) s.seed = seed;
     if (periodMode === "common") s.period = "common";
     if (periodMode === "explicit") s.period = { start, end };
+    if (periodMode === "protocol" && activeProtocol?.discovery_period) s.period = activeProtocol.discovery_period;
     return s;
   };
   const run = async (kind: "validate" | "plan" | "start") => {
@@ -123,7 +127,8 @@ function SearchSetup() {
           <TextInput value={pbs} onChange={setPbs} mono testId="rs-pbs" placeholder="PB_…" /></Field>
         <Field label="Period" hint="Explicit times need an offset, e.g. 2024-01-02T00:00:00Z (timezones are never guessed).">
           <Select value={periodMode} onChange={setPeriodMode} testId="rs-period"
-            options={[{ value: "none", label: "full datasets" }, { value: "common", label: "common period" },
+            options={[...(activeProtocol ? [{ value: "protocol" as const, label: `protocol discovery window (${activeProtocol.discovery_trading_dates?.join(" → ")})` }] : []),
+              { value: "none", label: "full datasets" }, { value: "common", label: "common period" },
               { value: "explicit", label: "explicit start / end" }]} />
           {periodMode === "explicit" && <div className="inline">
             <TextInput value={start} onChange={setStart} mono ariaLabel="period start" testId="rs-start" placeholder="start" />

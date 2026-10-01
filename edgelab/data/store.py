@@ -53,7 +53,8 @@ SEARCH_BATCH_COLS = ("search_id", "search_hash", "config_hash", "code_version", 
                      "n_skipped_resume", "n_failed", "n_cancelled", "n_trials", "shortlist_json", "warnings_json",
                      "protocol_id")
 SEARCH_CELL_COLS = ("search_id", "cell_id", "plan_index", "strategy_id", "dataset_id", "dataset_content_hash",
-                    "status", "run_id", "trades_hash", "reasons_json", "error", "headline_json", "current")
+                    "status", "run_id", "trades_hash", "reasons_json", "error", "headline_json", "current",
+                    "started_at", "finished_at", "duration_s")          # ADR-70: observed execution timing
 # ADR-56 research protocol storage (SQLite only, like search storage): insert-only protocol records,
 # the program-level trial ledger, proposal attempts and the holdout-access ledger.
 PROTOCOL_SCHEMA = [
@@ -413,6 +414,7 @@ class SQLiteStore(ResultStore):
         self._add_missing_columns("bars", {"spread": "REAL"})   # Phase 2 migration
         self._add_missing_columns("bars", {k: "REAL" for k in ASK_COLUMNS})   # ADR-55: NULL for older rows
         self._add_missing_columns("search_batches", {"protocol_id": "TEXT"})   # ADR-56: NULL = no protocol
+        self._add_missing_columns("search_cells", {"started_at": "TEXT", "finished_at": "TEXT", "duration_s": "REAL"})  # ADR-70
         self.con.commit()
 
     def _columns(self, name):

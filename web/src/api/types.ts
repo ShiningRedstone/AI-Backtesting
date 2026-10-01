@@ -335,7 +335,9 @@ export interface ProtocolStatus {
   pre_protocol_exposure: { statement: string; runs: { run_id: string }[] };
 }
 export interface ProtocolRecordRow { protocol_id: string; status: string; created_at: string; name: string;
-  scope: { instrument: string; provider: string; timeframe: string }; protocol_version?: number }
+  scope: { instrument: string; provider: string; timeframe: string }; protocol_version?: number;
+  source_dataset_id?: string; discovery_trading_dates?: string[]; holdout_trading_dates?: string[];
+  discovery_period?: { start: string; end: string } }
 export interface ExecutionModel {
   status: string; instrument: string; provider?: string; reason?: string; cost_scenario?: string; cost_profile?: string;
   spread_source?: string; quote_model?: string; has_ask_ohlc?: boolean; spread_treatment?: string;

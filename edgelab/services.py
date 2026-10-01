@@ -643,9 +643,20 @@ class Services:
         from edgelab.research import campaign
         return _jsonable(campaign.strategy_result(self, campaign_id, strategy_id))
 
-    def start_campaign_job(self, campaign_id: str, families: list[str] | None = None, max_failures: int = 0) -> dict:
-        """Run a frozen campaign (families=None: all) in the background; the same runner as `campaign-run`."""
-        return _jsonable(self.jobs.start_campaign(campaign_id, families, int(max_failures)))
+    def start_campaign_job(self, campaign_id: str, families: list[str] | None = None, max_failures: int = 0,
+                           strategy_ids: list[str] | None = None) -> dict:
+        """Run a frozen campaign (all / families / explicit frozen strategy ids) in the background; the same runner as
+        `campaign-run`. The scope never creates identities: ids must be the manifest's own."""
+        return _jsonable(self.jobs.start_campaign(campaign_id, families, int(max_failures), strategy_ids))
+
+    def campaign_tree(self, campaign_id: str) -> dict:
+        """Research browser: all strategies -> families -> strategies, with display names and persisted status."""
+        from edgelab.research import campaign
+        return _jsonable(campaign.tree(self, campaign_id))
+
+    def campaign_run_scope(self, campaign_id: str, run_record_id: str) -> dict:
+        from edgelab.research import campaign
+        return _jsonable(campaign.load_scope(self, campaign_id, run_record_id))
 
     def campaign_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.campaign_status(job_id))
@@ -1286,7 +1297,11 @@ class Services:
     def list_protocols(self) -> list[dict]:
         return _jsonable([{k: r[k] for k in ("protocol_id", "status", "created_at")} | {
             "scope": r["material"]["scope"], "name": r["material"]["name"],
-            "protocol_version": r["material"].get("protocol_version")} for r in self.store.list_protocols()])
+            "protocol_version": r["material"].get("protocol_version"),
+            "source_dataset_id": r["material"]["source_dataset"]["dataset_id"],
+            "discovery_trading_dates": r["material"]["windows"]["discovery"]["trading_dates"],
+            "holdout_trading_dates": r["material"]["windows"]["holdout"]["trading_dates"],
+            "discovery_period": self.protocol_discovery_period(r)} for r in self.store.list_protocols()])
 
     def retire_protocol(self, protocol_id: str) -> dict:
         """ACTIVE -> RETIRED (the only lifecycle change; material and ledgers are kept unchanged)."""
@@ -1438,6 +1453,16 @@ class Services:
         key = rp.trial_key(protocol_id, doc["logic_hash"], res.dataset["content_hash"], ctx["config_hash"])
         self._protocol_record({**ctx, "family": (res.strategy_spec or {}).get("family"), "trial_key": key,
                                "trial_id": "TR_" + key[:12].upper()}, res.dataset, run_id, "search_cell", search_id)
+
+    @staticmethod
+    def protocol_discovery_period(protocol: Mapping) -> dict:
+        """THE discovery window a client should request under a protocol (ADR-70): [discovery session open,
+        holdout session open - 1 s], the same window the frozen campaign uses (research.campaign.discovery_period).
+        Served as data on protocol rows so the UI never computes or guesses a window; an explicit window that reaches
+        the holdout is still refused by _protocol_interval_check (never clipped), and a windowless request on a
+        governed dataset stays refused."""
+        from edgelab.research.campaign import discovery_period
+        return discovery_period(protocol["material"])
 
     def _protocol_interval_check(self, manifest, start: Any, end: Any, entry_point: str) -> str | None:
         """Refuse a requested window of a governed dataset that is not inside the discovery window."""
