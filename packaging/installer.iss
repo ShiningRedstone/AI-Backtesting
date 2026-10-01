@@ -68,11 +68,13 @@ Type: filesandordirs; Name: "{app}\_internal"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Munyun Lab"; Filename: "{app}\EdgeLab.exe"; WorkingDir: "{app}"; Comment: "Munyun Lab research app"; Tasks: startmenuicon
-Name: "{autodesktop}\Munyun Lab"; Filename: "{app}\EdgeLab.exe"; WorkingDir: "{app}"; Comment: "Munyun Lab research app"; Tasks: desktopicon
+; working directory OUTSIDE the program folder: Windows cannot rename a folder that is a process's current directory,
+; and the in-app updater swaps the whole folder (the app also leaves it at start-up, edgelab/desktop.py)
+Name: "{autoprograms}\Munyun Lab"; Filename: "{app}\EdgeLab.exe"; WorkingDir: "{%USERPROFILE}"; Comment: "Munyun Lab research app"; Tasks: startmenuicon
+Name: "{autodesktop}\Munyun Lab"; Filename: "{app}\EdgeLab.exe"; WorkingDir: "{%USERPROFILE}"; Comment: "Munyun Lab research app"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\EdgeLab.exe"; Description: "Start Munyun Lab now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\EdgeLab.exe"; WorkingDir: "{%USERPROFILE}"; Description: "Start Munyun Lab now"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; whatever build is installed now (auto-updates replace the folder), plus leftovers of interrupted updates

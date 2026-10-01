@@ -150,9 +150,19 @@ READY_TIMEOUT_ENV = "EDGELAB_UPDATE_READY_TIMEOUT"   # seconds; tests shorten it
 DEFAULT_READY_TIMEOUT = 180.0
 
 
+def neutral_dir() -> Path:
+    """A working directory outside every installation (the user's home, else the temp folder). Windows refuses to
+    rename a folder while ANY process has its current directory inside it, so neither the helper nor a process it
+    starts may sit in the installed folder (a Start-menu shortcut starts the app with the program folder as its
+    working directory, and children inherit it)."""
+    import tempfile
+    home = Path.home()
+    return home if home.is_dir() else Path(tempfile.gettempdir())
+
+
 def _spawn(cmd: list[str], env: dict | None = None) -> subprocess.Popen:
     kw: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-                "close_fds": True, "env": env}
+                "close_fds": True, "env": env, "cwd": str(neutral_dir())}
     if sys.platform == "win32":
         kw["creationflags"] = 0x00000008 | 0x00000200            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else:
@@ -315,6 +325,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="seconds the relaunched app has to report ready before the update is rolled back")
     a = ap.parse_args(argv)
     restart = json.loads(a.restart) if a.restart else None
+    a.target, a.staged = str(Path(a.target).resolve()), str(Path(a.staged).resolve())
+    a.log = str(Path(a.log).resolve()) if a.log else None
+    a.protect = [str(Path(p).resolve()) for p in a.protect]
+    try:                                       # leave the folder that is about to be renamed (inherited from the app)
+        os.chdir(neutral_dir())
+    except OSError:
+        pass
     res = apply_update(a.target, a.staged, a.version, wait_pid=a.wait_pid or None, restart_cmd=restart,
                        log=a.log, protected=a.protect, ready_timeout=a.ready_timeout, build=a.build or None)
     if not res["ok"]:

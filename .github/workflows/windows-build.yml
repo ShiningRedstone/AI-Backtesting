@@ -52,6 +52,9 @@ jobs:
       - name: Packaged smoke test (headless, scratch demo workspace)
         run: python packaging/smoke_packaged.py --exe dist/EdgeLab/EdgeLab.exe
 
+      - name: Packaged updater smoke (local release fixtures; app started from its own folder like a shortcut)
+        run: python packaging/smoke_update.py --dist dist/EdgeLab --results-json "$env:RUNNER_TEMP/smoke_update.json"
+
       - name: Prepare the release files (zip, manifest, checksums)
         run: python packaging/release.py
 

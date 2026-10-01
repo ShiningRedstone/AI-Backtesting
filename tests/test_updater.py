@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 import zipfile
+from unittest import mock
 from pathlib import Path
 
 from edgelab.updater import apply as ap
@@ -763,6 +764,66 @@ class TestHttpRoutes(Base):
         self.assertFalse(c.post("/api/update/preferences", json={"auto_check": False}).get_json()["auto_check"])
         app = c.application.config["EDGELAB"]["services"]
         app.store.close()
+
+
+class TestWorkingDirectoryNeverInsideTheInstall(unittest.TestCase):
+    """Windows cannot rename a folder that is any process's current directory: the helper leaves the installed folder
+    before the swap, everything it starts runs elsewhere, and the packaged app leaves it at start-up (a Start-menu
+    shortcut / Explorer starts it there). Field failure: WinError 32 on the rename, "installed folder is in use"."""
+
+    def test_spawned_processes_get_a_neutral_working_directory(self):
+        from edgelab.updater import apply as ap
+        with mock.patch.object(ap.subprocess, "Popen") as popen:
+            ap._spawn(["x"])
+        cwd = Path(popen.call_args.kwargs["cwd"])
+        self.assertEqual(cwd, ap.neutral_dir())
+        self.assertTrue(cwd.is_dir())
+
+    def test_helper_leaves_the_install_folder_before_applying(self):
+        from edgelab.updater import apply as ap
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        inst = tmp / "Programs" / "EdgeLab"
+        inst.mkdir(parents=True)
+        seen = {}
+
+        def fake_apply(target, staged, version, **kw):
+            seen["cwd"], seen["target"], seen["staged"] = Path.cwd().resolve(), target, staged
+            return {"ok": True}
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(inst)                                           # as if started from a shortcut
+        with mock.patch.object(ap, "apply_update", side_effect=fake_apply):
+            ap.main(["--target", ".", "--staged", "../staged", "--version", "0.2.0"])
+        self.assertNotEqual(seen["cwd"], inst.resolve())
+        self.assertNotIn(inst.resolve(), seen["cwd"].parents)
+        self.assertEqual(Path(seen["target"]), inst.resolve())    # relative arguments resolved before leaving
+        self.assertEqual(Path(seen["staged"]), (tmp / "Programs" / "staged").resolve())
+
+    def test_packaged_app_leaves_its_install_folder(self):
+        from edgelab import desktop, runtime
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        inst = tmp / "EdgeLab"
+        (inst / "_internal").mkdir(parents=True)
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        for start in (inst, inst / "_internal"):
+            os.chdir(start)
+            with mock.patch.object(runtime, "is_frozen", return_value=True), \
+                    mock.patch.object(runtime, "install_dir", return_value=inst):
+                desktop._leave_install_dir()
+            cwd = Path.cwd().resolve()
+            self.assertTrue(cwd != inst.resolve() and inst.resolve() not in cwd.parents, cwd)
+        os.chdir(here)
+        with mock.patch.object(runtime, "is_frozen", return_value=False):   # development: never moves
+            desktop._leave_install_dir()
+        self.assertEqual(os.getcwd(), here)
+
+    def test_installer_shortcuts_do_not_start_in_the_program_folder(self):
+        iss = (REPO / "packaging" / "installer.iss").read_text(encoding="utf-8")
+        self.assertNotIn('WorkingDir: "{app}"', iss)
+        self.assertEqual(iss.count('WorkingDir: "{%USERPROFILE}"'), 3)
 
 
 if __name__ == "__main__":

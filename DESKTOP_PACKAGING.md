@@ -31,6 +31,8 @@ auto-updates never remove it). Uninstalling removes the program and its shortcut
 default data root `%LOCALAPPDATA%\EdgeLab`, settings and logs stay. Note: after an auto-update, "Installed apps" still
 shows the version you first installed. The app itself (Settings → About) shows the version that is actually running.
 
+Shortcuts start the app in your home folder, and the app and its update helper never keep the program folder as their working directory: Windows cannot rename a folder that is a process's current directory, and an update swaps the whole folder.
+
 The installer is not code-signed (that needs a paid certificate), so Windows SmartScreen may show "Windows protected
 your PC". Click **More info → Run anyway**.
 

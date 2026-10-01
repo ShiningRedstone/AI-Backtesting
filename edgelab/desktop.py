@@ -172,6 +172,23 @@ def parse_args(argv):
     return ap.parse_args(argv)
 
 
+def _leave_install_dir() -> None:
+    """Packaged app started with the program folder as its working directory (Start-menu / desktop shortcut, Explorer):
+    move to a neutral folder, so neither this process nor anything it starts keeps the installed folder in use (Windows
+    cannot rename it for an update while it is any process's current directory). Paths were resolved before this."""
+    from edgelab import runtime
+    from edgelab.updater.apply import neutral_dir
+    inst = runtime.install_dir() if runtime.is_frozen() else None
+    if inst is None:
+        return
+    try:
+        cwd, inst = Path.cwd().resolve(), Path(inst).resolve()
+        if cwd == inst or inst in cwd.parents:
+            os.chdir(neutral_dir())
+    except OSError:
+        pass
+
+
 def run(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(argv)
@@ -189,6 +206,7 @@ def run(argv=None) -> int:
                       + "; ".join(runtime.inspect_workspace(root)["problems"]) + ". Choose a workspace.")
             root = None                               # never silently create an empty one in its place
     logs = (root / "logs") if root is not None else runtime.settings_path().parent / "logs"
+    _leave_install_dir()                              # before any child process (window, workers, update helper)
     try:
         if args.demo:                                 # before anything is written into the demo root
             from edgelab.web.demo import create_demo_workspace

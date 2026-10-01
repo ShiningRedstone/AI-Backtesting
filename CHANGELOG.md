@@ -3,6 +3,13 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Fix: in-app update failed with "the installed folder is in use" (WinError 32)
+
+| Item | Status |
+|---|---|
+| Cause: the installer's shortcuts started the app with the program folder as its working directory; the update helper inherited it, and Windows cannot rename a folder that is a process's current directory | FIXED |
+| The update helper leaves the program folder before swapping; every process it starts (and the relaunched app) runs in the user's home folder; the packaged app leaves its program folder at start-up; installer shortcuts start in the user's home folder | IMPLEMENTED, TESTED (unit tests; Windows CI now runs the packaged update smoke with the app started from its own folder) |
+
 ## Speed: faster backtests, multi-core research runs, instant tab switches (ADR-77)
 
 | Item | Status |

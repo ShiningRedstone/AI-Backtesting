@@ -158,7 +158,9 @@ def main(argv=None) -> int:
     started: list[subprocess.Popen] = []
 
     def start(env):
-        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        # working directory = the installed folder, exactly as a Start-menu / desktop shortcut or Explorer starts it:
+        # the update must still be able to rename that folder (Windows refuses while it is any process's cwd)
+        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, cwd=str(install))
         started.append(p)
         info = wait(lambda: (lambda d: d if d["pid"] == p.pid else None)(json.loads(rt.read_text())), 240)
         return p, info
