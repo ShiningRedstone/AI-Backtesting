@@ -221,6 +221,9 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
 
 - Git: remote `origin` = `https://github.com/ShiningRedstone/AI-Backtesting.git`, branch `main`.
   Do not commit or push unless explicitly asked.
+- The user's local machine is Windows, with the clone at `C:\Users\Ethan\Documents\AI-Backtesting`. Python there is
+  `.\.venv\Scripts\python.exe`. PowerShell commands given to the user start with
+  `Set-Location 'C:\Users\Ethan\Documents\AI-Backtesting'`.
 - Stay within the requested phase and task; no unrelated refactors or doc fixes.
 - When a phase is complete, update `README.md` status, `CHANGELOG.md`, `ARCHITECTURE.md` (module
   map, ADRs, known limitations) and this file's "Current state".
