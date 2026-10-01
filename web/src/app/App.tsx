@@ -20,42 +20,51 @@ import { ControlsPage } from "../pages/Controls";
 import { PipelinePage } from "../pages/Pipeline";
 import { PaperPage } from "../pages/Paper";
 import { RunsPage } from "../pages/Runs";
+import { RunBacktestPage } from "../pages/RunBacktest";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
 import { useApi } from "./context";
 
-interface NavItem { path: string; label: string; match: string; icon: string; planned?: boolean }
-const NAV: { section: string; items: NavItem[] }[] = [
-  { section: "Overview", items: [
-    { path: "/", label: "Home", match: "", icon: "home" },
-    { path: "/dashboard", label: "Research dashboard", match: "dashboard", icon: "chart" },
-  ] },
-  { section: "Strategies", items: [
-    { path: "/explorer", label: "Explorer", match: "explorer", icon: "search" },
-    { path: "/strategies", label: "Strategy library", match: "strategies", icon: "layers" },
-    { path: "/builder", label: "Strategy builder", match: "builder", icon: "build" },
-    { path: "/families", label: "Families", match: "families", icon: "tree" },
-    { path: "/variations", label: "Variations", match: "variations", icon: "grid" },
-  ] },
-  { section: "Research", items: [
-    { path: "/runs", label: "Research runs ▶", match: "runs", icon: "flask" },
-    { path: "/research", label: "Experiments", match: "research", icon: "flask" },
-    { path: "/results", label: "Results", match: "results", icon: "list" },
-    { path: "/compare", label: "Compare", match: "compare", icon: "compare" },
-    { path: "/controls", label: "Controls", match: "controls", icon: "shuffle" },
-    { path: "/pipeline", label: "Candidate pipeline", match: "pipeline", icon: "flow" },
-    { path: "/discovery", label: "AI Discovery", match: "discovery", icon: "sparkle" },
-  ] },
-  { section: "Simulation", items: [
-    { path: "/prop", label: "Prop simulator", match: "prop", icon: "shield" },
-    { path: "/paper", label: "Paper trading", match: "paper", icon: "pause", planned: true },
-  ] },
-  { section: "System", items: [
-    { path: "/datasets", label: "Data", match: "datasets", icon: "db" },
-    { path: "/settings", label: "Settings & about", match: "settings", icon: "gear" },
-  ] },
+/** The seven tabs. `heads` are the first route segments that belong to a tab (old routes stay valid). */
+interface NavItem { path: string; label: string; tid: string; icon: string; heads: string[]; planned?: boolean }
+const NAV: NavItem[] = [
+  { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
+  { path: "/strategies", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
+  { path: "/run", label: "Run backtest", tid: "run", icon: "flask", heads: ["run", "runs", "research"] },
+  { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
+    heads: ["dashboard", "explorer", "results", "compare", "controls", "pipeline"] },
+  { path: "/prop", label: "Prop firm simulator", tid: "prop", icon: "shield", heads: ["prop"] },
+  { path: "/paper", label: "Paper trading", tid: "paper", icon: "pause", heads: ["paper"], planned: true },
+  { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
+
+/** Sub-views inside a tab (links, so every view keeps its own address). */
+const SUBTABS: Record<string, { path: string; label: string; head: string }[]> = {
+  strategies: [{ path: "/strategies", label: "Library", head: "strategies" }, { path: "/families", label: "Families", head: "families" },
+    { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" }],
+  run: [{ path: "/run", label: "Single backtest", head: "run" }, { path: "/runs", label: "Research runs", head: "runs" },
+    { path: "/research", label: "Experiments", head: "research" }],
+  results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
+    { path: "/results", label: "All runs", head: "results" }, { path: "/compare", label: "Compare", head: "compare" },
+    { path: "/controls", label: "Random controls", head: "controls" }, { path: "/pipeline", label: "Candidate pipeline", head: "pipeline" }],
+  settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
+};
+
+const tabOf = (head: string) => NAV.find((n) => n.heads.includes(head));
+
+function SubNav({ head }: { head: string }) {
+  const tab = tabOf(head);
+  const subs = tab ? SUBTABS[tab.tid] : undefined;
+  if (!subs) return null;
+  return (
+    <nav className="tabs subnav" aria-label={`${tab!.label} views`}>
+      {subs.map((s) => (
+        <a key={s.path} href={href(s.path)} className={`tab${s.head === head ? " active" : ""}`} data-testid={`subnav-${s.head}`}
+          aria-current={s.head === head ? "page" : undefined}>{s.label}</a>))}
+    </nav>
+  );
+}
 
 function Search() {
   const [q, setQ] = useState("");
@@ -142,6 +151,7 @@ function Page() {
     case "variations": return <VariationsPage />;
     case "datasets": return <DatasetsPage />;
     case "research": return <ResearchPage />;
+    case "run": return <RunBacktestPage />;
     case "runs": return <RunsPage />;
     case "results": return <ResultsPage />;
     case "prop": return <PropPage />;
@@ -194,20 +204,19 @@ function ShellBody() {
       {demo && <div className="demo-banner" data-testid="demo-banner"><b>DEMO WORKSPACE</b> — {SYNTHETIC_NOTICE}</div>}
       <UpdateBanner />
       <nav className="sidebar" aria-label="main navigation">
-        {NAV.map((g) => (
-          <div key={g.section} style={{ display: "contents" }}>
-            <div className="nav-section">{g.section}</div>
-            {g.items.map((n) => (
-              <a key={n.path} href={href(n.path)} className={`nav-item${active === n.match ? " active" : ""}`}
-                data-testid={`nav-${n.match || "dashboard"}`} aria-current={active === n.match ? "page" : undefined}>
-                <Icon name={n.icon} />{n.label}{n.planned && <span className="nav-planned">planned</span>}
-              </a>))}
-          </div>))}
+        {NAV.map((n) => {
+          const on = n.heads.includes(active);
+          return (
+            <a key={n.path} href={href(n.path)} className={`nav-item${on ? " active" : ""}`} data-testid={`nav-${n.tid}`}
+              aria-current={on ? "page" : undefined}>
+              <Icon name={n.icon} />{n.label}{n.planned && <span className="nav-planned">planned</span>}
+            </a>);
+        })}
         <div className="nav-foot muted small">Research tool · historical results under stated assumptions · no live trading ·
           no broker connections</div>
       </nav>
       <div className="scrim" onClick={() => setMenu(false)} />
-      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <Page />}</main>
+      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} /><Page /></>}</main>
       <Toasts />
     </div>
   );

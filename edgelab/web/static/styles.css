@@ -151,6 +151,8 @@ a.chip:hover { border-color: var(--border-focus); background: var(--surface-2); 
   border: 1px solid var(--border-strong); border-radius: var(--pill); padding: 0 6px; line-height: 16px; }
 .nav-foot { margin-top: auto; padding: 12px 12px 4px; line-height: 1.4; font-size: 12px; border-top: 1px solid var(--border); color: var(--faint); }
 .main { min-width: 0; padding: 22px 28px 72px; }
+.subnav { margin: -6px 0 18px; }
+.subnav .tab { text-decoration: none; }
 .scrim { display: none; }
 .page { max-width: 1560px; display: flex; flex-direction: column; gap: 18px; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; flex-wrap: wrap;

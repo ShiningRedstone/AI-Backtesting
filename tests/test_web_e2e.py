@@ -414,11 +414,12 @@ class TestBrowserFlow(unittest.TestCase):
     def test_5_mobile_navigation(self):
         pg = self.page(390, 844)
         pg.goto(self.base + "/#/")
-        self.assertFalse(self.tid(pg, "nav-datasets").is_visible())
+        self.assertFalse(self.tid(pg, "nav-settings").is_visible())
         self.tid(pg, "menu-toggle").click()
-        self.tid(pg, "nav-datasets").click()
+        self.tid(pg, "nav-settings").click()                                # Data is a view of the Settings tab
+        self.tid(pg, "nav-settings").wait_for(state="hidden", timeout=3000)   # drawer closes after navigating
+        self.tid(pg, "subnav-datasets").click()
         pg.wait_for_function("() => document.querySelector('h1')?.innerText === 'Datasets'")
-        self.tid(pg, "nav-datasets").wait_for(state="hidden", timeout=3000)   # drawer closes after navigating
         width = pg.evaluate("document.documentElement.scrollWidth")
         self.assertLessEqual(width, 390 + 1)                                # no sideways page scroll
         self.tid(pg, "demo-banner").wait_for()
@@ -446,7 +447,8 @@ class TestBrowserFlow(unittest.TestCase):
     def test_6_research_setup_check_plan_and_refusals(self):
         pg = self.page()
         self._setup_search(pg)
-        self.assertNotIn("planned", self.tid(pg, "nav-research").inner_text())
+        self.assertNotIn("planned", self.tid(pg, "nav-run").inner_text())         # Experiments live in Run backtest
+        self.assertIn("active", self.tid(pg, "subnav-research").get_attribute("class"))
         self.assertIn("NOT VALIDATED", self.tid(pg, "research-in-sample").inner_text())
         self.tid(pg, "rs-validate").click()
         self.assertIn("well formed", self.tid(pg, "rs-validation").inner_text())
