@@ -31,11 +31,11 @@ export function SystemPanel() {
           <KeyValues rows={[
             ["Backend", <Badge tone="ok">{s.backend}</Badge>],
             ["Workspace", <>{s.demo ? <Badge tone="demo">demo</Badge> : <Badge>research</Badge>} <span className="small mono">{s.root}</span></>],
-            ["Software version", <Mono>{s.code_version.git_commit?.slice(0, 10) ?? "no git"}{s.code_version.dirty ? " (modified)" : ""}</Mono>],
-            ["Source hash", <Mono>{s.code_version.source_sha256?.slice(0, 12)}</Mono>],
+            ["Software version", <Mono title={String(s.code_version.git_commit ?? "") || undefined}>{s.code_version.git_commit?.slice(0, 10) ?? "no git"}{s.code_version.dirty ? " (modified)" : ""}</Mono>],
+            ["Source hash", <Mono title={String(s.code_version.source_sha256 ?? "") || undefined}>{s.code_version.source_sha256?.slice(0, 12)}</Mono>],
             ["Frontend build", build ? <span className="small">{shortTime(build.built_at)} · React {build.react}</span> : null],
             ["Tests", s.test_status ?? <span className="muted">Not available — run <code>python scripts/run_tests.py</code></span>],
-            ["Store", s.store_backend], ["Config hash", <Mono>{s.config_hash.slice(0, 12)}</Mono>]]} />
+            ["Store", s.store_backend], ["Config hash", <Mono title={String(s.config_hash ?? "") || undefined}>{s.config_hash.slice(0, 12)}</Mono>]]} />
         </Card>
         <Card title="Workspace">
           <div className="stats">

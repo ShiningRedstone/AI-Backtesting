@@ -14,7 +14,7 @@ export function HomePage() {
   const f = o.facts, st = f.runs_by_status;
   return (
     <div className="page" data-testid="home">
-      <header className="page-head">
+      <header className="page-head hero">
         <div><div className="eyebrow">Research terminal</div><h1>Home</h1>
           <div className="subtitle small">System facts and stored results. A positive backtest is a historical result under stated assumptions,
             never a verdict that a strategy is profitable.</div></div>
@@ -28,7 +28,7 @@ export function HomePage() {
 
       {o.warnings.map((w) => <Banner key={w.text} tone={w.level === "warn" ? "warn" : "info"}>{w.text}</Banner>)}
 
-      <section>
+      <section className="featured">
         <h3>System facts</h3>
         <div className="kpis" data-testid="home-facts">
           <Kpi label="Strategies" value={f.strategies.toLocaleString()} sub={`${f.families} families`} />

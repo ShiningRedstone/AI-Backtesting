@@ -162,7 +162,7 @@ function Shell() {
 
 const BrandMark = () => (
   <span className="brand-mark" aria-hidden="true">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#03130c" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 17l5-6 4 4 8-9" /></svg>
   </span>
 );

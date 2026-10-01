@@ -91,7 +91,7 @@ export function Badge({ children, tone = "neutral", title }: { children?: ReactN
   return <span className={`badge badge-${tone}`} title={title}>{children}</span>;
 }
 
-export const Mono = ({ children }: { children?: ReactNode }) => <code className="mono">{children}</code>;
+export const Mono = ({ children, title }: { children?: ReactNode; title?: string }) => <code className="mono" title={title}>{children}</code>;
 
 export function Card({ title, actions, children, className, testId }: { title?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; testId?: string }) {
   return (
@@ -185,11 +185,21 @@ export function Tabs<T extends string>({ tabs, active, onChange, badges }: {
   );
 }
 
-export const TableWrap = ({ children, testId }: { children?: ReactNode; testId?: string }) =>
-  <div className="table-wrap" data-testid={testId}>{children}</div>;
+export const TableWrap = ({ children, testId, className }: { children?: ReactNode; testId?: string; className?: string }) =>
+  <div className={`table-wrap${className ? ` ${className}` : ""}`} data-testid={testId}>{children}</div>;
+
+/** Decorative metallic tile (CSS + inline SVG); carries no information. */
+export function IconTile() {
+  return (
+    <span className="icon-tile" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="4" y="5" width="16" height="14" rx="3" /><path d="M4 10h16M9 14.5h6" /></svg>
+    </span>
+  );
+}
 
 export function Empty({ children }: { children?: ReactNode }) {
-  return <div className="empty">{children}</div>;
+  return <div className="empty"><IconTile /><div className="empty-text">{children}</div></div>;
 }
 
 export function Loading({ label }: { label: string }) {

@@ -3,6 +3,15 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Web UI visual redesign (presentation only, version unchanged 0.2.0)
+
+| Item | Status |
+|---|---|
+| Design tokens moved from navy/mint to near-black charcoal with hairline borders; silver primary pill; warm accent decorative only (one featured panel); `--ok` separated from the action colour; status badges, banners and toasts carry icons | IMPLEMENTED, TESTED (browser e2e) |
+| Self-hosted Inter (variable, opsz) and JetBrains Mono with OFL texts (previously named but never loaded); `build.mjs` copies `web/src/fonts/` to `static/fonts/` | IMPLEMENTED, TESTED |
+| Home hero (display type, static glow/grid), +/− accordions, empty-state icon tile, full-value hover titles on truncated hashes, `TableWrap className`, `Mono title` | IMPLEMENTED |
+| Backend, API, services, calculations, identities, datasets, labels and disclaimers | UNCHANGED |
+
 ## Research-terminal UI + Windows auto-updater, version 0.2.0 (ADR-58, ADR-59)
 
 | Item | Status |

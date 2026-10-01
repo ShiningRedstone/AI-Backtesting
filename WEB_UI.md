@@ -40,12 +40,24 @@ Every screen shows *"Synthetic demonstration — not evidence of trading perform
 
 ## Design system (research terminal)
 
-One dark theme by design (`web/src/styles.css`): near-black canvas (`--bg`), deep-navy panels (`--surface*`),
-thin blue-grey borders, light text, **mint** (`--accent`) only for primary actions, positive values and the
-selected state, **cool blue** for secondary series, **orange/red** only for warnings, failures and negative
-values. Chart series use `--c1` (mint) · `--c2` (blue) · `--c3` (ochre), validated for colour-vision
-deficiency on the panel surface; negative values sit below the zero line (position first, colour second),
-and every chart shows values in text/tooltips so colour never carries meaning alone.
+One dark theme by design (`web/src/styles.css`, `color-scheme: dark`). Tokens live on `:root`:
+- Surfaces are near-black and charcoal (`--bg`, `--surface`, `--surface-2`, `--surface-3`), with hairline borders and soft glows instead of heavy shadows.
+- Text is light (`--text`), with soft grey for secondary copy (`--muted`, `--faint`).
+- The primary action is a **silver metallic pill**; secondary actions are dark pills; destructive actions use the error colour.
+- The selected state uses light text on a raised surface (`--accent` is neutral silver, never a status).
+- A warm accent (`--warm-*`, `--warm-gradient`) is decorative only: at most one featured surface per screen (the System facts panel on Home).
+- Status colours are reserved: green `--ok` for positive and passed, amber `--warn`, red `--error` for failures and negative values, blue `--info`, violet `--demo` for synthetic.
+- Chart series use `--c1` (green) · `--c2` (blue) · `--c3` (ochre), with their earlier CVD-validated values; each keeps at least 3.4:1 contrast on `--surface`.
+- Negative values sit below the zero line (position first, colour second), and every chart shows values in text and tooltips, so colour never carries meaning alone.
+- Status badges, banners and toasts also carry an icon next to their text.
+
+**Type and motion:**
+- **Inter** (variable; also registered as *Inter Display*, using the optical-size axis for display headings) and **JetBrains Mono**, used for IDs, hashes, DSL and numeric inputs. Mono uses slashed zero and has ligatures off, so `==` reads as typed.
+- Both fonts are self-hosted in `web/src/fonts/` with their SIL OFL texts; `build.mjs` copies them to `edgelab/web/static/fonts/`. There are no third-party requests.
+- Tabular figures apply to tables, KPIs and `.num` only.
+- Only Home uses display type and the static glow/grid hero; work screens stay compact.
+- Transitions are 150–200ms and are disabled under `prefers-reduced-motion`.
+- Truncated hashes show their full value on hover.
 
 Building blocks (`web/src/components/`):
 - `ui/`: buttons, inputs, badges, cards, `Kpi` tiles with meters, `Scope` tags, `Modal`, `Drawer`, `Pager`,

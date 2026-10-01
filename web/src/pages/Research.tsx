@@ -140,13 +140,13 @@ function ProvenanceSection({ r, id }: { r: Record<string, any>; id: string }) {
           ["Logic hash", <Mono>{s.dsl?.logic_hash ?? "—"}</Mono>], ["Definition hash", <Mono>{s.dsl?.definition_hash ?? "—"}</Mono>],
           ["Parent strategy", s.parent_strategy_id ? <Mono>{s.parent_strategy_id}</Mono> : "—"],
           ["Dataset", <Mono>{d.dataset_id}</Mono>], ["Parent dataset", d.parent_dataset_id ? <Mono>{d.parent_dataset_id}</Mono> : "—"],
-          ["Dataset content hash", <Mono>{String(d.content_hash ?? "—").slice(0, 24)}</Mono>],
+          ["Dataset content hash", <Mono title={String(d.content_hash ?? "—")}>{String(d.content_hash ?? "—").slice(0, 24)}</Mono>],
           ["Period", `${String(d.start ?? "").slice(0, 16)} → ${String(d.end ?? "").slice(0, 16)}`],
           ["Instrument / provider / TF", `${d.instrument} / ${d.provider} / ${d.timeframe}`]]} />
-        <KeyValues rows={[["Config hash", <Mono>{String(r.config_hash).slice(0, 24)}</Mono>],
+        <KeyValues rows={[["Config hash", <Mono title={String(r.config_hash)}>{String(r.config_hash).slice(0, 24)}</Mono>],
           ["Code", <Mono>{cv.app_version ? `v${cv.app_version} · ` : ""}{String(cv.git_commit ?? "—").slice(0, 12)}{cv.dirty ? " (modified)" : ""}</Mono>],
-          ["Source hash", <Mono>{String(cv.source_sha256 ?? "—").slice(0, 16)}</Mono>],
-          ["Trades hash", <Mono>{String(r.trades_hash).slice(0, 24)}</Mono>],
+          ["Source hash", <Mono title={String(cv.source_sha256 ?? "—")}>{String(cv.source_sha256 ?? "—").slice(0, 16)}</Mono>],
+          ["Trades hash", <Mono title={String(r.trades_hash)}>{String(r.trades_hash).slice(0, 24)}</Mono>],
           ["Causality check", r.causality_check ? `passed=${r.causality_check.passed}, cuts=${r.causality_check.cuts_tested}` : "—"],
           ["Execution", quotes ? "directional BID/ASK quotes (long ASK→BID, short BID→ASK)" : `single series, spread ${c.spread_source ?? "fixed"}`],
           ["Cost scenario", <Mono>{c.scenario || c.profile || "—"}</Mono>], ["Cost status", <Badge tone={a.cost_status === "assumed" ? "warn" : "neutral"}>{a.cost_status}</Badge>],
@@ -218,8 +218,8 @@ function RunPage({ id }: { id: string }) {
         <KeyValues rows={[["Status", <Badge>{r.status}</Badge>], ["Strategy", <Mono>{r.strategy?.strategy_id}</Mono>],
           ["Dataset", <Mono>{r.dataset?.dataset_id}</Mono>], ["Created", shortTime(r.created_at)],
           ["Causality check", r.causality_check ? `passed=${r.causality_check.passed}, cuts=${r.causality_check.cuts_tested}` : "—"],
-          ["Trades hash", <Mono>{r.trades_hash}</Mono>], ["Code", <Mono>{r.code_version?.git_commit?.slice(0, 10)}</Mono>],
-          ["Config hash", <Mono>{String(r.config_hash).slice(0, 12)}</Mono>], ["Notes", r.notes], ["Disclaimer", r.disclaimer]]} />
+          ["Trades hash", <Mono>{r.trades_hash}</Mono>], ["Code", <Mono title={String(r.code_version?.git_commit ?? "") || undefined}>{r.code_version?.git_commit?.slice(0, 10)}</Mono>],
+          ["Config hash", <Mono title={String(r.config_hash)}>{String(r.config_hash).slice(0, 12)}</Mono>], ["Notes", r.notes], ["Disclaimer", r.disclaimer]]} />
       </Card>
       <Card title="Headline metrics"><MetricsView metrics={r.headline_metrics ?? {}} /></Card>
       <Card title="Equity and drawdown (net R)"><EquityChart runId={id} /></Card>

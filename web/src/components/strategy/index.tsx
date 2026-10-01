@@ -194,7 +194,7 @@ export function BacktestView({ result }: { result: BacktestResult }) {
       <KeyValues rows={[
         ["Run", result.run_id ? <a href={href(`/results/${result.run_id}`)}><Mono>{result.run_id}</Mono></a> : "not recorded"],
         ["Strategy", <Mono>{result.strategy_id}</Mono>], ["Dataset", <Mono>{result.dataset_id}</Mono>],
-        ["Cost profile status", result.cost_status], ["Signals", fmt(result.n_signals)], ["Trades hash", <Mono>{result.trades_hash.slice(0, 16)}…</Mono>],
+        ["Cost profile status", result.cost_status], ["Signals", fmt(result.n_signals)], ["Trades hash", <Mono title={String(result.trades_hash ?? "") || undefined}>{result.trades_hash.slice(0, 16)}…</Mono>],
         ["Exit reasons", Object.entries(result.exit_reasons).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"],
         ["Skipped signals", Object.entries(result.skipped).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"]]} />
       <MetricsView metrics={result.metrics} />

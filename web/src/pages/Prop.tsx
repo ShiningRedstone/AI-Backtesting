@@ -108,7 +108,7 @@ function RuleSets({ rows }: { rows: PropConfigRow[] }) {
           <tbody>{rows.map((c) => (
             <tr key={c.file}><td><Mono>{c.file}</Mono></td><td>{c.id ?? "—"}{c.synthetic_test_only && <> <Badge tone="demo">synthetic test-only</Badge></>}</td>
               <td>{c.name}</td><td>{c.valid ? <Badge tone="ok">valid</Badge> : <Badge tone="error" title={c.errors.join("; ")}>invalid</Badge>}</td>
-              <td><Mono>{c.config_hash?.slice(0, 12) ?? "—"}</Mono></td></tr>))}
+              <td><Mono title={String(c.config_hash ?? "") || undefined}>{c.config_hash?.slice(0, 12) ?? "—"}</Mono></td></tr>))}
           </tbody></table></TableWrap>)}
     </Card>
   );
@@ -158,7 +158,7 @@ function SimulationView({ sim }: { sim: PropSimulation }) {
         ["Strategy", <a href={href(`/strategies/${L.strategy_id}`)}><Mono>{L.strategy_id}</Mono></a>], ["Definition hash", <Mono>{L.definition_hash ?? L.definition_hash_note}</Mono>],
         ["Dataset", <Mono>{L.dataset_id}</Mono>], ["Provider / instrument / TF", `${L.provider} / ${L.instrument} / ${L.timeframe}`],
         ["Source period", `${L.source_period?.dataset_start} → ${L.source_period?.dataset_end}`], ["Cost profile", `${L.cost_profile} (${L.cost_status})`],
-        ["Trades hash (verified)", <Mono>{String(L.trades_hash).slice(0, 16)}</Mono>], ["Ordering", L.ordering], ["Simulator", L.simulator_version]]} /></Card>
+        ["Trades hash (verified)", <Mono title={String(L.trades_hash)}>{String(L.trades_hash).slice(0, 16)}</Mono>], ["Ordering", L.ordering], ["Simulator", L.simulator_version]]} /></Card>
     </div>
   );
 }

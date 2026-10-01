@@ -132,7 +132,7 @@ export function ProvenanceCard({ sr }: { sr: StrategyResearch }) {
         ["Logic hash", <Mono>{S.logic_hash}</Mono>],
         ["Created from", <>{METHOD_LABEL[L.generation_method ?? ""] ?? L.generation_method ?? "—"}{L.generation_timestamp ? ` · ${shortTime(L.generation_timestamp)}` : ""}</>],
         ["Parent", L.parent_strategy_id ? <><a href={href(`/strategies/${L.parent_strategy_id}`)}><Mono>{L.parent_strategy_id}</Mono></a>
-          <div className="small muted">parent definition hash <Mono>{L.parent_definition_hash?.slice(0, 16) ?? "—"}</Mono></div></> : <span className="muted">root (no parent)</span>],
+          <div className="small muted">parent definition hash <Mono title={String(L.parent_definition_hash ?? "") || undefined}>{L.parent_definition_hash?.slice(0, 16) ?? "—"}</Mono></div></> : <span className="muted">root (no parent)</span>],
         ["Changes vs parent", changesText(L.changes) || "—"],
         ["Variation batch", L.generation_batch ? <a href={href(`/variations/${L.generation_batch.batch_id}`)}><Mono>{L.generation_batch.batch_id}</Mono></a> : "—"],
         ["Ancestry depth", String(L.ancestry.length)], ["Children", String(L.children.length)],

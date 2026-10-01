@@ -150,7 +150,7 @@ function SearchSetup() {
       <ErrorPanel error={error} testId="rs-error" />
       {validation && <div data-testid="rs-validation">
         {validation.valid
-          ? <Banner tone="ok">Search spec is well formed · search hash <Mono>{validation.search_hash?.slice(0, 16)}</Mono></Banner>
+          ? <Banner tone="ok">Search spec is well formed · search hash <Mono title={String(validation.search_hash ?? "") || undefined}>{validation.search_hash?.slice(0, 16)}</Mono></Banner>
           : <Banner tone="error">Search spec has {validation.errors.length} problem(s)</Banner>}
         <IssueList issues={[...validation.errors, ...validation.warnings]} testId="rs-validation-issues" />
       </div>}
@@ -266,7 +266,7 @@ function SearchPage({ id }: { id: string }) {
           + `${d.n_evaluated} evaluated · ${d.n_skipped_resume} skipped (already completed) · ${d.n_failed} failed · ${d.n_cancelled} cancelled`],
           ["All invocations (current plan)", Object.entries(d.cumulative).map(([k, v]) => `${k} ${v}`).join(" · ")],
           ["Trials (distinct cells evaluated)", <b data-testid="rs-trials">{d.cumulative.trials}</b>],
-          ["Config hash", <Mono>{d.config_hash.slice(0, 12)}</Mono>], ["Search hash", <Mono>{d.search_hash.slice(0, 16)}</Mono>]]} />
+          ["Config hash", <Mono title={String(d.config_hash ?? "") || undefined}>{d.config_hash.slice(0, 12)}</Mono>], ["Search hash", <Mono title={String(d.search_hash ?? "") || undefined}>{d.search_hash.slice(0, 16)}</Mono>]]} />
         {d.warnings.map((w, i) => <Banner key={i} tone="warn">{w}</Banner>)}
         <details className="tech"><summary>Search spec</summary><pre className="code">{JSON.stringify(d.spec, null, 2)}</pre></details>
       </Card>

@@ -34,7 +34,7 @@ export function ProtocolPanel({ p, compact }: { p: ProtocolStatus; compact?: boo
           ["Holdout window", <><Scope kind="holdout" /> {p.windows.holdout.trading_dates[0]} → {p.windows.holdout.trading_dates[1]}
             <span className="small muted"> · {p.windows.holdout.n_bars.toLocaleString()} bars · locked</span></>],
           ["Source dataset", <><Mono>{p.source_dataset.dataset_id}</Mono> {p.source_dataset.has_ask_ohlc && <Badge tone="info">BID+ASK</Badge>}</>],
-          ["Content hash", <Mono>{p.source_dataset.content_hash.slice(0, 24)}…</Mono>]]} />
+          ["Content hash", <Mono title={String(p.source_dataset.content_hash ?? "") || undefined}>{p.source_dataset.content_hash.slice(0, 24)}…</Mono>]]} />
         <KeyValues rows={[
           ["Trials by entry point", Object.entries(t.by_entry_point).map(([k, v]) => `${k}: ${v}`).join(" · ") || "none"],
           ["Pre-protocol exposure", `${p.pre_protocol_exposure.runs.length} run(s) disclosed`],
@@ -56,7 +56,7 @@ export function DatasetIdentity({ o }: { o: Overview }) {
       actions={<a className="small" href={href(`/datasets`)}>Data ›</a>}>
       <KeyValues rows={[
         ["Dataset", <Mono>{m.dataset_id}</Mono>],
-        ["Content hash", <Mono>{String(m.content_hash).slice(0, 24)}…</Mono>],
+        ["Content hash", <Mono title={String(m.content_hash)}>{String(m.content_hash).slice(0, 24)}…</Mono>],
         ["Instrument", <>{m.instrument} · {m.provider} · {m.timeframe} {idn.research_proxy && <Badge tone="warn">research proxy</Badge>}</>],
         ["What it is", <span className="small">{idn.description ?? "—"}</span>],
         ["Source symbol / feed", <span className="small">{idn.source_symbol ?? "—"}{idn.source_feed_code ? ` (feed ${idn.source_feed_code})` : ""}</span>],

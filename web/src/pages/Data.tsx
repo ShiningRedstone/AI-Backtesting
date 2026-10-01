@@ -26,7 +26,7 @@ function AboutCard() {
           <Badge tone="error">UI bundle is {UI_VERSION}: rebuild the frontend</Badge>}</>],
         ["Build", v ? (v.packaged ? <>packaged · build <Mono>{v.build_id}</Mono></> : "development (running from source)") : "…"],
         ["Build date", v?.built_at ? shortTime(v.built_at) : build?.built_at ? `UI ${shortTime(build.built_at)}` : "—"],
-        ["Commit", <Mono>{(v?.git_commit ?? s?.code_version?.git_commit ?? "—").slice(0, 12)}{s?.code_version?.dirty ? " (modified)" : ""}</Mono>],
+        ["Commit", <Mono title={(v?.git_commit ?? s?.code_version?.git_commit ?? "—")}>{(v?.git_commit ?? s?.code_version?.git_commit ?? "—").slice(0, 12)}{s?.code_version?.dirty ? " (modified)" : ""}</Mono>],
         ["Architecture", <span className="small">Python engine + Flask API (loopback only) · React UI{v?.packaged ? " · PyInstaller folder app with native WebView2 window" : ""}</span>],
         ["Workspace", ws.data?.current ? <Mono>{ws.data.current.path}</Mono> : <Badge tone="warn">none selected</Badge>],
         ["Data root", s ? <Mono>{String(s.root)}</Mono> : error ? <span className="warn">{error.message}</span> : "…"],
@@ -137,7 +137,7 @@ export function DatasetsPage() {
               <td className="small">{d.start?.slice(0, 10)} → {d.end?.slice(0, 10)}</td><td>{fmt(d.n_bars)}</td>
               <td><Badge tone={qTone(d.quality_status)}>{d.quality_status}</Badge>
                 {d.missing_bars ? <div className="small muted">{fmt(d.missing_bars)} missing</div> : null}</td>
-              <td className="small"><Mono>{d.content_hash?.slice(0, 12)}</Mono></td>
+              <td className="small"><Mono title={String(d.content_hash ?? "") || undefined}>{d.content_hash?.slice(0, 12)}</Mono></td>
               <td className="small">{d.price_basis} · vol {d.volume_type}{d.has_spread ? " · spread" : ""}</td>
               <td><Badge tone={d.cost.status === "unconfigured" ? "error" : "neutral"} title={d.cost.reason}>{d.cost.status}</Badge></td>
               <td data-testid={`eligible-${d.dataset_id}`}>{d.runnable ? <Badge tone="ok">eligible</Badge>

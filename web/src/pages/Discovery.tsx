@@ -168,7 +168,7 @@ function DiscoverForm({ status, onGenerated }: { status: AiStatus; onGenerated: 
           disabled={!ds || (mode === "modify" && !base)}>Generate proposals</Button>
       </div>
       <ErrorPanel error={err} title="Refused" testId="ai-error" />
-      {ctx && <details open data-testid="ai-context"><summary>Blind context (context hash <Mono>{String(ctx.context_hash).slice(0, 16)}</Mono>) — no results of any kind</summary>
+      {ctx && <details open data-testid="ai-context"><summary>Blind context (context hash <Mono title={String(ctx.context_hash)}>{String(ctx.context_hash).slice(0, 16)}</Mono>) — no results of any kind</summary>
         <pre className="code">{JSON.stringify(ctx, null, 2)}</pre></details>}
     </Card>
   );
@@ -221,7 +221,7 @@ function ProposalCard({ p, onChange }: { p: AiProposal; onChange: () => void }) 
         ["Parameters", <span className="mono small">{brief(S.parameters)}</span>],
         ["Complexity", `${S.complexity.conditions} conditions · ${S.complexity.parameters} parameters · features ${S.features.join(", ") || "none"}`],
         ...(S.computed_changes ? [["Changes vs base", S.computed_changes.join("; ") || "none"] as [string, string]] : []),
-        ["Strategy ID", <Mono>{p.gate.identity?.strategy_id}</Mono>], ["Definition hash", <Mono>{p.gate.identity?.definition_hash.slice(0, 16)}</Mono>],
+        ["Strategy ID", <Mono>{p.gate.identity?.strategy_id}</Mono>], ["Definition hash", <Mono title={String(p.gate.identity?.definition_hash ?? "") || undefined}>{p.gate.identity?.definition_hash.slice(0, 16)}</Mono>],
       ]} />}
       <KeyValues rows={[["Proposal ID", <Mono>{p.proposal_id}</Mono>], ["Rationale", String(c.rationale ?? "—")],
         ...(p.parent ? [["Parent", <Mono>{p.parent.strategy_id}</Mono>] as [string, ReactNode]] : [])]} />
@@ -243,7 +243,7 @@ function ProposalCard({ p, onChange }: { p: AiProposal; onChange: () => void }) 
         <details><summary>Gate stages</summary><pre className="code">{JSON.stringify(p.gate.stages, null, 2)}</pre></details>
         <details><summary>Envelope</summary><KeyValues rows={[["Schema version", String(p.schema_version)], ["Request", <Mono>{p.request_id}</Mono>],
           ["Generation", <Mono>{p.generation_id}</Mono>], ["Provider", `${p.provider.kind}${p.provider.model ? ` · ${p.provider.model}` : ""} (${p.provider.provider_version})`],
-          ["Context hash", <Mono>{p.generation.context_hash.slice(0, 16)}</Mono>], ["Created", shortTime(p.generation.created_at)]]} /></details>
+          ["Context hash", <Mono title={String(p.generation.context_hash ?? "") || undefined}>{p.generation.context_hash.slice(0, 16)}</Mono>], ["Created", shortTime(p.generation.created_at)]]} /></details>
       </div>}
     </div>
   );
@@ -256,7 +256,7 @@ function GenerationView({ gen, onChange }: { gen: AiGeneration; onChange: (g: Ai
     <Card title={<>Proposals — <Mono>{gen.generation_id}</Mono></>} testId="ai-generation">
       <KeyValues rows={[["Research dataset", <Mono>{gen.scope.dataset_id}</Mono>], ["Instrument / timeframe", `${gen.scope.instrument} · ${gen.scope.timeframe}`],
         ["Provider", `${gen.provider.kind}${gen.provider.model ? ` · ${gen.provider.model}` : ""}${gen.provider.external ? "" : " (not an AI)"}`],
-        ["Request", <Mono>{gen.request_id}</Mono>], ["Context hash", <Mono>{gen.context_hash.slice(0, 16)}</Mono>],
+        ["Request", <Mono>{gen.request_id}</Mono>], ["Context hash", <Mono title={String(gen.context_hash ?? "") || undefined}>{gen.context_hash.slice(0, 16)}</Mono>],
         ["Gate", `${nValid} of ${gen.proposals.length} passed · order = provider order (no ranking)`]]} />
       {gen.provider_notes.map((n) => <Banner key={n} tone="info">{n}</Banner>)}
       {gen.dropped_beyond_bound > 0 && <Banner tone="warn">{gen.dropped_beyond_bound} extra proposals beyond the requested number were discarded.</Banner>}
