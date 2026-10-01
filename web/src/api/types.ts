@@ -427,10 +427,12 @@ export interface PipelineBoard {
 // ---------------------------------------------------------------- version + updates
 export interface AppVersion { version: string; packaged: boolean; build_id: string | null; git_commit: string | null; built_at: string | null; build: string }
 export interface UpdateStatus {
-  current_version: string; platform: string; source: string; auto_check: boolean; skipped_versions: string[];
+  current_version: string; current_build?: number; channel?: string | null; current_key?: string;
+  platform: string; source: string; auto_check: boolean; skipped_versions: string[];
   check: { state: "idle" | "checking" | "done" | "error"; checked_at: string | null; last_success_at?: string | null;
     error: { code: string; message: string } | null };
-  release: { version: string; tag: string; published_at: string | null; notes: string; size: number; artifact: string; sha256: string;
+  release: { version: string; key?: string; build_number?: number; channel?: string | null; commit?: string | null;
+    tag: string; published_at: string | null; notes: string; size: number; artifact: string; sha256: string;
     platform: string } | null;
   available: boolean; note: string | null; skipped: boolean; prompt: boolean;
   download: { state: "idle" | "downloading" | "verifying" | "ready" | "error"; bytes: number; total: number | null;

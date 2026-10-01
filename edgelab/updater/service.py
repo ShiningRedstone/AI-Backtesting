@@ -22,15 +22,28 @@ def _dirs() -> tuple[Path, Path]:
     return runtime.settings_path().parent, runtime.update_cache_dir()
 
 
+def build_identity() -> tuple[int, str | None]:
+    """(build number, channel) of the running build: from the packaged build manifest (CI builds record the
+    branch and run number, ADR-72); a development run has neither unless EDGELAB_UPDATE_CHANNEL names a branch
+    to check against."""
+    import os
+    from edgelab import runtime
+    m = runtime.build_manifest() if runtime.is_frozen() else None
+    n = (m or {}).get("build_number") or 0
+    channel = (m or {}).get("channel") or os.environ.get("EDGELAB_UPDATE_CHANNEL") or None
+    return (int(n) if isinstance(n, int) and not isinstance(n, bool) else 0), channel
+
+
 def configure(*, install_dir: Path | None, restart_args: list[str], protected: Callable[[], list[Path]],
               shutdown: Callable[[], None], source=None) -> UpdateManager:
     """Called once by the packaged desktop launcher."""
     global _manager
     state_dir, cache = _dirs()
+    build, channel = build_identity()
     with _lock:
-        _manager = UpdateManager(edgelab.__version__, source or default_source(), state_dir, cache,
+        _manager = UpdateManager(edgelab.__version__, source or default_source(channel=channel), state_dir, cache,
                                  install_dir=install_dir, restart_args=restart_args, protected=protected,
-                                 shutdown=shutdown)
+                                 shutdown=shutdown, build_number=build, channel=channel)
     threading.Thread(target=_manager.cleanup, name="edgelab-update-cleanup", daemon=True).start()
     return _manager
 
@@ -40,7 +53,9 @@ def manager() -> UpdateManager:
     with _lock:
         if _manager is None:
             state_dir, cache = _dirs()
-            _manager = UpdateManager(edgelab.__version__, default_source(), state_dir, cache)
+            build, channel = build_identity()
+            _manager = UpdateManager(edgelab.__version__, default_source(channel=channel), state_dir, cache,
+                                     build_number=build, channel=channel)
         return _manager
 
 
@@ -59,8 +74,8 @@ def register_routes(app, body: Callable[[], dict], bad: Callable[[str], Exceptio
 
     def version_arg() -> str:
         v = body().get("version")
-        if not isinstance(v, str) or len(v) > 20:
-            raise bad("version must be a MAJOR.MINOR.PATCH string")
+        if not isinstance(v, str) or len(v) > 24:
+            raise bad("version must be a release key (MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-bN)")
         return v
 
     @app.get("/api/version")
@@ -69,7 +84,8 @@ def register_routes(app, body: Callable[[], dict], bad: Callable[[str], Exceptio
         m = runtime.build_manifest() if runtime.is_frozen() else None
         return jsonify({"version": edgelab.__version__, "packaged": runtime.is_frozen(),
                         "build_id": (m or {}).get("build_id"), "git_commit": (m or {}).get("git_commit"),
-                        "built_at": (m or {}).get("built_at"), "build": runtime.build_label()})
+                        "built_at": (m or {}).get("built_at"), "build": runtime.build_label(),
+                        "build_number": (m or {}).get("build_number") or 0, "channel": (m or {}).get("channel")})
 
     @app.get("/api/update/status")
     def update_status():

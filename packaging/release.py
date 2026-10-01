@@ -3,7 +3,9 @@
     python packaging/release.py [--dist dist/EdgeLab] [--out dist/release] [--notes NOTES.md] [--allow-dirty]
 
 Produces in --out:
-  EdgeLab-<version>-<platform>.zip   the packaged application folder (top-level folder "EdgeLab/")
+  EdgeLab-<version>-<platform>.zip   the packaged application folder (top-level folder "EdgeLab/");
+                                     a CI branch build (manifest with channel + build_number) is named
+                                     EdgeLab-<version>-b<n>-<platform>.zip and tagged build-<branch>-<n>
   edgelab-release.json               the machine-readable release manifest the updater reads
   SHA256SUMS.txt                     human-checkable checksums
 and prints the `gh release create` command that would publish them. Refuses when the versions of
@@ -53,7 +55,8 @@ def sha256(p: Path) -> str:
 def main(argv=None) -> int:
     import edgelab
     from edgelab.updater.apply import exe_name
-    from edgelab.updater.core import MANIFEST_NAME, MANIFEST_SCHEMA, current_platform, validate_manifest
+    from edgelab.updater.core import (MANIFEST_NAME, MANIFEST_SCHEMA, MANIFEST_SCHEMA_BUILD, build_tag, current_platform,
+                                      validate_manifest)
     from edgelab.updater.source import DirectoryReleaseSource
     ap = argparse.ArgumentParser()
     ap.add_argument("--dist", default=str(REPO / "dist" / "EdgeLab"))
@@ -82,28 +85,38 @@ def main(argv=None) -> int:
                         "commit first or pass --allow-dirty")
     if problems:
         sys.exit("refusing to prepare a release:\n  - " + "\n  - ".join(problems))
-    notes = Path(a.notes).read_text(encoding="utf-8") if a.notes else f"EdgeLab {version}"
+    channel, build_number = build.get("channel"), int(build.get("build_number") or 0)
+    branch_build = bool(channel and build_number)
+    label = f"EdgeLab {version} build {build_number} ({channel})" if branch_build else f"EdgeLab {version}"
+    notes = Path(a.notes).read_text(encoding="utf-8") if a.notes else label
     out.mkdir(parents=True, exist_ok=True)
-    name = f"EdgeLab-{version}-{a.platform}.zip"
+    name = f"EdgeLab-{version}-b{build_number}-{a.platform}.zip" if branch_build else f"EdgeLab-{version}-{a.platform}.zip"
+    tag = build_tag(channel, build_number) if branch_build else f"v{version}"
     zpath = out / name
     print(f"packaging {app} -> {zpath}")
     build_zip(app, zpath)
     digest, size = sha256(zpath), zpath.stat().st_size
-    manifest = {"schema": MANIFEST_SCHEMA, "app": "EdgeLab", "version": version, "tag": f"v{version}",
+    manifest = {"schema": MANIFEST_SCHEMA_BUILD if branch_build else MANIFEST_SCHEMA, "app": "EdgeLab",
+                "version": version, "tag": tag,
+                **({"channel": channel, "build_number": build_number, "commit": build.get("git_commit")}
+                   if branch_build else {}),
                 "platform": a.platform, "published_at": datetime.now(timezone.utc).isoformat(),
                 "notes": notes, "artifact": {"name": name, "size": size, "sha256": digest, "app_dir": app.name},
                 "build": {k: build.get(k) for k in ("build_id", "git_commit", "source_sha256", "built_at")}}
     validate_manifest(manifest)
     (out / MANIFEST_NAME).write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     (out / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n", encoding="utf-8")
-    rel = DirectoryReleaseSource(out).latest()                  # the updater's own reader accepts it
-    assert rel.version == version
-    print(f"\nversion   {version} (tag v{version})\nartifact  {name}\nsize      {size:,} bytes\nsha256    {digest}\n"
-          f"build     {build.get('build_id')} commit {build.get('git_commit')}")
-    notes_arg = f'--notes-file "{a.notes}"' if a.notes else f'--notes "EdgeLab {version}"'
-    print("\nNOT published. To publish (maintainers only), from the repository root:\n"
-          f'  gh release create v{version} "{zpath}" "{out / MANIFEST_NAME}" "{out / "SHA256SUMS.txt"}" '
-          f'--repo ShiningRedstone/AI-Backtesting --title "EdgeLab {version}" {notes_arg}')
+    rel = DirectoryReleaseSource(out, channel=channel if branch_build else None).latest()   # the updater accepts it
+    assert rel.version == version and rel.manifest["build_number"] == (build_number if branch_build else 0)
+    (out / "release-tag.txt").write_text(tag + "\n", encoding="utf-8")   # read by the CI publish step
+    print(f"\nversion   {version} (tag {tag})\nartifact  {name}\nsize      {size:,} bytes\nsha256    {digest}\n"
+          f"build     {build.get('build_id')} commit {build.get('git_commit')}"
+          + (f"\nbranch    {channel} build {build_number}" if branch_build else ""))
+    notes_arg = f'--notes-file "{a.notes}"' if a.notes else f'--notes "{label}"'
+    prerelease = " --prerelease" if branch_build else ""
+    print("\nNOT published. To publish (maintainers only; CI does this for branch builds), from the repository root:\n"
+          f'  gh release create {tag} "{zpath}" "{out / MANIFEST_NAME}" "{out / "SHA256SUMS.txt"}" '
+          f'--repo ShiningRedstone/AI-Backtesting --title "{label}" {notes_arg}{prerelease}')
     print(f"\nLocal test of the update flow without GitHub: set EDGELAB_UPDATE_SOURCE={out} and start an OLDER build.")
     return 0
 

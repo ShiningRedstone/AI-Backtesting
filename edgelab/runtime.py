@@ -325,7 +325,11 @@ def build_manifest() -> dict | None:
 
 def build_label() -> str:
     m = build_manifest() if is_frozen() else None
-    return f"packaged {m['app_version']} build {m['build_id']}" if m else "development"
+    if not m:
+        return "development"
+    if m.get("build_number"):
+        return f"packaged {m['app_version']} build {m['build_number']} of {m.get('channel')} ({m['build_id']})"
+    return f"packaged {m['app_version']} build {m['build_id']}"
 
 
 def generate_build_manifest(repo: str | Path | None = None, extra: Mapping | None = None) -> dict:

@@ -3,10 +3,12 @@
 ``ReleaseSource.latest()`` returns a validated :class:`Release` (manifest + artifact URL) or raises
 :class:`UpdateError`. Two implementations:
 
-* :class:`GitHubReleaseSource` - the GitHub Releases API of one repository (``/releases/latest``,
-  which excludes drafts and pre-releases). The manifest asset ``edgelab-release.json`` is downloaded
-  and validated; the artifact URL is taken from the same release's asset list, and its asset size
-  must equal the manifest's.
+* :class:`GitHubReleaseSource` - the GitHub Releases API of one repository. With a ``channel`` (the git
+  branch the running build came from; ADR-72) it lists the releases, keeps the branch builds of that
+  channel (tag ``build-<branch-slug>-<n>``, published by CI as pre-releases) and takes the highest build
+  number. Without a channel it reads ``/releases/latest`` (versioned releases; excludes drafts and
+  pre-releases). Either way the manifest asset ``edgelab-release.json`` is downloaded and validated; the
+  artifact URL is taken from the same release's asset list, and its asset size must equal the manifest's.
 * :class:`DirectoryReleaseSource` - a local folder holding the same two files (developer testing of
   the full update flow without GitHub; produced by ``packaging/release.py``).
 
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
-from edgelab.updater.core import DEFAULT_REPO, MANIFEST_NAME, UpdateError, validate_manifest
+from edgelab.updater.core import DEFAULT_REPO, MANIFEST_NAME, UpdateError, channel_slug, validate_manifest
 
 USER_AGENT = "EdgeLab-Updater"
 ALLOWED_HOSTS = ("api.github.com", "github.com", "objects.githubusercontent.com",
@@ -68,7 +70,8 @@ class UrllibTransport:
                 raise UpdateError("RATE_LIMITED", "GitHub rate limit reached; try again later",
                                   reset=e.headers.get("X-RateLimit-Reset")) from None
             if e.code == 404:
-                raise UpdateError("NO_RELEASE", "no published release was found") from None
+                raise UpdateError("NO_RELEASE", "no published release was found (a private repository's releases "
+                                                "are not visible to the app)") from None
             raise UpdateError("HTTP_ERROR", f"HTTP {e.code} from {urlparse(url).hostname}") from None
         except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError) as e:
             raise UpdateError("OFFLINE", f"cannot reach {urlparse(url).hostname} ({getattr(e, 'reason', e)})") from None
@@ -136,19 +139,48 @@ def _file_path(url: str) -> Path:
 
 class GitHubReleaseSource:
     def __init__(self, repo: str = DEFAULT_REPO, transport: Transport | None = None, timeout: float = 10.0,
-                 api: str = "https://api.github.com"):
+                 api: str = "https://api.github.com", channel: str | None = None):
         self.repo, self.transport, self.timeout, self.api = repo, transport or UrllibTransport(), timeout, api
+        self.channel = channel or None
 
     @property
     def description(self) -> str:
-        return f"GitHub Releases of {self.repo}"
+        return (f"GitHub builds of branch {self.channel} ({self.repo})" if self.channel
+                else f"GitHub Releases of {self.repo}")
 
     def latest(self) -> Release:
+        if self.channel:
+            return self._latest_build()
         rel = self.transport.get_json(f"{self.api}/repos/{self.repo}/releases/latest", self.timeout)
         if not isinstance(rel, dict) or not isinstance(rel.get("assets"), list):
             raise UpdateError("MALFORMED_METADATA", "the GitHub release response has no asset list")
         if rel.get("draft") or rel.get("prerelease"):
             raise UpdateError("NO_RELEASE", "the latest release is a draft or pre-release")
+        return self._from_release(rel)
+
+    def _latest_build(self) -> Release:
+        """The newest CI build of this installation's branch (highest build number in its tag)."""
+        rels = self.transport.get_json(f"{self.api}/repos/{self.repo}/releases?per_page=100", self.timeout)
+        if not isinstance(rels, list):
+            raise UpdateError("MALFORMED_METADATA", "the GitHub releases response is not a list")
+        prefix = f"build-{channel_slug(self.channel)}-"
+        builds = []
+        for rel in rels:
+            tag = rel.get("tag_name") if isinstance(rel, dict) else None
+            if isinstance(tag, str) and tag.startswith(prefix) and tag[len(prefix):].isdigit() and not rel.get("draft"):
+                builds.append((int(tag[len(prefix):]), rel))
+        if not builds:
+            raise UpdateError("NO_RELEASE", f"no build of branch {self.channel} has been published yet")
+        n, rel = max(builds, key=lambda b: b[0])
+        if not isinstance(rel.get("assets"), list):
+            raise UpdateError("MALFORMED_METADATA", "the GitHub release response has no asset list")
+        r = self._from_release(rel)
+        if r.manifest["channel"] != self.channel or r.manifest["build_number"] != n:
+            raise UpdateError("MALFORMED_METADATA", f"release {rel.get('tag_name')} does not describe build {n} of "
+                                                    f"branch {self.channel}")
+        return r
+
+    def _from_release(self, rel: dict) -> Release:
         assets = {a.get("name"): a for a in rel["assets"] if isinstance(a, dict)}
         man = assets.get(MANIFEST_NAME)
         if not man or not isinstance(man.get("browser_download_url"), str):
@@ -170,9 +202,10 @@ class GitHubReleaseSource:
 class DirectoryReleaseSource:
     """A local release folder: edgelab-release.json + the artifact zip (developer testing)."""
 
-    def __init__(self, folder: str | Path):
+    def __init__(self, folder: str | Path, channel: str | None = None):
         self.folder = Path(folder)
         self.transport = FileTransport()
+        self.channel = channel or None
 
     @property
     def description(self) -> str:
@@ -181,6 +214,9 @@ class DirectoryReleaseSource:
     def latest(self) -> Release:
         mpath = self.folder / MANIFEST_NAME
         manifest = validate_manifest(self.transport.get_json(mpath.resolve().as_uri(), 0))
+        if self.channel and manifest["channel"] and manifest["channel"] != self.channel:
+            raise UpdateError("NO_RELEASE", f"the release folder holds a build of branch {manifest['channel']}, "
+                                            f"not {self.channel}")
         art = self.folder / manifest["artifact"]["name"]
         if not art.is_file():
             raise UpdateError("MALFORMED_METADATA", f"artifact {art.name} is missing from {self.folder}")
@@ -190,14 +226,15 @@ class DirectoryReleaseSource:
 SOURCE_ENV = "EDGELAB_UPDATE_SOURCE"
 
 
-def default_source(environ: dict | None = None):
-    """GitHub Releases of the official repository; ``EDGELAB_UPDATE_SOURCE`` (a local release folder)
-    overrides it for testing the full flow offline. The override is shown in the About screen."""
+def default_source(environ: dict | None = None, channel: str | None = None):
+    """GitHub of the official repository (branch builds of ``channel`` when the running build has one);
+    ``EDGELAB_UPDATE_SOURCE`` (a local release folder) overrides it for testing the full flow offline.
+    The override is shown in the About screen."""
     env = os.environ if environ is None else environ
     override = env.get(SOURCE_ENV)
     if override:
-        return DirectoryReleaseSource(override)
-    return GitHubReleaseSource()
+        return DirectoryReleaseSource(override, channel=channel)
+    return GitHubReleaseSource(channel=channel)
 
 
 def sha256_file(path: Path) -> str:

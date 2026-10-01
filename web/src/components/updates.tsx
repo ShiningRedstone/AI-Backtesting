@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { AppVersion, UpdateStatus } from "../api/types";
 import { href } from "../app/router";
-import { Badge, Banner, Button, Card, Checkbox, ErrorPanel, KeyValues, Loading, Modal, Mono, bytes, shortTime } from "./ui";
+import { Badge, Banner, Button, Card, Checkbox, ErrorPanel, KeyValues, Loading, Mono, bytes, shortTime } from "./ui";
 
 export const UI_VERSION = typeof __EDGELAB_VERSION__ === "string" ? __EDGELAB_VERSION__ : "unknown";
 
@@ -22,7 +22,7 @@ function publish(s: UpdateStatus | null, e: ApiError | null) {
   current = s; lastError = e;
   listeners.forEach((l) => l(s, e));
   window.clearTimeout(timer);
-  timer = window.setTimeout(refresh, busy(s) ? 1500 : 10 * 60 * 1000);
+  timer = window.setTimeout(refresh, busy(s) ? 1500 : 5 * 60 * 1000);   // the backend re-checks GitHub every 30 min
 }
 export function refresh() {
   api.get<UpdateStatus>("/api/update/status").then((s) => publish(s, null)).catch((e: ApiError) => publish(current, e));
@@ -43,12 +43,19 @@ export function useUpdates(): [UpdateStatus | null, ApiError | null] {
   return st;
 }
 
+type Rel = NonNullable<UpdateStatus["release"]>;
+/** The identity the update actions use: a branch build's key ("0.2.0-b57") or a release version. */
+export const relKey = (r: Rel) => r.key ?? r.version;
+/** Plain-English label: "build 57" for a branch build, "version 0.3.0" for a versioned release. */
+export const relLabel = (r: Rel) => (r.build_number ? `build ${r.build_number}` : `version ${r.version}`);
+const currentLabel = (s: UpdateStatus) => (s.current_build ? `build ${s.current_build}` : `version ${s.current_version}`);
+
 export function VersionChip() {
   const [s] = useUpdates();
   const avail = !!s?.available && !s.skipped;
   return (
     <a className={`chip${avail ? " accent" : ""}`} href={href("/settings?tab=about")} data-testid="version-chip"
-      title={avail ? `EdgeLab ${s?.release?.version} is available` : `EdgeLab ${UI_VERSION}`}>
+      title={avail && s?.release ? `EdgeLab ${relLabel(s.release)} is available` : `EdgeLab ${UI_VERSION}`}>
       v{UI_VERSION}{avail && <b>· update</b>}
     </a>
   );
@@ -66,46 +73,39 @@ function Progress({ s }: { s: UpdateStatus }) {
   );
 }
 
-/** The prompt shown when a newer published release exists (not skipped, not deferred this session). */
-export function UpdateDialog() {
+/** Shown across the top of the app whenever a newer build of this installation's branch exists (ADR-72).
+ *  "Restart and update" runs the backend's one-click install: check, download, SHA-256 verify, then the helper
+ *  swaps the application folder and EdgeLab reopens on the new build (rolled back if it does not start). */
+export function UpdateBanner() {
   const [s] = useUpdates();
   const [err, setErr] = useState<ApiError | null>(null);
-  const [closed, setClosed] = useState(false);
+  const [hidden, setHidden] = useState<string | null>(null);
   const rel = s?.release;
-  const inProgress = !!s && ["downloading", "verifying", "ready"].includes(s.download.state) && s.download.version === rel?.version;
-  const open = !!s && !!rel && !closed && (s.prompt || inProgress || !!s.applying);
-  if (!open || !s || !rel) return null;
-  const act = (path: string) => async () => {
+  const inst = s?.install;
+  const installing = inst?.state === "running" || inst?.state === "applying";
+  if (!s || !rel || !s.available || s.skipped || (hidden === relKey(rel) && !installing)) return null;
+  const go = async () => {
     setErr(null);
-    try {
-      await updateAction(path, { version: rel.version });
-      if (path === "later" || path === "skip") setClosed(true);
-    } catch (e) { setErr(e as ApiError); }
+    try { await updateAction("install"); } catch (e) { setErr(e as ApiError); }
   };
-  const d = s.download;
+  const later = async () => {
+    setHidden(relKey(rel));
+    try { await updateAction("later", { version: relKey(rel) }); } catch { /* hiding locally is enough */ }
+  };
+  const step = inst?.state === "applying" || inst?.step === "applying" ? "Restarting into the new build…"
+    : inst?.step === "downloading" ? "Downloading and verifying…" : "Checking…";
   return (
-    <Modal open title="A new EdgeLab version is available" wide onClose={() => { if (!busy(s)) void act("later")(); }} testId="update-dialog"
-      actions={s.applying ? null : d.state === "ready" ? <>
-        <Button onClick={act("later")}>Later</Button>
-        <Button kind="primary" onClick={act("apply")} disabled={!s.apply_supported} testId="update-apply"
-          title={s.apply_unsupported_reason ?? undefined}>Restart and update</Button></> : <>
-        <Button kind="ghost" onClick={act("skip")} testId="update-skip" disabled={busy(s)}>Skip this version</Button>
-        <Button onClick={act("later")} testId="update-later" disabled={busy(s)}>Later</Button>
-        <Button kind="primary" onClick={act("download")} busy={d.state === "downloading" || d.state === "verifying"} busyLabel="Downloading…"
-          testId="update-now">Update now</Button></>}>
-      <KeyValues rows={[["Current version", <Mono>{s.current_version}</Mono>], ["New version", <b className="pos">{rel.version}</b>],
-        ["Released", rel.published_at ? shortTime(rel.published_at) : "—"], ["Download size", bytes(rel.size)],
-        ["Source", <span className="small">{s.source}</span>]]} />
-      {rel.notes && <div className="update-notes" data-testid="update-notes">{rel.notes}</div>}
-      {(d.state !== "idle" && d.version === rel.version) && <Progress s={s} />}
-      {d.state === "error" && d.error && <Banner tone="error" testId="update-error"><b>{d.error.code}</b> — {d.error.message}
-        {" "}Nothing was installed; the current version is unchanged.</Banner>}
-      {s.applying && <Banner tone="info">EdgeLab will close; the update helper replaces the application folder and starts the new version.</Banner>}
-      {!s.apply_supported && <p className="small muted">{s.apply_unsupported_reason}</p>}
-      <ErrorPanel error={err} />
-      <p className="small muted">Updates come only from published releases and are installed only after the SHA-256 checksum matches.
-        Your research workspace and settings are never touched.</p>
-    </Modal>
+    <div className="update-banner" role="status" data-testid="update-banner">
+      <span><b>Update available:</b> {relLabel(rel)}{rel.channel ? <> of <b>{rel.channel}</b></> : null}
+        {" "}<span className="muted">(you have {currentLabel(s)})</span></span>
+      {installing && <span className="muted small" data-testid="update-banner-step">{step} EdgeLab will close and reopen.</span>}
+      {inst?.state === "error" && inst.error && <span className="neg small">Not installed: {inst.error.message}</span>}
+      {err && <span className="neg small">{err.message}</span>}
+      <span className="spacer" />
+      {!installing && <Button small kind="ghost" onClick={later} testId="update-later">Later</Button>}
+      <Button small kind="primary" onClick={go} busy={installing} busyLabel={step} disabled={!s.apply_supported}
+        title={s.apply_unsupported_reason ?? "Download, verify and restart into the new build"} testId="update-now">Restart and update</Button>
+    </div>
   );
 }
 
@@ -131,14 +131,16 @@ export function UpdatePanel() {
         busyLabel="Checking…" testId="update-check">Check for updates</Button>
       <Button small kind="primary" onClick={act("install")} busy={installing} busyLabel={stepLabel} disabled={!s.apply_supported}
         title={s.apply_unsupported_reason ?? "Check, download, verify and restart into the newest release"} testId="update-install">Update now</Button></>}>
-      {inst?.state === "up_to_date" && <Banner tone="info" testId="update-uptodate">EdgeLab {s.current_version} is up to date; nothing to install.</Banner>}
+      {inst?.state === "up_to_date" && <Banner tone="info" testId="update-uptodate">EdgeLab {currentLabel(s)} is up to date; nothing to install.</Banner>}
       {installing && <Banner tone="info" testId="update-installing">{stepLabel} EdgeLab will close and reopen on the new version
         {inst?.version ? ` (${inst.version})` : ""}.</Banner>}
       {inst?.state === "error" && inst.error && <Banner tone="error" testId="update-install-error"><b>{inst.error.code}</b> — {inst.error.message}
         {" "}Nothing was installed; the current version is unchanged.</Banner>}
       <KeyValues rows={[
-        ["Installed version", <><Mono>{s.current_version}</Mono> {v && v.version !== UI_VERSION && <Badge tone="error">UI {UI_VERSION} ≠ backend {v.version}</Badge>}</>],
-        ["Latest published", rel ? <><Mono>{rel.version}</Mono> {s.available ? <Badge tone="ok">newer</Badge> : null}
+        ["Installed", <>version {s.current_version}{s.current_build ? `, build ${s.current_build}` : ""}
+          {" "}{v && v.version !== UI_VERSION && <Badge tone="error">UI {UI_VERSION} ≠ backend {v.version}</Badge>}</>],
+        ["Update branch", s.channel ? <b>{s.channel}</b> : <span className="muted">none (this is not a branch build)</span>],
+        ["Latest available", rel ? <>{relLabel(rel)} {s.available ? <Badge tone="ok">newer</Badge> : null}
           {s.skipped ? <Badge tone="warn">skipped</Badge> : null} <span className="small muted">{rel.published_at ? shortTime(rel.published_at) : ""}</span></> : "—"],
         ["Last check", s.check.checked_at ? `${shortTime(s.check.checked_at)} · ${s.check.state}` : s.check.state],
         ["Check result", s.check.error ? <span className="warn">{s.check.error.code}: {s.check.error.message}</span> : (s.note ?? (s.available ? "update available" : "—"))],
@@ -148,21 +150,23 @@ export function UpdatePanel() {
         ["Last update", s.last_update ? `${String(s.last_update.event)} ${String(s.last_update.version ?? "")} · ${shortTime(String(s.last_update.at))}`
           + (s.last_update.error ? ` · ${String(s.last_update.error)}` : "") : "none recorded"]]} />
       <div className="inline" style={{ marginTop: 10 }}>
-        <Checkbox checked={s.auto_check} onChange={(on) => void act("preferences", { auto_check: on })()} label="Check for updates at start-up"
+        <Checkbox checked={s.auto_check} onChange={(on) => void act("preferences", { auto_check: on })()}
+          label="Check for updates automatically (at start-up, then every 30 minutes)"
           testId="update-auto" />
       </div>
       {s.available && rel && <div className="actions" style={{ marginTop: 10 }}>
         <Button kind="primary" onClick={act("install")} busy={installing} busyLabel={stepLabel} disabled={!s.apply_supported}
-          title={s.apply_unsupported_reason ?? undefined}>Update to {rel.version}</Button>
-        {s.skipped ? <Button onClick={act("unskip", { version: rel.version })}>Stop skipping {rel.version}</Button>
-          : <Button kind="ghost" onClick={act("skip", { version: rel.version })}>Skip {rel.version}</Button>}
+          title={s.apply_unsupported_reason ?? undefined}>Update to {relLabel(rel)}</Button>
+        {s.skipped ? <Button onClick={act("unskip", { version: relKey(rel) })}>Stop skipping {relLabel(rel)}</Button>
+          : <Button kind="ghost" onClick={act("skip", { version: relKey(rel) })}>Skip {relLabel(rel)}</Button>}
       </div>}
       {s.download.state !== "idle" && <div style={{ marginTop: 10 }}><Progress s={s} /></div>}
       {s.download.state === "error" && s.download.error && <Banner tone="error"><b>{s.download.error.code}</b> — {s.download.error.message}</Banner>}
       {s.skipped_versions.length > 0 && <p className="small muted">Skipped versions: {s.skipped_versions.join(", ")}</p>}
       <ErrorPanel error={err} />
-      <p className="small muted">EdgeLab works fully offline; a failed check never affects research. Releases come from GitHub Releases of
-        ShiningRedstone/AI-Backtesting, never from a branch, and are verified by SHA-256 before anything is installed.</p>
+      <p className="small muted">EdgeLab works fully offline; a failed check never affects research. Updates come from the builds GitHub
+        makes of this installation's own branch (ShiningRedstone/AI-Backtesting) and are verified by SHA-256 before anything is installed.
+        Your research workspace and settings are never touched.</p>
     </Card>
   );
 }

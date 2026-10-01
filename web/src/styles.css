@@ -129,6 +129,10 @@ a.chip:hover { border-color: var(--border-focus); background: var(--surface-2); 
 .demo-banner::before { content: ""; flex: none; width: 12px; height: 12px; background: currentColor;
   -webkit-mask: var(--i-diamond) center / contain no-repeat; mask: var(--i-diamond) center / contain no-repeat; }
 .demo-banner b { font-weight: 650; letter-spacing: .02em; }
+.update-banner { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 18px;
+  background: var(--info-weak); border-bottom: 1px solid var(--info-border); font-size: 13px; }
+.update-banner::before { content: ""; flex: none; width: 13px; height: 13px; background: var(--info);
+  -webkit-mask: var(--i-info) center / contain no-repeat; mask: var(--i-info) center / contain no-repeat; }
 .sidebar { background: var(--bg); border-right: 1px solid var(--border);
   padding: 10px 10px; display: flex; flex-direction: column; gap: 1px; position: sticky; top: var(--top-h);
   height: calc(100vh - var(--top-h)); overflow-y: auto; }

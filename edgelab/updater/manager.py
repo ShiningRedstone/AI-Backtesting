@@ -20,12 +20,13 @@ from pathlib import Path
 from typing import Callable
 
 from edgelab.updater import apply as ap
-from edgelab.updater.core import UpdateError, current_platform, is_newer, parse_version
+from edgelab.updater.core import (UpdateError, current_platform, is_newer_release, parse_key, parse_version,
+                                  release_key)
 from edgelab.updater.source import Release, UrllibTransport, sha256_file, transport_for
 
 STATE_FILE = "update_state.json"
 LOG_FILE = "update.log"
-CHECK_INTERVAL = timedelta(hours=6)
+CHECK_INTERVAL = timedelta(minutes=30)                 # automatic re-check while the packaged app runs
 MAX_UNZIPPED_BYTES = 4 * 1024 ** 3
 
 
@@ -38,9 +39,14 @@ class UpdateManager:
                  install_dir: Path | None = None, platform: str | None = None, transport=None,
                  helper_cmd: Callable[[Path, list[str]], list[str]] | None = None,
                  protected: Callable[[], list[Path]] | None = None, restart_args: list[str] | None = None,
-                 shutdown: Callable[[], None] | None = None, apply_supported: bool | None = None):
+                 shutdown: Callable[[], None] | None = None, apply_supported: bool | None = None,
+                 build_number: int = 0, channel: str | None = None):
         parse_version(current_version)
         self.current = current_version
+        self.build_number = int(build_number or 0)           # CI build number of this installation (0: none)
+        self.channel = channel or None                       # the git branch this build came from (ADR-72)
+        self.current_key = release_key(current_version, self.build_number)
+        self._last_auto: float | None = None
         self.source = source
         self.state_dir, self.cache_dir = Path(state_dir), Path(cache_dir)
         self.install_dir = Path(install_dir) if install_dir else None
@@ -101,26 +107,33 @@ class UpdateManager:
             if rel:
                 if rel["platform"] != self.platform:
                     note = f"the latest release is for {rel['platform']}; this installation is {self.platform}"
-                elif is_newer(rel["version"], self.current):
+                elif is_newer_release(rel, self.current, self.build_number, self.channel):
                     newer = True
+                elif rel["build_number"]:
+                    note = (f"this is the newest build of branch {rel['channel']}" if rel["build_number"] <= self.build_number
+                            else f"build {rel['build_number']} belongs to branch {rel['channel']}, not this installation's branch")
                 elif parse_version(rel["version"]) < parse_version(self.current):
                     note = (f"the published release {rel['version']} is older than this build {self.current}; "
                             "downgrades are never offered")
                 else:
                     note = "this is the latest published release"
             available = bool(rel and newer)
+            key = rel["key"] if rel else None
             last_update = self._last_update_result()
-            return {"current_version": self.current, "platform": self.platform,
+            return {"current_version": self.current, "current_build": self.build_number, "channel": self.channel,
+                    "current_key": self.current_key, "platform": self.platform,
                     "source": getattr(self.source, "description", str(self.source)),
                     "auto_check": bool(st.get("auto_check", True)), "skipped_versions": skipped,
                     "check": dict(self._check, last_success_at=st.get("last_success_at")),
-                    "release": ({"version": rel["version"], "tag": rel["tag"], "published_at": rel["published_at"],
+                    "release": ({"version": rel["version"], "key": rel["key"], "build_number": rel["build_number"],
+                                 "channel": rel["channel"], "commit": rel["commit"],
+                                 "tag": rel["tag"], "published_at": rel["published_at"],
                                  "notes": rel["notes"], "size": rel["artifact"]["size"],
                                  "artifact": rel["artifact"]["name"], "sha256": rel["artifact"]["sha256"],
                                  "platform": rel["platform"]} if rel else None),
                     "available": available, "note": note,
-                    "skipped": bool(available and rel["version"] in skipped),
-                    "prompt": bool(available and rel["version"] not in skipped and rel["version"] not in self._dismissed),
+                    "skipped": bool(available and key in skipped),
+                    "prompt": bool(available and key not in skipped and key not in self._dismissed),
                     "download": dict(self._download), "install": dict(self._install),
                     "apply_supported": self.apply_supported,
                     "apply_unsupported_reason": None if self.apply_supported else (
@@ -148,9 +161,10 @@ class UpdateManager:
         return self.status()
 
     def skip(self, version: str) -> dict:
-        parse_version(version)
+        parse_key(version)
         s = self._state()
-        skipped = sorted(set(s.get("skipped_versions") or []) | {version}, key=parse_version)
+        keep = [v for v in s.get("skipped_versions") or [] if _valid_key(v)]
+        skipped = sorted(set(keep) | {version}, key=parse_key)
         self._save_state(skipped_versions=skipped)
         self._log(event="version_skipped", version=version)
         return self.status()
@@ -175,7 +189,7 @@ class UpdateManager:
             with self._lock:
                 self._release = rel
                 self._check = {"state": "done", "checked_at": _now(), "error": None}
-            self._save_state(last_success_at=_now(), last_seen_version=rel.version)
+            self._save_state(last_success_at=_now(), last_seen_version=rel.manifest.get("key", rel.version))
         except UpdateError as e:
             with self._lock:
                 self._check = {"state": "error", "checked_at": _now(), "error": e.to_dict()}
@@ -194,14 +208,19 @@ class UpdateManager:
         threading.Thread(target=self.check, name="edgelab-update-check", daemon=True).start()
 
     def maybe_auto_check(self) -> None:
-        """Background check at start-up: packaged installations only (a development run or test never
-        contacts the network by itself; 'Check for updates' still works everywhere)."""
+        """Background check at start-up and then every CHECK_INTERVAL while the app runs: packaged installations
+        only (a development run or test never contacts the network by itself; 'Check for updates' still works
+        everywhere). Called from the status poll, so it never delays a response."""
         st = self._state()
         if not st.get("auto_check", True) or not self.apply_supported:
             return
+        now = time.monotonic()
         with self._lock:
-            if self._check["state"] != "idle":
+            if self._check["state"] == "checking" or self._install["state"] in ("running", "applying"):
                 return
+            if self._last_auto is not None and now - self._last_auto < CHECK_INTERVAL.total_seconds():
+                return
+            self._last_auto = now
         self.check_async()
 
     # ---------------------------------------------------------------- download + stage
@@ -213,10 +232,11 @@ class UpdateManager:
             rel = self._release
             if rel is None:
                 raise UpdateError("NO_RELEASE", "check for updates first")
-            if rel.version != version:
-                raise UpdateError("VERSION_MISMATCH", f"the checked release is {rel.version}, not {version}")
-            if not is_newer(version, self.current):
-                raise UpdateError("DOWNGRADE_REFUSED", f"{version} is not newer than {self.current}")
+            key = rel.manifest.get("key", rel.version)
+            if key != version:
+                raise UpdateError("VERSION_MISMATCH", f"the checked release is {key}, not {version}")
+            if not is_newer_release(rel.manifest, self.current, self.build_number, self.channel):
+                raise UpdateError("DOWNGRADE_REFUSED", f"{version} is not newer than {self.current_key}")
             if rel.manifest["platform"] != self.platform:
                 raise UpdateError("PLATFORM_MISMATCH", f"the release is for {rel.manifest['platform']}")
             if self._download["state"] in ("downloading", "verifying"):
@@ -235,7 +255,7 @@ class UpdateManager:
             self._download["bytes"] = n
 
     def _download_and_stage(self, rel: Release) -> None:
-        m, v = rel.manifest, rel.version
+        m, v = rel.manifest, rel.manifest.get("key", rel.version)
         d = self._stage_dir(v)
         part, final = d / (m["artifact"]["name"] + ".part"), d / m["artifact"]["name"]
         try:
@@ -256,9 +276,12 @@ class UpdateManager:
                                                        "it was discarded and nothing was installed",
                                   expected=m["artifact"]["sha256"], actual=digest)
             part.replace(final)
-            staged = self._extract(final, d / "app", m["artifact"]["app_dir"], v)
-            (d / "READY.json").write_text(json.dumps({"version": v, "sha256": digest, "staged": str(staged),
-                                                      "verified_at": _now()}, indent=1), encoding="utf-8")
+            staged = self._extract(final, d / "app", m["artifact"]["app_dir"], m["version"], m.get("build_number") or 0)
+            (d / "READY.json").write_text(json.dumps({"version": v, "app_version": m["version"],
+                                                      "build_number": m.get("build_number") or 0,
+                                                      "channel": m.get("channel"), "sha256": digest,
+                                                      "staged": str(staged), "verified_at": _now()}, indent=1),
+                                          encoding="utf-8")
             with self._lock:
                 self._download.update(state="ready", error=None, staged=str(staged))
             self._log(event="download_verified", version=v, sha256=digest)
@@ -275,7 +298,7 @@ class UpdateManager:
             self._log(event="download_failed", version=v, error=err)
 
     @staticmethod
-    def _extract(zpath: Path, dest: Path, app_dir: str, version: str) -> Path:
+    def _extract(zpath: Path, dest: Path, app_dir: str, version: str, build_number: int = 0) -> Path:
         """Extract a verified artifact safely (no absolute paths, no '..', no links, bounded size)."""
         with zipfile.ZipFile(zpath) as z:
             total = 0
@@ -302,6 +325,9 @@ class UpdateManager:
         got = ap._manifest_version(staged)
         if got != version:
             raise UpdateError("VERSION_MISMATCH", f"the artifact's build manifest says {got}, the release says {version}")
+        if build_number and ap._manifest_build(staged) != build_number:
+            raise UpdateError("VERSION_MISMATCH", f"the artifact's build manifest says build {ap._manifest_build(staged)}, "
+                                                  f"the release says build {build_number}")
         return staged
 
     # ---------------------------------------------------------------- apply
@@ -315,13 +341,16 @@ class UpdateManager:
         except (OSError, ValueError):
             raise UpdateError("NOT_STAGED", f"{version} has not been downloaded and verified") from None
         staged = Path(info["staged"])
-        if info.get("version") != version or not is_newer(version, self.current):
-            raise UpdateError("DOWNGRADE_REFUSED", f"{version} is not newer than {self.current}")
+        app_version, build = info.get("app_version", info.get("version")), int(info.get("build_number") or 0)
+        staged_meta = {"version": app_version, "build_number": build, "channel": info.get("channel")}
+        if info.get("version") != version or not is_newer_release(staged_meta, self.current, self.build_number, self.channel):
+            raise UpdateError("DOWNGRADE_REFUSED", f"{version} is not newer than {self.current_key}")
         reason = ap.unsafe_reason(self.install_dir, self.protected())
         if reason:
             raise UpdateError("UNSAFE_INSTALL_DIR", reason)
         restart = [str(self.install_dir / ap.exe_name()), *self.restart_args]
-        args = ["--target", str(self.install_dir), "--staged", str(staged), "--version", version,
+        args = ["--target", str(self.install_dir), "--staged", str(staged), "--version", app_version,
+                *(["--build", str(build)] if build else []),
                 "--wait-pid", str(self.app_pid), "--log", str(self.log_path), "--restart", json.dumps(restart),
                 "--ready-timeout", str(self._ready_timeout())]
         for p in self.protected():
@@ -362,10 +391,11 @@ class UpdateManager:
             if chk["state"] == "error":
                 e = chk["error"] or {}
                 raise UpdateError(e.get("code", "CHECK_FAILED"), e.get("message", "the update check failed"))
-            if rel is None or rel.manifest["platform"] != self.platform or not is_newer(rel.version, self.current):
+            if rel is None or rel.manifest["platform"] != self.platform or \
+                    not is_newer_release(rel.manifest, self.current, self.build_number, self.channel):
                 self._set_install(state="up_to_date", step=None)
                 return
-            v = rel.version
+            v = rel.manifest.get("key", rel.version)
             self._set_install(version=v)
             try:
                 staged = json.loads((self._stage_dir(v) / "READY.json").read_text(encoding="utf-8")).get("version") == v
@@ -401,7 +431,7 @@ class UpdateManager:
         if self.cache_dir.is_dir():
             for d in self.cache_dir.iterdir():
                 try:
-                    if d.is_dir() and not is_newer(d.name, self.current):
+                    if d.is_dir() and parse_key(d.name) <= parse_key(self.current_key):
                         shutil.rmtree(d, ignore_errors=True)
                 except UpdateError:
                     shutil.rmtree(d, ignore_errors=True)
@@ -409,6 +439,14 @@ class UpdateManager:
             removed = ap.cleanup_leftovers(self.install_dir)
             if removed:
                 self._log(event="leftovers_removed", paths=removed)
+
+
+def _valid_key(v) -> bool:
+    try:
+        parse_key(v)
+        return True
+    except UpdateError:
+        return False
 
 
 def wait_until(pred: Callable[[], bool], timeout: float = 10.0) -> bool:

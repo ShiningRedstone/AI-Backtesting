@@ -47,6 +47,17 @@ def _manifest_version(folder: Path) -> str | None:
     return None
 
 
+def _manifest_build(folder: Path) -> int:
+    """The CI build number recorded in a packaged build's manifest (0 when it has none)."""
+    for cand in (folder / MANIFEST_FILE, folder / "_internal" / MANIFEST_FILE):
+        try:
+            n = json.loads(cand.read_text(encoding="utf-8")).get("build_number") or 0
+            return int(n) if isinstance(n, int) and not isinstance(n, bool) else 0
+        except (OSError, ValueError):
+            continue
+    return 0
+
+
 def looks_like_install(folder: Path) -> bool:
     return (folder / exe_name()).is_file() and _manifest_version(folder) is not None
 
@@ -177,7 +188,7 @@ def _stop(proc: subprocess.Popen) -> bool:
 def apply_update(target: str | Path, staged: str | Path, version: str, *, wait_pid: int | None = None,
                  restart_cmd: list[str] | None = None, log: str | Path | None = None,
                  protected: list[str | Path] | None = None, exit_timeout: float = 180.0,
-                 ready_timeout: float = DEFAULT_READY_TIMEOUT) -> dict:
+                 ready_timeout: float = DEFAULT_READY_TIMEOUT, build: int | None = None) -> dict:
     """Swap ``target`` for ``staged`` (see module docstring). Returns a result dict; never raises."""
     import tempfile
     target, staged = Path(target), Path(staged)
@@ -211,6 +222,8 @@ def apply_update(target: str | Path, staged: str | Path, version: str, *, wait_p
         return fail("preflight", reason + "; nothing changed", relaunch=True)
     if _manifest_version(staged) != version or not (staged / exe_name()).is_file():
         return fail("preflight", f"the staged build is not EdgeLab {version}; nothing changed", relaunch=True)
+    if build and _manifest_build(staged) != build:
+        return fail("preflight", f"the staged build is not build {build}; nothing changed", relaunch=True)
     try:
         if new.exists():
             shutil.rmtree(new)
@@ -293,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target", required=True)
     ap.add_argument("--staged", required=True)
     ap.add_argument("--version", required=True)
+    ap.add_argument("--build", type=int, default=0, help="CI build number the staged build must carry (branch builds)")
     ap.add_argument("--wait-pid", type=int, default=0)
     ap.add_argument("--log")
     ap.add_argument("--protect", action="append", default=[])
@@ -302,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     restart = json.loads(a.restart) if a.restart else None
     res = apply_update(a.target, a.staged, a.version, wait_pid=a.wait_pid or None, restart_cmd=restart,
-                       log=a.log, protected=a.protect, ready_timeout=a.ready_timeout)
+                       log=a.log, protected=a.protect, ready_timeout=a.ready_timeout, build=a.build or None)
     if not res["ok"]:
         msg = f"EdgeLab could not be updated to {a.version}:\n{res.get('error')}"
         print(msg, file=sys.stderr)

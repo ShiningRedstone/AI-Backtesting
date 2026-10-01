@@ -574,6 +574,170 @@ class TestReleaseTool(Base):
         self.assertIn("frontend bundle says 0.0.9", bad.stderr)
 
 
+def fake_build_app(folder: Path, version: str, build: int, channel: str) -> Path:
+    app = fake_app(folder, version, marker=f"b{build}")
+    (app / "edgelab_build.json").write_text(json.dumps({"app_version": version, "build_number": build, "channel": channel}))
+    return app
+
+
+def build_manifest_v2(version: str, build: int, channel: str, size: int, sha: str, platform: str = PLAT, **kw) -> dict:
+    from edgelab.updater.core import MANIFEST_SCHEMA_BUILD, build_tag
+    return {"schema": MANIFEST_SCHEMA_BUILD, "app": "EdgeLab", "version": version, "tag": build_tag(channel, build),
+            "channel": channel, "build_number": build, "commit": "a" * 40, "platform": platform,
+            "published_at": "2026-10-01T00:00:00+00:00", "notes": f"build {build}",
+            "artifact": {"name": f"EdgeLab-{version}-b{build}-{platform}.zip", "size": size, "sha256": sha,
+                         "app_dir": "EdgeLab"}, **kw}
+
+
+def build_release(folder: Path, version: str, build: int, channel: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    app = fake_build_app(folder / "_build" / "EdgeLab", version, build, channel)
+    z = folder / f"EdgeLab-{version}-b{build}-{PLAT}.zip"
+    size, sha = zip_app(app, z)
+    shutil.rmtree(folder / "_build")
+    (folder / MANIFEST_NAME).write_text(json.dumps(build_manifest_v2(version, build, channel, size, sha)))
+    return folder
+
+
+class TestBranchBuilds(Base):
+    """ADR-72: CI branch builds - an installation takes only newer builds of its OWN branch, in one click."""
+    CH = "claude/zealous-heisenberg-7xwqax"
+
+    def test_build_manifest_validation(self):
+        from edgelab.updater.core import build_tag, parse_key
+        ok = validate_manifest(build_manifest_v2("0.2.0", 7, self.CH, 10, "c" * 64))
+        self.assertEqual((ok["key"], ok["channel"], ok["build_number"]), ("0.2.0-b7", self.CH, 7))
+        self.assertEqual(build_tag(self.CH, 7), "build-claude-zealous-heisenberg-7xwqax-7")
+        self.assertEqual(parse_key("0.2.0-b7"), (0, 2, 0, 7))
+        for label, kw in {"tag": {"tag": "v0.2.0"}, "channel": {"channel": ""}, "build-bool": {"build_number": True},
+                          "commit": {"commit": "xyz"}}.items():
+            with self.assertRaises(UpdateError, msg=label):
+                validate_manifest({**build_manifest_v2("0.2.0", 7, self.CH, 10, "c" * 64), **kw})
+        wrong_art = build_manifest_v2("0.2.0", 7, self.CH, 10, "c" * 64)
+        wrong_art["artifact"]["name"] = f"EdgeLab-0.2.0-b8-{PLAT}.zip"
+        with self.assertRaises(UpdateError):
+            validate_manifest(wrong_art)
+
+    def test_newer_only_within_own_branch(self):
+        from edgelab.updater.core import is_newer_release
+        b9 = {"version": "0.2.0", "build_number": 9, "channel": self.CH}
+        self.assertTrue(is_newer_release(b9, "0.2.0", 8, self.CH))
+        self.assertFalse(is_newer_release(b9, "0.2.0", 9, self.CH))                 # same build
+        self.assertFalse(is_newer_release(b9, "0.2.0", 3, "main"))                  # another branch's build
+        self.assertFalse(is_newer_release(b9, "0.2.0", 0, None))                    # a build without a channel
+        self.assertTrue(is_newer_release({"version": "0.3.0", "build_number": 0, "channel": None}, "0.2.0", 5, self.CH))
+
+    def test_github_source_picks_highest_build_of_its_branch(self):
+        api = "https://api.github.com/repos/ShiningRedstone/AI-Backtesting/releases?per_page=100"
+
+        def rel(tag, n, ch=self.CH, **kw):
+            base = f"https://github.com/ShiningRedstone/AI-Backtesting/releases/download/{tag}"
+            return ({"tag_name": tag, "draft": False, "prerelease": True, "published_at": "2026-10-01T00:00:00Z",
+                     "assets": [{"name": MANIFEST_NAME, "browser_download_url": f"{base}/{MANIFEST_NAME}", "size": 9},
+                                {"name": f"EdgeLab-0.2.0-b{n}-{PLAT}.zip", "browser_download_url": f"{base}/a.zip",
+                                 "size": 100}], **kw},
+                    f"{base}/{MANIFEST_NAME}", build_manifest_v2("0.2.0", n, ch, 100, "d" * 64))
+        mine3, mine7, other9 = rel(f"build-claude-zealous-heisenberg-7xwqax-3", 3), \
+            rel(f"build-claude-zealous-heisenberg-7xwqax-7", 7), rel("build-main-9", 9, ch="main")
+        draft8 = rel("build-claude-zealous-heisenberg-7xwqax-8", 8, draft=True)
+        routes = {api: [other9[0], draft8[0], mine3[0], mine7[0], {"tag_name": "v0.1.0"}]}
+        routes.update({u: m for _, u, m in (mine3, mine7, other9, draft8)})
+        r = GitHubReleaseSource(transport=FakeTransport(routes), channel=self.CH).latest()
+        self.assertEqual((r.manifest["build_number"], r.manifest["key"]), (7, "0.2.0-b7"))
+        with self.assertRaises(UpdateError) as cm:
+            GitHubReleaseSource(transport=FakeTransport(routes), channel="feature/none").latest()
+        self.assertEqual(cm.exception.code, "NO_RELEASE")
+        routes[mine7[1]] = build_manifest_v2("0.2.0", 7, "main", 100, "d" * 64)    # tag says this branch, manifest does not
+        with self.assertRaises(UpdateError):
+            GitHubReleaseSource(transport=FakeTransport(routes), channel=self.CH).latest()
+
+    def test_one_click_install_of_a_branch_build(self):
+        if os.name != "posix":
+            self.skipTest("the stub executable is a POSIX shell script")
+        inst = fake_build_app(self.tmp / "Programs" / "EdgeLab", "0.2.0", 3, self.CH)
+        rel = build_release(self.tmp / "rel", "0.2.0", 5, self.CH)
+        shut = []
+        app_proc = self.own(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]))
+
+        def shutdown():
+            shut.append(1)
+            app_proc.kill()
+            app_proc.wait()
+
+        helper = lambda staged, args: [sys.executable, "-m", "edgelab.updater.apply", *args,   # noqa: E731
+                                       "--ready-timeout", "20"]
+        m = self.mgr(DirectoryReleaseSource(rel, channel=self.CH), install_dir=inst, helper_cmd=helper,
+                     protected=lambda: [self.tmp / "workspace"], shutdown=shutdown, build_number=3, channel=self.CH)
+        m.app_pid = app_proc.pid
+        st = m.check()
+        self.assertTrue(st["prompt"])
+        self.assertEqual((st["release"]["key"], st["release"]["build_number"], st["current_key"]), ("0.2.0-b5", 5, "0.2.0-b3"))
+        os.environ["PYTHONPATH"] = str(REPO)
+        out = m.install(wait=True)
+        self.assertEqual((out["install"]["state"], out["install"]["version"]), ("applying", "0.2.0-b5"), out["install"])
+        self.assertTrue(wait_until(lambda: shut == [1], 5))
+        self.assertTrue(wait_until(lambda: ap._manifest_build(inst) == 5, 20),
+                        m.log_path.read_text() if m.log_path.exists() else "no log")
+        self.assertTrue(wait_until(lambda: "update_completed" in m.log_path.read_text(), 20))
+        same = self.mgr(DirectoryReleaseSource(rel, channel=self.CH), install_dir=self.tmp / "x", build_number=5,
+                        channel=self.CH, shutdown=shutdown)
+        self.assertEqual(same.install(wait=True)["install"]["state"], "up_to_date")
+        other = self.mgr(DirectoryReleaseSource(rel), install_dir=self.tmp / "y", build_number=1, channel="main")
+        self.assertFalse(other.check()["available"])                                   # never another branch's build
+
+    def test_auto_check_runs_at_start_and_then_every_interval(self):
+        from edgelab.updater.manager import CHECK_INTERVAL
+        src = FakeSource(UpdateError("OFFLINE", "x"))
+        m = self.mgr(src, install_dir=fake_app(self.tmp / "P" / "EdgeLab", "0.2.0"))
+        m.maybe_auto_check()
+        self.assertTrue(wait_until(lambda: src.calls == 1 and m.status()["check"]["state"] == "error", 5))
+        m.maybe_auto_check()
+        time.sleep(0.2)
+        self.assertEqual(src.calls, 1)                                                 # not again within the interval
+        m._last_auto -= CHECK_INTERVAL.total_seconds() + 1
+        m.maybe_auto_check()
+        self.assertTrue(wait_until(lambda: src.calls == 2, 5))
+        dev = self.mgr(FakeSource(UpdateError("OFFLINE", "x")))                        # development run: never automatic
+        dev.maybe_auto_check()
+        time.sleep(0.2)
+        self.assertEqual(dev.source.calls, 0)
+
+    def test_release_tool_prepares_a_branch_build(self):
+        import edgelab
+        dist = fake_app(self.tmp / "dist" / "EdgeLab", edgelab.__version__)
+        (dist / "edgelab_build.json").write_text(json.dumps({"app_version": edgelab.__version__, "build_id": "X",
+                                                             "git_tracked_changes": False, "git_commit": "e" * 40,
+                                                             "channel": self.CH, "build_number": 42}))
+        static = dist / "_internal" / "edgelab" / "web" / "static"
+        static.mkdir(parents=True)
+        (static / "build-info.json").write_text(json.dumps({"app_version": edgelab.__version__}))
+        out = self.tmp / "release"
+        code = subprocess.run([sys.executable, str(REPO / "packaging" / "release.py"), "--dist", str(dist), "--out",
+                               str(out)], capture_output=True, text=True, cwd=REPO)
+        self.assertEqual(code.returncode, 0, code.stderr + code.stdout)
+        self.assertEqual((out / "release-tag.txt").read_text().strip(), "build-claude-zealous-heisenberg-7xwqax-42")
+        self.assertTrue((out / f"EdgeLab-{edgelab.__version__}-b42-{PLAT}.zip").is_file())
+        r = DirectoryReleaseSource(out, channel=self.CH).latest()
+        self.assertEqual((r.manifest["key"], r.manifest["commit"]), (f"{edgelab.__version__}-b42", "e" * 40))
+        with self.assertRaises(UpdateError) as cm:
+            DirectoryReleaseSource(out, channel="main").latest()
+        self.assertEqual(cm.exception.code, "NO_RELEASE")
+
+    def test_routes_accept_build_keys(self):
+        from edgelab.updater import service
+        from edgelab.web.app import create_app
+        rel = build_release(self.tmp / "rel", "0.2.0", 12, self.CH)
+        service.set_manager(self.mgr(DirectoryReleaseSource(rel, channel=self.CH), build_number=4, channel=self.CH))
+        self.addCleanup(service.set_manager, None)
+        root = self.tmp / "ws"
+        shutil.copytree(REPO / "configs", root / "configs")
+        c = create_app(root).test_client()
+        self.assertTrue(c.post("/api/update/check", json={}).get_json()["prompt"])
+        self.assertTrue(c.post("/api/update/skip", json={"version": "0.2.0-b12"}).get_json()["skipped"])
+        self.assertEqual(c.post("/api/update/skip", json={"version": "0.2.0-bx"}).status_code, 409)
+        c.application.config["EDGELAB"]["services"].store.close()
+
+
 class TestHttpRoutes(Base):
     def test_update_routes(self):
         from edgelab.updater import service

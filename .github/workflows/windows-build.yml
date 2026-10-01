@@ -1,0 +1,72 @@
+# Branch builds of the EdgeLab desktop app (ADR-72).
+# Every push to any branch builds EdgeLab.exe on Windows, smoke-tests it headlessly and publishes it as a
+# GitHub pre-release tagged build-<branch>-<run number>. An installed EdgeLab checks the builds of the branch
+# it was built from and offers "Restart and update" when a newer one exists (edgelab/updater).
+# The repository must be public: the app reads releases without credentials.
+name: Windows build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write            # create the pre-release and delete old builds of the same branch
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CHANNEL: ${{ github.ref_name }}          # passed through the environment, never spliced into commands
+      BUILD_NUMBER: ${{ github.run_number }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build requirements (no duckdb)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/requirements-build.txt
+
+      - name: Build EdgeLab.exe from the committed frontend bundle
+        run: python packaging/build.py --skip-frontend --channel "$env:CHANNEL" --build-number "$env:BUILD_NUMBER"
+
+      - name: Packaged smoke test (headless, scratch demo workspace)
+        run: python packaging/smoke_packaged.py --exe dist/EdgeLab/EdgeLab.exe
+
+      - name: Prepare the release files (zip, manifest, checksums)
+        run: python packaging/release.py
+
+      - name: Publish the branch build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = (Get-Content dist/release/release-tag.txt).Trim()
+          $zip = (Get-ChildItem dist/release/*.zip | Select-Object -First 1).FullName
+          gh release create $tag $zip dist/release/edgelab-release.json dist/release/SHA256SUMS.txt `
+            --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --prerelease `
+            --title "EdgeLab build $env:BUILD_NUMBER ($env:CHANNEL)" `
+            --notes "Automatic build $env:BUILD_NUMBER of branch $env:CHANNEL at commit $env:GITHUB_SHA."
+          if ($LASTEXITCODE -ne 0) { throw "publishing failed" }
+
+      - name: Keep the newest 5 builds of this branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $slug = python -c "import os; from edgelab.updater.core import channel_slug; print(channel_slug(os.environ['CHANNEL']))"
+          $prefix = "build-$slug-"
+          $tags = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' |
+            Where-Object { $_.StartsWith($prefix) -and ($_.Substring($prefix.Length) -match '^\d+$') } |
+            Sort-Object { [int]($_.Substring($prefix.Length)) } -Descending
+          $tags | Select-Object -Skip 5 | ForEach-Object {
+            gh release delete $_ --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag
+          }

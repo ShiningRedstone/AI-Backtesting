@@ -20,7 +20,7 @@ import { ControlsPage } from "../pages/Controls";
 import { PipelinePage } from "../pages/Pipeline";
 import { PaperPage } from "../pages/Paper";
 import { RunsPage } from "../pages/Runs";
-import { UpdateDialog, VersionChip } from "../components/updates";
+import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
 import { useApi } from "./context";
@@ -192,6 +192,7 @@ function ShellBody() {
         <StatusDot />
       </header>
       {demo && <div className="demo-banner" data-testid="demo-banner"><b>DEMO WORKSPACE</b> — {SYNTHETIC_NOTICE}</div>}
+      <UpdateBanner />
       <nav className="sidebar" aria-label="main navigation">
         {NAV.map((g) => (
           <div key={g.section} style={{ display: "contents" }}>
@@ -207,7 +208,6 @@ function ShellBody() {
       </nav>
       <div className="scrim" onClick={() => setMenu(false)} />
       <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <Page />}</main>
-      <UpdateDialog />
       <Toasts />
     </div>
   );
