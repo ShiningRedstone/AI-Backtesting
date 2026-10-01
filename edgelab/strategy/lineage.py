@@ -99,6 +99,8 @@ class StrategyLibrary:
     def __init__(self, root: str | Path):
         self.root = Path(root)
         self.last_index_event: str | None = None     # "used" or "rebuilt:<reason>" (diagnostics)
+        self._fp_cache: tuple | None = None          # (folder signature, fingerprint): see _fingerprint
+        self._lineage_cache: tuple | None = None
         (self.root / "instances").mkdir(parents=True, exist_ok=True)
         (self.root / "batches").mkdir(parents=True, exist_ok=True)
         (self.root / "archived").mkdir(parents=True, exist_ok=True)
@@ -125,9 +127,11 @@ class StrategyLibrary:
             if key(rec) not in {key(r) for r in doc["lineage"]}:
                 doc["lineage"].append(rec)
                 _atomic_write(p, doc)
+                self._fp_cache = None
             return False
         _atomic_write(p, {**dict(identity), "definition": dict(definition), "lineage": [rec],
                           "family_id": lineage.family_id, "name": definition.get("name")})
+        self._fp_cache = None
         return True
 
     def load(self, strategy_id: str) -> dict:
@@ -166,7 +170,30 @@ class StrategyLibrary:
     def index_path(self) -> Path:
         return self.root / "index.json"
 
+    def _dir_signature(self) -> tuple:
+        """Modification stamps of the three library folders. Every library write is an atomic replace (temp file +
+        rename) or a rename (archive / restore), and each of those changes its folder's stamp, so an unchanged
+        signature means no file was added, replaced, renamed or removed."""
+        sig = []
+        for sub in ("instances", "archived", "batches"):
+            try:
+                st = os.stat(self.root / sub)
+                sig.append((sub, st.st_mtime_ns, st.st_ino))
+            except OSError:
+                sig.append((sub, None, None))
+        return tuple(sig)
+
     def _fingerprint(self) -> str:
+        """Content fingerprint of every stored file (name, size, stamp, inode). Recomputed only when a library folder
+        changed (see _dir_signature); otherwise the last value is reused (speed only: same result)."""
+        sig = self._dir_signature()
+        if self._fp_cache and self._fp_cache[0] == sig:
+            return self._fp_cache[1]
+        fp = self._fingerprint_scan()
+        self._fp_cache = (sig, fp)
+        return fp
+
+    def _fingerprint_scan(self) -> str:
         from edgelab.core.identity import hash_obj
         entries = []
         for sub in ("instances", "archived", "batches"):
@@ -247,12 +274,14 @@ class StrategyLibrary:
         if not p.exists():
             raise KeyError(strategy_id)
         os.replace(p, self._archived_path(strategy_id))
+        self._fp_cache = None
 
     def restore(self, strategy_id: str) -> None:
         a = self._archived_path(strategy_id)
         if not a.exists():
             raise KeyError(strategy_id)
         os.replace(a, self._path(strategy_id))
+        self._fp_cache = None
 
     def list_batches(self, kind: str | None = None) -> list[dict]:
         """Batch listing rows. Default (None) = variation batches only, exactly as before proposal
@@ -283,6 +312,14 @@ class StrategyLibrary:
         return chain
 
     def _all_lineage(self) -> list[dict]:
+        fp = self._fingerprint()
+        if self._lineage_cache and self._lineage_cache[0] == fp:
+            return self._lineage_cache[1]
+        out = self._all_lineage_scan()
+        self._lineage_cache = (fp, out)
+        return out
+
+    def _all_lineage_scan(self) -> list[dict]:
         out = []
         for p in list((self.root / "instances").glob("*.json")) + list((self.root / "archived").glob("*.json")):
             d = json.loads(p.read_text())
@@ -292,6 +329,7 @@ class StrategyLibrary:
 
     def save_batch(self, batch: Mapping) -> None:
         _atomic_write(self.root / "batches" / f"{batch['batch_id']}.json", dict(batch))
+        self._fp_cache = None
 
     def load_batch(self, batch_id: str) -> dict:
         return json.loads((self.root / "batches" / f"{batch_id}.json").read_text())

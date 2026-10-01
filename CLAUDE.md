@@ -73,6 +73,8 @@ ADR-74: shown as "Munyun Lab" (internal names unchanged); display preferences in
 account default LucidFlex 50K driving Pass eval / Pass payout / survivor, Show IDs, Show read-only information); named research
 runs (`runs/names.json`) pickable on Backtest results (`campaign_run` = that run's scope); simplified Prop firm simulator;
 `reset_workspace("DELETE")` keeps price data only (logged); no eyebrow/subtitle, no global search, skeleton loaders.
+ADR-75: read-view speed caches (library folder-stamp fingerprint, store `db_token`, `manifest_rows_view`, memoized campaign
+detail/tree, explorer rows, per-user (outside the workspace) facets cache, start-up warm-up); display/short strategy names without hash; explorer fits.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 

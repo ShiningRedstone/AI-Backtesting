@@ -56,10 +56,10 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
   const groups: ScatterGroup[] = [
     { id: "strategies", label: "Strategies", color: "var(--c2)", size: 3.5,
       points: o.points.filter((p) => !p.survivor && p.win_rate != null && p.avg_rr != null).map((p) => ({ id: p.strategy_id, x: p.win_rate!, y: p.avg_rr!,
-        label: humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
+        label: p.display_name ?? humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
     { id: "survivors", label: "Survivors", color: "var(--c1)", size: 5, ring: true,
       points: o.points.filter((p) => p.survivor && p.win_rate != null && p.avg_rr != null).map((p) => ({ id: p.strategy_id, x: p.win_rate!, y: p.avg_rr!,
-        label: humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
+        label: p.display_name ?? humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
     ...(controls ? [{ id: "controls", label: "Random controls", color: "var(--c-neutral)", hollow: true, size: 3.5,
       points: o.controls.filter((c) => c.win_rate != null && c.avg_rr != null).map((c) => ({ id: c.control_id, x: c.win_rate!, y: c.avg_rr!,
         label: "Random control", detail: `${c.trades} trades · ${r(c.expectancy_r)} per trade · not a strategy` })) }] : []),

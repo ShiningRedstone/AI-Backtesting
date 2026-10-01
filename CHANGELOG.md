@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Speed and explorer fixes for 10,000-strategy workspaces (ADR-75)
+
+| Item | Status |
+|---|---|
+| Read-view caches (library fingerprint by folder stamps, store change token, frozen-manifest parse, campaign detail/tree, explorer rows, facets on disk, start-up warm-up): campaign detail 5.4 s → 0.002 s warm, tree 2.7 s → 0.03 s, explorer 0.35 s → 0.03 s on a 10,000-strategy workspace (Linux) | IMPLEMENTED, TESTED (no stale data: new runs, new/archived strategies, restart) |
+| Library table paged; single-backtest picker searchable | IMPLEMENTED |
+| Strategy names without the id hash (display / short names); readable sessions and markets | IMPLEMENTED, TESTED |
+| Explorer: "Eval" and "Payout" columns right after Max drawdown; table fits the screen (four columns moved to the strategy panel) | IMPLEMENTED |
+| Research runs: spacing between cards and buttons; family rows show a group chip and a "View results" button | IMPLEMENTED |
+| Backtest engine, compiler, search runner, campaign runner, prop lifecycle | UNCHANGED |
+
 ## Munyun Lab: favorites, pass criteria account, named runs, display switches, workspace reset (ADR-74)
 
 | Item | Status |

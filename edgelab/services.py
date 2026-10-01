@@ -521,8 +521,17 @@ class Services:
     def load_strategy(self, strategy_id: str) -> dict:
         return _jsonable(self.library.load(strategy_id))
 
-    def list_strategies(self, family_id: str | None = None) -> list[dict]:
-        return _jsonable(self.library.list(family_id))
+    def list_strategies(self, family_id: str | None = None, include_archived: bool = False) -> list[dict]:
+        """Library rows plus readable names (``display_name`` / ``short_name``; presentation only)."""
+        from edgelab.research import overview as ov
+        names = {f["strategy_id"]: f for f in ov.library_facets(self)}
+        out = []
+        for r in self.library.list(family_id, include_archived):
+            f = names.get(r["strategy_id"])
+            n = {"display_name": f["display_name"], "short_name": f["short_name"]} if f else ov.display_names(
+                {"name": r.get("name"), "definition": {"name": r.get("name")}, "family_id": r.get("family_id")})
+            out.append({**r, **n})
+        return _jsonable(out)
 
     def strategy_families(self) -> dict:
         return _jsonable(self.library.families())
@@ -797,10 +806,13 @@ class Services:
 
     def campaign_detail(self, campaign_id: str) -> dict:
         from edgelab.research import campaign
-        d = campaign.detail(self, campaign_id)
-        names = self.campaign_run_names(campaign_id)
-        d["runs"] = [{**r, "name": names.get(r.get("run_record_id"))} for r in d.get("runs") or []]
-        return _jsonable(d)
+
+        def build():
+            d = campaign.detail(self, campaign_id)
+            names = self.campaign_run_names(campaign_id)
+            d["runs"] = [{**r, "name": names.get(r.get("run_record_id"))} for r in d.get("runs") or []]
+            return _jsonable(d)
+        return campaign.cached_view(self, "detail", campaign_id, build)
 
     def campaign_family_results(self, campaign_id: str, family_id: str) -> dict:
         from edgelab.research import campaign
@@ -819,7 +831,7 @@ class Services:
     def campaign_tree(self, campaign_id: str) -> dict:
         """Research browser: all strategies -> families -> strategies, with display names and persisted status."""
         from edgelab.research import campaign
-        return _jsonable(campaign.tree(self, campaign_id))
+        return campaign.cached_view(self, "tree", campaign_id, lambda: _jsonable(campaign.tree(self, campaign_id)))
 
     def campaign_run_scope(self, campaign_id: str, run_record_id: str) -> dict:
         from edgelab.research import campaign

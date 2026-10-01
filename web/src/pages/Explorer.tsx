@@ -5,7 +5,7 @@ import { useApi, useApp } from "../app/context";
 import { StrategyDetail } from "../components/strategy/detail";
 import { RunPicker, useCriteriaName } from "../components/results";
 import { facetLabel, humanize } from "../app/labels";
-import { Badge, Button, Card, Drawer, FavStar, Empty, ErrorPanel, Loading, Pager, Scope, SortTh, TableWrap, n, pct, r, signCls,
+import { Badge, Button, Card, Drawer, FavStar, Empty, ErrorPanel, Loading, Pager, Scope, SortTh, TableWrap, n, pct, signCls,
   useDebounced } from "../components/ui";
 
 const FILTERS: { key: string; label: string }[] = [
@@ -128,24 +128,22 @@ export function ExplorerPage() {
               <button className="linklike" onClick={reset}>Clear all filters</button>{f.scope !== "any" && <> or switch the scope to <b>Any</b>
               (a strategy without a run in this scope shows empty metrics).</>}</> : <>The strategy library is empty. <a href={href("/builder?new=1")}>Create a strategy</a>.</>}</Empty></div>
           : <>
-            <TableWrap testId="explorer-table"><table className="dense">
+            <TableWrap testId="explorer-table" className="fit"><table className="dense fit-table">
               <thead><tr>
-                <th style={{ width: 28 }} /><th style={{ width: 30 }} aria-label="favorite" />
-                <SortTh k="strategy_id" label="Strategy" {...sortProps} width={210} />
+                <th style={{ width: 26 }} /><th style={{ width: 30 }} aria-label="favorite" />
+                <SortTh k="short_name" label="Strategy" {...sortProps} />
                 <SortTh k="family_id" label="Family" {...sortProps} />
-                <th>Market</th><SortTh k="timeframe" label="Timeframe" {...sortProps} /><th>Session</th>
+                <th>Market</th><SortTh k="timeframe" label="Time­frame" {...sortProps} /><th>Session</th>
                 <SortTh k="trade_count" label="Trades" right {...sortProps} />
                 <SortTh k="trades_per_week" label="Per week" right {...sortProps} />
                 <SortTh k="expectancy_r" label="Net R per trade" right {...sortProps} title="average result per trade after costs" />
-                <SortTh k="gross_r_per_trade" label="Before costs" right {...sortProps} />
                 <SortTh k="net_r" label="Total net R" right {...sortProps} />
                 <SortTh k="avg_rr" label="Reward to risk" right {...sortProps} />
                 <SortTh k="profit_factor" label="Profit factor" right {...sortProps} />
-                <SortTh k="max_drawdown_r" label="Max drawdown R" right {...sortProps} />
-                <SortTh k="cost_r_per_trade" label="Cost per trade" right {...sortProps} />
                 <SortTh k="win_rate" label="Win rate" right {...sortProps} title="shown for completeness; never a ranking criterion" />
-                <th className="r">Out-of-sample</th><th>State</th>
-                <th title={`Under ${crit}`}>Pass eval</th><th title={`Under ${crit}`}>Pass payout</th>
+                <SortTh k="max_drawdown_r" label="Max draw­down (R)" right {...sortProps} />
+                <th title={`Prop firm evaluation under ${crit} (change the account in Settings)`}>Eval</th>
+                <th title={`First payout under ${crit} (change the account in Settings)`}>Payout</th>
               </tr></thead>
               <tbody>{data.rows.map((x) => <Row key={x.strategy_id} x={x} sel={selected.has(x.strategy_id)} onSel={() => toggle(x.strategy_id)}
                 onOpen={() => setOpen(x.strategy_id)} />)}</tbody>
@@ -157,7 +155,7 @@ export function ExplorerPage() {
       {data && <p className="small muted">{data.basis} {data.note}</p>}
 
       <Drawer open={!!open} onClose={() => setOpen(null)} testId="strategy-drawer"
-        title={open ? humanize(data?.rows.find((x) => x.strategy_id === open)?.name ?? "Strategy") : ""}
+        title={open ? (data?.rows.find((x) => x.strategy_id === open)?.display_name ?? "Strategy") : ""}
         actions={open ? <Button small onClick={() => go(`/strategies/${open}`)}>Open strategy page</Button> : null}>
         {open && <StrategyDetail key={open} id={open} />}
       </Drawer>
@@ -165,13 +163,10 @@ export function ExplorerPage() {
   );
 }
 
-const YesNo = ({ v }: { v: boolean | null | undefined }) => (v == null ? <span className="faint">—</span>
-  : <Badge tone={v ? "ok" : "neutral"}>{v ? "Pass" : "No"}</Badge>);
+/** Passed / Failed under the Settings account; "—" when that account has no stored audit for the backtest. */
+const PassFail = ({ v }: { v: boolean | null | undefined }) => (v == null ? <span className="faint" title="not checked">—</span>
+  : <span className={`pf ${v ? "pf-pass" : "pf-fail"}`}>{v ? "Passed" : "Failed"}</span>);
 
-const STATE_TONE: Record<string, "ok" | "warn" | "error" | "info" | "neutral"> = {
-  untested: "neutral", tested: "neutral", oos_tested: "info", shortlisted: "info", holdout_granted: "info",
-  holdout_criteria_met: "ok", holdout_criteria_not_met: "warn",
-};
 
 function Row({ x, sel, onSel, onOpen }: { x: ExplorerRow; sel: boolean; onSel: () => void; onOpen: () => void }) {
   return (
@@ -179,21 +174,19 @@ function Row({ x, sel, onSel, onOpen }: { x: ExplorerRow; sel: boolean; onSel: (
       <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><input type="checkbox" checked={sel} onChange={onSel}
         aria-label={`select ${x.strategy_id}`} /></td>
       <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><FavStar id={x.strategy_id} /></td>
-      <td><div style={{ color: "var(--text)", fontWeight: 560 }}>{humanize(x.name ?? "—")}</div>
-        {x.survivor && <Badge tone="ok">Survivor</Badge>}{x.synthetic && <> <Scope kind="synthetic">synthetic</Scope></>}</td>
-      <td className="small">{x.family_name ?? facetLabel("family_id", x.family_id)}</td>
-      <td className="small">{x.instrument ?? "—"}</td><td>{facetLabel("timeframe", x.timeframe)}</td><td className="small">{facetLabel("session", x.session)}</td>
+      <td className="name-cell"><div className="cell-title">{x.short_name ?? humanize(x.name ?? "—")}</div>
+        <div className="cell-badges">{x.survivor && <Badge tone="ok">Survivor</Badge>}{x.synthetic && <Scope kind="synthetic">synthetic</Scope>}</div></td>
+      <td className="small wrap">{x.family_name ?? facetLabel("family_id", x.family_id)}</td>
+      <td className="small">{facetLabel("instrument", x.instrument)}</td><td>{facetLabel("timeframe", x.timeframe)}</td>
+      <td className="small wrap">{facetLabel("session", x.session)}</td>
       <td className="r num">{x.trade_count ?? "—"}</td><td className="r num">{n(x.trades_per_week, 1)}</td>
-      <td className={`r num ${signCls(x.expectancy_r)}`} style={{ fontWeight: 650 }}>{x.expectancy_r == null ? "—" : r(x.expectancy_r)}</td>
-      <td className="r num muted">{n(x.gross_r_per_trade, 3)}</td>
+      <td className={`r num ${signCls(x.expectancy_r)}`} style={{ fontWeight: 650 }}>{x.expectancy_r == null ? "—" : n(x.expectancy_r, 3)}</td>
       <td className={`r num ${signCls(x.net_r)}`}>{n(x.net_r, 1)}</td>
       <td className="r num">{x.avg_rr == null ? "—" : `${n(x.avg_rr, 2)}`}</td>
-      <td className="r num">{n(x.profit_factor)}</td><td className="r num">{n(x.max_drawdown_r, 1)}</td>
-      <td className="r num muted">{n(x.cost_r_per_trade, 3)}</td><td className="r num faint">{pct(x.win_rate, 0)}</td>
-      <td className={`r num ${signCls(x.oos_expectancy_r)}`}>{x.oos_expectancy_r == null ? <span className="faint">—</span> : n(x.oos_expectancy_r, 3)}</td>
-      <td><Badge tone={STATE_TONE[x.state] ?? "neutral"}>{x.state_label}</Badge></td>
-      <td data-testid={`pass-eval-${x.strategy_id}`}><YesNo v={x.prop_pass_eval} /></td>
-      <td data-testid={`pass-payout-${x.strategy_id}`}><YesNo v={x.prop_pass_payout} /></td>
+      <td className="r num">{n(x.profit_factor)}</td><td className="r num faint">{pct(x.win_rate, 0)}</td>
+      <td className="r num">{n(x.max_drawdown_r, 1)}</td>
+      <td data-testid={`pass-eval-${x.strategy_id}`}><PassFail v={x.prop_pass_eval} /></td>
+      <td data-testid={`pass-payout-${x.strategy_id}`}><PassFail v={x.prop_pass_payout} /></td>
     </tr>
   );
 }

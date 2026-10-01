@@ -16,6 +16,7 @@ import json
 import math
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import numpy as np
@@ -36,7 +37,7 @@ DESCRIPTIVE = ("Descriptive statistics of stored backtests under the stated assu
                "and are not independent.")
 SORT_KEYS = ("strategy_id", "name", "family_id", "timeframe", "trade_count", "trades_per_week", "win_rate",
              "expectancy_r", "gross_r_per_trade", "net_r", "profit_factor", "max_drawdown_r", "cost_r_per_trade",
-             "created_at", "n_runs", "avg_rr")
+             "created_at", "n_runs", "avg_rr", "short_name")
 
 
 def _f(x) -> float | None:
@@ -103,16 +104,67 @@ def strategy_facets(doc: Mapping) -> dict:
             "source": first.get("generation_method"), "proposal_id": gp.get("proposal_id"),
             "parent_strategy_id": first.get("parent_strategy_id"),
             "created_at": first.get("generation_timestamp"), "logic_hash": doc.get("logic_hash"),
-            "archived": bool(doc.get("archived"))}
+            "archived": bool(doc.get("archived")), **display_names(doc)}
+
+
+_HASH_TAIL = re.compile(r"[_ ][0-9a-f]{6,}$")
+
+
+def display_names(doc: Mapping) -> dict:
+    """Readable names of one stored strategy (presentation only; identity untouched): ``display_name`` (family and
+    distinguishing settings, as on the strategy page) and ``short_name`` (the distinguishing settings alone, for tables
+    that show the family separately). Never contains the id-like hash suffix of generated machine names."""
+    from edgelab.strategy import presentation as pr
+    d = doc.get("definition") or {}
+    gp = ((doc.get("lineage") or [{}])[0] or {}).get("generation_parameters") or {}
+    v = gp.get("variation") if isinstance(gp.get("variation"), Mapping) else None
+    row = {"definition": d, "variation": v, "family_id": doc.get("family_id"), "strategy_id": doc.get("strategy_id")}
+    try:
+        full = pr.display_name(row)
+    except Exception:                                        # noqa: BLE001 - presentation must never break a listing
+        full = pr.humanize(_HASH_TAIL.sub("", str(doc.get("name") or d.get("name") or "Strategy")))
+    fp = (v or {}).get("family_params") or {}
+    short = pr._params_text(pr._name_params(fp)) if fp else pr.humanize(_HASH_TAIL.sub("", str(doc.get("name") or d.get("name") or "")))
+    return {"display_name": full, "short_name": short or full}
+
+
+FACETS_CACHE_VERSION = "facets/2"
+
+
+def facets_cache_path(svc) -> Path:
+    """Where the on-disk facets cache of this workspace lives: OUTSIDE the workspace (opening a workspace never writes
+    into it), in a per-user cache folder (``EDGELAB_VIEW_CACHE``; Windows ``%LOCALAPPDATA%\\EdgeLab-Cache``; elsewhere
+    ``$XDG_CACHE_HOME`` or ``~/.cache``), one file per workspace data root."""
+    import hashlib
+    import os
+    base = os.environ.get("EDGELAB_VIEW_CACHE")
+    if not base:
+        if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+            base = str(Path(os.environ["LOCALAPPDATA"]) / "EdgeLab-Cache" / "view_cache")
+        else:
+            base = str(Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "edgelab" / "view_cache")
+    key = hashlib.sha256(str(Path(svc.data_root).resolve()).encode()).hexdigest()[:20]
+    return Path(base) / f"library_facets_{key}.json"
 
 
 def library_facets(svc) -> list[dict]:
-    """Facets of every active strategy (cached on the library's own content fingerprint)."""
+    """Facets of every active strategy, cached on the library's own content fingerprint: in memory, and on disk under
+    a per-user cache folder (``facets_cache_path``) so a restart does not re-read every strategy file (a speed cache only: derived from the
+    library, rebuilt whenever the fingerprint or this code's version differs, safe to delete)."""
     lib = svc.library
-    key = f"{lib.root}:{lib._fingerprint()}"
+    fp = lib._fingerprint()
+    key = f"{lib.root}:{fp}"
     hit = _FACET_CACHE.get("facets")
     if hit and hit[0] == key:
         return hit[1]
+    disk = facets_cache_path(svc)
+    try:
+        doc = json.loads(disk.read_text(encoding="utf-8"))
+        if doc.get("version") == FACETS_CACHE_VERSION and doc.get("fingerprint") == fp:
+            _FACET_CACHE["facets"] = (key, doc["rows"])
+            return doc["rows"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     rows = []
     for r in lib.list():
         try:
@@ -120,17 +172,26 @@ def library_facets(svc) -> list[dict]:
         except (KeyError, ValueError, OSError):
             continue
     _FACET_CACHE["facets"] = (key, rows)
+    try:
+        disk.parent.mkdir(parents=True, exist_ok=True)
+        tmp = disk.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"version": FACETS_CACHE_VERSION, "fingerprint": fp, "rows": rows}, default=str),
+                       encoding="utf-8")
+        tmp.replace(disk)
+    except OSError:
+        pass                                                  # an unwritable cache only costs speed
     return rows
 
 
 def run_records(svc) -> list[dict]:
     """Every stored run record (no trades), oldest first; cached on (count, last run id)."""
-    rows = svc.store._query("SELECT run_id, record_json FROM runs ORDER BY run_id")
-    key = f"{id(svc.store)}:{len(rows)}:{rows[-1][0] if rows else ''}"
+    from edgelab.research.campaign import db_token
+    key = db_token(svc)                                       # any store write invalidates (records are immutable)
     hit = _FACET_CACHE.get("runs")
     if hit and hit[0] == key:
         out = hit[1]
     else:
+        rows = svc.store._query("SELECT run_id, record_json FROM runs ORDER BY run_id")
         out = [run_row(rid, _loads(raw) or {}) for rid, raw in rows]
         _FACET_CACHE["runs"] = (key, out)
     hr = holdout_run_ids(svc)
@@ -378,16 +439,19 @@ STATE_LABEL = {"untested": "Untested", "tested": "Tested (in-sample)", "oos_test
 
 
 # ------------------------------------------------------------------------------ explorer
-def explorer(svc, params: Mapping[str, Any]) -> dict:
-    scope = str(params.get("scope") or "in_sample")
-    if scope not in SCOPES:
-        raise ValueError(f"scope must be one of {sorted(SCOPES)}")
-    sort = str(params.get("sort") or "strategy_id")
-    if sort not in SORT_KEYS:
-        raise ValueError(f"sort must be one of {list(SORT_KEYS)}")
-    desc = str(params.get("order") or "asc") == "desc"
-    page = max(1, int(params.get("page") or 1))
-    size = min(MAX_PAGE_SIZE, max(1, int(params.get("page_size") or 50)))
+def _explorer_rows(svc, scope: str) -> tuple[list[dict], dict]:
+    """Every strategy's explorer row for one scope (before filtering / sorting), memoized until the library, the store
+    or the display preferences change (read-only; the rows are rebuilt from stored facts, never edited)."""
+    from edgelab.research.campaign import db_token
+    try:
+        prefs = svc.ui_preferences()
+    except Exception:                                        # noqa: BLE001
+        prefs = {"favorites": [], "prop_criteria_profile": None}
+    key = (svc.library.root, svc.library._fingerprint(), db_token(svc), scope, tuple(prefs["favorites"]),
+           prefs.get("prop_criteria_profile"))
+    hit = _FACET_CACHE.get(("explorer", scope))
+    if hit and hit[0] == key:
+        return hit[1], hit[2]
     facets = library_facets(svc)
     runs = run_records(svc)
     pf = protocol_facts(svc)
@@ -395,11 +459,7 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
     by_strat: dict[str, list[dict]] = {}
     for r in runs:
         by_strat.setdefault(r["strategy_id"], []).append(r)
-    protocol = params.get("protocol")
-    try:
-        favorites = set(svc.ui_preferences()["favorites"])
-    except Exception:                                        # noqa: BLE001 - unreadable preferences: no favorites
-        favorites = set()
+    favorites = set(prefs["favorites"])
     rows = []
     for f in facets:
         sruns = by_strat.get(f["strategy_id"], [])
@@ -425,6 +485,23 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
                                                         "synthetic", "avg_rr", "max_loss_streak", "avg_hold_minutes",
                                                         "prop_pass_eval", "prop_pass_payout")},
                      "survivor": bool(ref and ref.get("survivor")), "favorite": f["strategy_id"] in favorites})
+
+    _FACET_CACHE[("explorer", scope)] = (key, rows, pf)
+    return rows, pf
+
+
+def explorer(svc, params: Mapping[str, Any]) -> dict:
+    scope = str(params.get("scope") or "in_sample")
+    if scope not in SCOPES:
+        raise ValueError(f"scope must be one of {sorted(SCOPES)}")
+    sort = str(params.get("sort") or "strategy_id")
+    if sort not in SORT_KEYS:
+        raise ValueError(f"sort must be one of {list(SORT_KEYS)}")
+    desc = str(params.get("order") or "asc") == "desc"
+    page = max(1, int(params.get("page") or 1))
+    size = min(MAX_PAGE_SIZE, max(1, int(params.get("page_size") or 50)))
+    protocol = params.get("protocol")
+    rows, pf = _explorer_rows(svc, scope)
 
     def keep(r: dict) -> bool:
         q = str(params.get("q") or "").strip().lower()

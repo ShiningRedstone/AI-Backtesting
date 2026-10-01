@@ -47,11 +47,11 @@ _GROSS: dict[str, Any] = {}
 
 def gross_stats(svc) -> dict[str, dict]:
     """Per run: gross win rate, average gross winner/loser, gross R per trade (one aggregate query over stored trades)."""
+    from edgelab.research.campaign import db_token
     try:
-        meta = svc.store._query("SELECT COUNT(*), MAX(run_id) FROM runs")[0]
+        key = db_token(svc)
     except Exception:                                        # noqa: BLE001
         return {}
-    key = f"{id(svc.store)}:{meta[0]}:{meta[1]}"
     if _GROSS.get("key") == key:
         return _GROSS["rows"]
     try:
@@ -143,7 +143,8 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
     for x in tested:
         f, r = x["facets"], x["ref"]
         g = gs.get(r["run_id"], {})
-        points.append({"strategy_id": f["strategy_id"], "name": f["name"], "family_id": f["family_id"],
+        points.append({"strategy_id": f["strategy_id"], "name": f["name"], "display_name": f.get("display_name"),
+                       "family_id": f["family_id"],
                        "run_id": r["run_id"], "trades": r["trade_count"], "synthetic": r["synthetic"],
                        "survivor": r["survivor"],
                        "win_rate": g.get("win_rate") if basis == "gross" else r["win_rate"],
@@ -419,9 +420,9 @@ def research_runs(svc) -> list[dict]:
     the run records; the records themselves are never rewritten here). For the Backtest results run picker."""
     from edgelab.research import campaign as C
     out = []
-    for c in C.list_campaigns(svc):
-        if c.get("error"):
-            continue
+    root = C.campaigns_dir(svc)
+    for d in sorted(root.glob("CMP_*")) if root.is_dir() else []:   # run records only: no progress, no manifest
+        c = {"campaign_id": d.name}
         names = svc.campaign_run_names(c["campaign_id"])
         for r in C.run_records(svc, c["campaign_id"]):
             rid = r["run_record_id"]

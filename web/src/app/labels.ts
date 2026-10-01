@@ -32,6 +32,23 @@ const FACET_VALUES: Record<string, Record<string, string>> = {
     london: "London session", london_ny_overlap: "London and New York overlap" },
 };
 
+const CITY: Record<string, string> = { NY: "New York", LDN: "London", TYO: "Tokyo", FRA: "Frankfurt", SYD: "Sydney", HK: "Hong Kong", CHI: "Chicago" };
+const DAY: Record<string, string> = { MO: "Mon", TU: "Tue", WE: "Wed", TH: "Thu", FR: "Fri", SA: "Sat", SU: "Sun" };
+/** Generated session ids (strategy factory, e.g. "FXE_NY_1200_1430_MF") -> "New York 12:00–14:30 · Mon–Fri". */
+function factorySession(v: string): string | null {
+  const m = /^[A-Z]+_([A-Z]+)_(\d{2})(\d{2})_(\d{2})(\d{2})_([A-Z]+)$/i.exec(v);
+  if (!m) return null;
+  const days = m[6].toUpperCase() === "MF" ? "Mon–Fri" : (m[6].toUpperCase().match(/.{2}/g) ?? []).map((d) => DAY[d] ?? d).join(", ");
+  return `${CITY[m[1].toUpperCase()] ?? m[1]} ${m[2]}:${m[3]}–${m[4]}:${m[5]}${days ? ` · ${days}` : ""}`;
+}
+
+/** An instrument id as words: "NQ_DUKASCOPY" -> "NQ (Dukascopy)", "NAS100_CFD" -> "NAS100 (CFD)", "NQ" -> "NQ". */
+export function instrumentLabel(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  const [head, ...rest] = String(v).split("_");
+  return rest.length ? `${head} (${humanize(rest.join("_")).replace(/^./, (c) => c.toUpperCase())})` : head;
+}
+
 /** A facet / enum value as words (e.g. target_type "risk_reward" -> "Risk multiple (R)"; timeframe "5m" -> "5 min"). */
 export function facetLabel(key: string, value: unknown): string {
   if (value === null || value === undefined || value === "") return key === "session" ? "Any time" : "—";
@@ -39,6 +56,8 @@ export function facetLabel(key: string, value: unknown): string {
   if (key === "timeframe") { const m = /^(\d+)m$/.exec(v); if (m) return +m[1] === 60 ? "1 hour" : `${m[1]} min`;
     const h = /^(\d+)h$/.exec(v); if (h) return `${h[1]} hour${h[1] === "1" ? "" : "s"}`; if (v === "1d") return "Daily"; }
   if (v === "(not set)") return "Not set";
+  if (key === "session") { const fs = factorySession(v); if (fs) return fs; }
+  if (key === "instrument") return instrumentLabel(v);
   return FACET_VALUES[key]?.[v] ?? humanize(v);
 }
 
@@ -81,7 +100,7 @@ export const datasetLabel = (id: string | null | undefined) => (id ? humanize(id
   .replace(/ (\d{4})(\d{2})(\d{2})\b/g, " from $1-$2-$3") : "—");
 
 /** A strategy's machine name as words ("mtf_trend_pullback" -> "MTF trend pullback"). */
-export const strategyLabel = (name: string | null | undefined) => humanize(name ?? "—");
+export const strategyLabel = (name: string | null | undefined) => humanize((name ?? "—").replace(/[_ ][0-9a-f]{6,}$/i, ""));
 
 /** A strategy family: its stored name, else words from its id. */
 export const familyLabel = (id: string | null | undefined, name?: string | null) => name || humanize(id ?? "—");

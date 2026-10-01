@@ -1800,3 +1800,28 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **UI.** No small labels above / explanation lines under page titles, no global search, skeleton loaders
   (`Loading` renders a skeleton), consistent button spacing; machine ids and read-only panels only through the two
   switches. No engine, compiler, search runner or prop lifecycle code changed.
+
+### ADR-75 Read-view speed caches; readable strategy, session and market names; explorer layout
+- **Why.** With a 10,000-strategy campaign every page re-read the library (10,000 file stats twice per request), the
+  run records (all JSON) and the frozen manifest (10,000 JSONL rows, parsed several times per request); the campaign
+  detail took ~5 s and the browser tree ~3 s even on Linux.
+- **Caches (speed only; identical results; no engine, compiler, search runner, campaign runner or prop lifecycle
+  code path changed):**
+  - `StrategyLibrary._fingerprint` reuses the last fingerprint while the three library folders' stamps are unchanged
+    (every library write is an atomic replace or a rename, which updates its folder stamp; writes through the
+    library also invalidate explicitly). `_all_lineage` is cached on that fingerprint.
+  - `campaign.db_token` = (connection `total_changes`, `PRAGMA data_version`): changes on any write by this or another
+    connection. Run rows (`overview.run_records`), gross stats, campaign cells and the explorer rows are keyed on it.
+  - `campaign.manifest_rows_view` parses a frozen manifest once per file signature for READ-ONLY views (browser tree,
+    detail, family / strategy results, ETA); runs, freezing and checks keep calling `load_manifest` (fresh).
+  - Campaign `detail` / `tree` responses are memoized on (spec file, run record files, db token).
+  - Library facets are also stored in a per-user cache folder OUTSIDE the workspace (`overview.facets_cache_path`;
+    Windows `%LOCALAPPDATA%\EdgeLab-Cache`), keyed on the library fingerprint (rebuilt on change, safe to delete), so
+    opening a workspace still writes nothing into it; the app warms these caches in the background at start, one step
+    at a time under the lock.
+  - Browser: the library pages its table; the single-backtest picker searches instead of listing 10,000 options.
+- **Names.** `overview.display_names` gives every strategy a `display_name` (family and distinguishing settings) and a
+  `short_name` (settings only) from `strategy/presentation.py`; generated machine names' hash suffix never shows.
+  Generated session ids (`FXE_NY_1200_1430_MF`) read "New York 12:00–14:30 · Mon–Fri", markets "NQ (Dukascopy)".
+- **Explorer layout.** Fits the screen: headers wrap; "Eval" and "Payout" (Passed / Failed under the Settings account)
+  follow "Max drawdown"; Before costs, Cost per trade, Out-of-sample and State moved out of the table (strategy panel).

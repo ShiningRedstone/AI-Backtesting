@@ -244,8 +244,8 @@ function FamilyNode({ cid, f, sel, open, onToggleOpen, onSelectFamily, onSelectS
         <TriCheckbox checked={all} indeterminate={nSel > 0 && !all} onChange={onSelectFamily} label={`select family ${f.name}`} testId={`fam-${f.family_id}`} />
         <b>{f.name}</b> <span className="muted">({fmt(f.n_strategies)})</span>
         <span className="small muted"> · selected {fmt(nSel)} / {fmt(f.n_strategies)} · completed {fmt(f.completed)}{f.failed ? ` · failed ${fmt(f.failed)}` : ""}</span>
-        <span className="small muted">{f.group ? ` · ${humanize(f.group)}` : ""}</span>
-        <a className="small" href={href(`/runs/${cid}/${f.family_id}`)}> details ›</a>
+        {f.group && <span className="chip">{humanize(f.group)}</span>}
+        <a className="btn btn-sm btn-ghost" href={href(`/runs/${cid}/${f.family_id}`)} data-testid={`family-results-${f.family_id}`}>View results ›</a>
       </div>
       {open && (
         <ul className="tree-children small" data-testid={`children-${f.family_id}`}>

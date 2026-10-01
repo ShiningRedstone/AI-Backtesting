@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import threading
 import traceback
 from pathlib import Path
 from typing import Mapping, Any, Callable
@@ -67,6 +68,28 @@ def _id(x: Any, pattern: re.Pattern, what: str) -> str:
     return x
 
 
+def _warm_caches(svc) -> None:
+    """Fill the read-only view caches (strategy facets, run rows, prop profiles) in the background right after start,
+    so the first page does not pay for them. Under the service lock like every request; failures are ignored (the
+    pages simply compute the same values on first use)."""
+    def work():
+        from edgelab.prop.service import default_profiles
+        from edgelab.research import campaign as C
+        from edgelab.research import overview as ov
+        steps = [lambda: default_profiles(svc.root), lambda: ov.library_facets(svc), lambda: ov.run_records(svc),
+                 lambda: svc.library._all_lineage()]
+        root = C.campaigns_dir(svc)
+        for d in sorted(root.glob("CMP_*")) if root.is_dir() else []:
+            steps += [lambda cid=d.name: svc.campaign_detail(cid), lambda cid=d.name: svc.campaign_tree(cid)]
+        for step in steps:                                   # one step at a time: requests can run in between
+            try:
+                with svc.lock:
+                    step()
+            except Exception:                                # noqa: BLE001 - a warm-up never affects the app
+                pass
+    threading.Thread(target=work, daemon=True, name="munyun-cache-warmup").start()
+
+
 def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None = None) -> Flask:
     from edgelab.services import Services
 
@@ -76,6 +99,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     lock = svc.lock                  # the one service lock (shared with the Phase 4 job manager)
     if svc.store.backend == "sqlite":
         svc.jobs                     # start the job manager: searches a dead process left `running` -> interrupted
+    _warm_caches(svc)
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = int(web.max_request_mb * 1024 * 1024)
     app.config["EDGELAB"] = {"root": root, "demo": demo, "services": svc, "web": web}
@@ -268,7 +292,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if fam is not None:
             _id(fam, SAFE_ID, "family id")
         archived = request.args.get("archived") == "1"
-        return jsonify(call(svc.library.list, fam, archived))
+        return jsonify(call(svc.list_strategies, fam, archived))
 
     @app.get("/api/strategies/<sid>")
     def strategy(sid):

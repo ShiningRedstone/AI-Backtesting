@@ -22,7 +22,7 @@ export interface RenderResult {
   canonical: Record<string, unknown> | null; canonical_yaml: string | null; identity: Identity | null;
 }
 export interface LibraryRow {
-  strategy_id: string; name: string; family_id: string; generation_method: string;
+  strategy_id: string; name: string; family_id: string; generation_method: string; display_name?: string; short_name?: string;
   parent_strategy_id: string | null; generation_batch_id: string | null; created_at: string | null;
   timeframe: string | null; n_parameters: number; n_lineage_records: number; archived: boolean;
 }
@@ -374,7 +374,7 @@ export interface ExplorerRow {
   sample_label: string | null; synthetic: boolean | null;
   target_multiple?: number | null; trailing?: string | null; signal_exit?: string | null;
   avg_rr?: Num; max_loss_streak?: number | null; avg_hold_minutes?: Num; prop_pass_eval?: boolean | null; prop_pass_payout?: boolean | null;
-  survivor?: boolean; favorite?: boolean;
+  survivor?: boolean; favorite?: boolean; display_name?: string; short_name?: string;
 }
 export interface ExplorerResponse {
   rows: ExplorerRow[]; total: number; page: number; page_size: number; pages: number; scope: string; scope_label: string;
@@ -448,7 +448,7 @@ export interface UpdateStatus {
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 // ---------------------------------------------------------------- backtest results views (ADR-73, read-only)
-export interface FieldPoint { strategy_id: string; name: string | null; family_id: string | null; run_id: string; trades: number;
+export interface FieldPoint { strategy_id: string; name: string | null; display_name?: string | null; family_id: string | null; run_id: string; trades: number;
   synthetic: boolean; survivor: boolean; win_rate: Num; avg_rr: Num; expectancy_r: Num }
 export interface ControlPoint { control_id: string; candidate_strategy_id: string | null; validation_id: string | null; realization: number;
   seed: number | null; trades: number; win_rate: Num; avg_rr: Num; expectancy_r: Num; gross_r_per_trade: Num; net_r: Num;

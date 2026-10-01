@@ -10,7 +10,7 @@ import type { TreeNode } from "../components/strategy";
 import { BatchResearch, ProvenanceCard, RunsTable, ValidationPanel } from "../components/strategy/lab";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { RulesTable } from "../components/research";
-import { Badge, Banner, Button, Card, Checkbox, FavStar, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Checkbox, FavStar, Pager, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
 import type { StrategyDoc } from "../dsl/types";
 
 // =========================================================================== system panel (Settings & About)
@@ -77,9 +77,14 @@ export function LibraryPage() {
   const [confirm, setConfirm] = useState<LibraryRow | null>(null);
   const [busy, setBusy] = useState(false);
   const [actErr, setActErr] = useState<ApiError | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  useEffect(() => setPage(1), [q, fam, archived]);
   if (error) return <ErrorPanel error={error} />;
-  const rows = (data ?? []).filter((r) => (!fam || r.family_id === fam)
-    && (!q || `${r.name} ${r.strategy_id} ${r.family_id}`.toLowerCase().includes(q.toLowerCase())));
+  const all = (data ?? []).filter((r) => (!fam || r.family_id === fam)
+    && (!q || `${r.display_name ?? ""} ${r.name} ${r.strategy_id} ${r.family_id}`.toLowerCase().includes(q.toLowerCase())));
+  const pages = Math.max(1, Math.ceil(all.length / pageSize));
+  const rows = all.slice((page - 1) * pageSize, page * pageSize);        // a page at a time: thousands of rows stay fast
   const families = [...new Set((data ?? []).map((r) => r.family_id))].sort();
   const toggleArchive = async (r: LibraryRow) => {
     setBusy(true); setActErr(null);
@@ -111,7 +116,7 @@ export function LibraryPage() {
             <tbody>{rows.map((r) => (
               <tr key={r.strategy_id} className={r.archived ? "disabled-row" : ""} data-testid={`row-${r.strategy_id}`}>
                 <td><FavStar id={r.strategy_id} /></td>
-                <td><a href={href(`/strategies/${r.strategy_id}`)} title={r.strategy_id}>{strategyLabel(r.name)}</a></td>
+                <td><a href={href(`/strategies/${r.strategy_id}`)} title={r.strategy_id}>{r.short_name ?? strategyLabel(r.name)}</a></td>
                 <td><a href={href(`/families/${r.family_id}`)} title={r.family_id}>{familyLabel(r.family_id)}</a></td>
                 <td>{facetLabel("timeframe", r.timeframe)}</td><td className="small">{shortTime(r.created_at)}</td>
                 <td>{r.parent_strategy_id ? <a href={href(`/strategies/${r.parent_strategy_id}`)} title={r.parent_strategy_id}>
@@ -134,6 +139,8 @@ export function LibraryPage() {
           </table>
         </TableWrap>
       )}
+      {all.length > pageSize && <Pager page={page} pages={pages} total={all.length} pageSize={pageSize} onPage={setPage}
+        onPageSize={(n) => { setPageSize(n); setPage(1); }} />}
       <Confirm open={!!confirm} busy={busy} danger={!confirm?.archived}
         title={confirm?.archived ? `Restore ${strategyLabel(confirm.name)}?` : `Archive ${strategyLabel(confirm?.name)}?`}
         confirmLabel={confirm?.archived ? "Restore" : "Archive"} onCancel={() => setConfirm(null)} onConfirm={() => confirm && toggleArchive(confirm)}>

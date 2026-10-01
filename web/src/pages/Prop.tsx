@@ -31,7 +31,7 @@ function PropHome() {
   const favRows = favs.data?.rows ?? [];
   const favIds = new Set(favRows.map((x) => x.strategy_id));
   const others = (tested.data?.rows ?? []).filter((x) => !favIds.has(x.strategy_id));
-  const label = (x: ExplorerRow) => `${strategyLabel(x.name)} · ${facetLabel("timeframe", x.timeframe)}${x.synthetic ? " · synthetic" : ""}`;
+  const label = (x: ExplorerRow) => `${x.display_name ?? strategyLabel(x.name)}${x.synthetic ? " · synthetic" : ""}`;
   return (
     <div className="page" data-testid="prop-page">
       <header className="page-head"><div><h1>Prop firm simulator</h1></div></header>

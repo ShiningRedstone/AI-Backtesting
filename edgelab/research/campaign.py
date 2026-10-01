@@ -60,6 +60,55 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+_VIEW_CACHE: dict = {}
+
+
+def db_token(svc) -> tuple:
+    """Changes whenever ANY row of the store changes: this connection's own writes (total_changes) or another
+    connection's committed writes (PRAGMA data_version). Read-only views use it as a cache key."""
+    con = getattr(svc.store, "con", None)
+    if con is None:
+        return (id(svc.store), object())                    # unknown backend: never cached
+    return (id(svc.store), con.total_changes, con.execute("PRAGMA data_version").fetchone()[0])
+
+
+def manifest_rows_view(svc, manifest_id: str) -> tuple[dict, list[dict]]:
+    """The frozen manifest's header and rows for READ-ONLY views (browser, detail, results, ETA), parsed once and
+    reused while its files are unchanged on disk. Runs, freezing and checks keep calling ``load_manifest`` (fresh)."""
+    from edgelab.strategy import factory
+    try:
+        d = svc._factory_manifest_dir(manifest_id)
+    except KeyError:
+        raise CampaignError("MANIFEST_NOT_FOUND", f"factory manifest {manifest_id} is not in this workspace "
+                            "(regenerate it with `factory generate` and verify it)", manifest_id=manifest_id)
+    sig = tuple((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(Path(d).glob("*")) if p.is_file())
+    key = ("manifest", str(d), sig)
+    hit = _VIEW_CACHE.get(("manifest", str(d)))
+    if hit and hit[0] == key:
+        return hit[1], hit[2]
+    header, rows = factory.read_header(d), list(factory.iter_rows(d))
+    _VIEW_CACHE[("manifest", str(d))] = (key, header, rows)
+    return header, rows
+
+
+def _view_key(svc, cid: str) -> tuple:
+    """Everything a campaign's read-only views depend on: its spec file, its run records (+ names) and the store."""
+    base = campaigns_dir(svc) / cid
+    files = [base / "campaign.json"] + (sorted((base / "runs").glob("*.json")) if (base / "runs").is_dir() else [])
+    return (cid, db_token(svc), tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files if p.exists()))
+
+
+def cached_view(svc, kind: str, cid: str, build):
+    """Memoize one read-only campaign view (tree, detail) until anything it depends on changes."""
+    key = (kind, _view_key(svc, cid))
+    hit = _VIEW_CACHE.get((kind, cid))
+    if hit and hit[0] == key:
+        return hit[1]
+    out = build()
+    _VIEW_CACHE[(kind, cid)] = (key, out)
+    return out
+
+
 def load_manifest(svc, manifest_id: str) -> tuple[Path, dict, list[dict]]:
     from edgelab.strategy import factory
     try:
@@ -738,10 +787,15 @@ def scope_ids(header: Mapping, rows: list[Mapping], families: list[str] | None,
 
 def _cells(svc, spec: Mapping) -> dict[str, dict]:
     sid = spec["search"]["search_id"]
+    key = ("cells", sid, db_token(svc))
+    hit = _VIEW_CACHE.get(("cells", sid))
+    if hit and hit[0] == key:
+        return hit[1]
     if not svc.store.get_search_batch(sid):
         return {}
-    return {c["strategy_id"]: c for c in svc.store.list_search_cells(sid, current=True)
-            if c["status"] != "ineligible"}
+    out = {c["strategy_id"]: c for c in svc.store.list_search_cells(sid, current=True) if c["status"] != "ineligible"}
+    _VIEW_CACHE[("cells", sid)] = (key, out)
+    return out
 
 
 def progress(svc, spec: Mapping, ids: list[str]) -> dict:
@@ -826,7 +880,7 @@ def estimate(svc, spec: Mapping, scope_rows: list[Mapping], prog: Mapping | None
     tf_of = {r["strategy_id"]: str(r["definition"]["timeframe"]) for r in scope_rows}
     remaining = [{"family_id": r["family_id"], "timeframe": tf_of[r["strategy_id"]]} for r in scope_rows
                  if (cells.get(r["strategy_id"]) or {}).get("status") != "completed"]
-    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    header, rows = manifest_rows_view(svc, spec["manifest"]["manifest_id"])
     all_fam = {r["strategy_id"]: r["family_id"] for r in rows}
     all_tf = {r["strategy_id"]: str(r["definition"]["timeframe"]) for r in rows}
     obs = timing_observations(svc, spec, all_fam, all_tf)
@@ -857,7 +911,7 @@ def tree(svc, cid: str) -> dict:
     names, timeframes and persisted status. Frozen ids only; nothing is ranked."""
     from edgelab.strategy.presentation import display_name
     spec = load(svc, cid)
-    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    header, rows = manifest_rows_view(svc, spec["manifest"]["manifest_id"])
     cells = _cells(svc, spec)
     meta = {f["family_id"]: f for f in header.get("families") or []}
     by_tf = spec["dataset_resolution"]["by_timeframe"]
@@ -970,7 +1024,7 @@ def summary(spec: Mapping) -> dict:
 def detail(svc, cid: str) -> dict:
     """Campaign governance + per-family scope progress (catalog order) + run history."""
     spec = load(svc, cid)
-    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    header, rows = manifest_rows_view(svc, spec["manifest"]["manifest_id"])
     cells = _cells(svc, spec)
     meta = {f["family_id"]: f for f in header.get("families") or []}
     fams = []
@@ -1006,7 +1060,7 @@ def family_results(svc, cid: str, family_id: str) -> dict:
     """Stored per-strategy results of one family (manifest order; nothing is re-run, nothing is ranked)."""
     from edgelab.strategy.presentation import display_name, explanation
     spec = load(svc, cid)
-    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    header, rows = manifest_rows_view(svc, spec["manifest"]["manifest_id"])
     mine = [r for r in rows if r["family_id"] == family_id]
     if not mine:
         raise CampaignError("UNKNOWN_FAMILY", f"{family_id} is not a family of this campaign")
@@ -1037,7 +1091,7 @@ def family_results(svc, cid: str, family_id: str) -> dict:
 def strategy_result(svc, cid: str, strategy_id: str) -> dict:
     """One strategy's stored result with full provenance (base metrics + prop audit; nothing is re-run)."""
     spec = load(svc, cid)
-    _, header, rows = load_manifest(svc, spec["manifest"]["manifest_id"])
+    header, rows = manifest_rows_view(svc, spec["manifest"]["manifest_id"])
     row = next((r for r in rows if r["strategy_id"] == strategy_id), None)
     if row is None:
         raise CampaignError("UNKNOWN_STRATEGY", f"{strategy_id} is not in this campaign")

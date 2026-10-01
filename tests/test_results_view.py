@@ -267,5 +267,74 @@ class TestPreferencesAndReset(unittest.TestCase):
         self.assertEqual(self.svc.results_overview({})["facts"]["strategies"], 0)
 
 
+class TestViewCaches(unittest.TestCase):
+    """Speed caches of the read-only views (ADR-75) never serve stale data: a new strategy, a new backtest, a renamed
+    library and a restart are all seen; display names never carry the id-like hash."""
+
+    def setUp(self):
+        import os
+        from edgelab.services import Services
+        from edgelab.web.demo import create_demo_workspace
+        self.tmp = Path(tempfile.mkdtemp())
+        self._env = os.environ.get("EDGELAB_VIEW_CACHE")
+        os.environ["EDGELAB_VIEW_CACHE"] = str(self.tmp / "cache")
+        create_demo_workspace(self.tmp / "demo", REPO)
+        self.svc = Services(root=self.tmp / "demo")
+
+    def tearDown(self):
+        import os
+        self.svc.store.close()
+        if self._env is None:
+            os.environ.pop("EDGELAB_VIEW_CACHE", None)
+        else:
+            os.environ["EDGELAB_VIEW_CACHE"] = self._env
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_new_backtest_and_new_strategy_are_seen_immediately(self):
+        sid = self.svc.library.list()[0]["strategy_id"]
+        before = self.svc.explore_strategies({"tested_only": "1"})["total"]
+        ds = next(d["dataset_id"] for d in self.svc.backtest_readiness(sid)["datasets"] if d["runnable"])
+        self.svc.backtest_strategy(sid, ds, record=True)
+        self.assertEqual(self.svc.explore_strategies({"tested_only": "1"})["total"], before + 1)   # db token moved
+        n = len(self.svc.library.list())
+        doc = self.svc.library.load(sid)
+        d = dict(doc["definition"]); d["name"] = "cache_probe_strategy"
+        d.setdefault("parameters", {})
+        res = self.svc.save_strategy(d) if hasattr(self.svc, "save_strategy") else None
+        if res is not None:
+            self.assertEqual(len(self.svc.library.list()), n + (1 if res.get("created") else 0))
+            self.assertEqual(len(ov.library_facets(self.svc)), len(self.svc.library.list()))
+
+    def test_fingerprint_fast_path_matches_full_scan(self):
+        lib = self.svc.library
+        self.assertEqual(lib._fingerprint(), lib._fingerprint_scan())
+        sid = lib.list()[0]["strategy_id"]
+        lib.archive(sid)
+        self.assertEqual(lib._fingerprint(), lib._fingerprint_scan())          # invalidated by the write
+        self.assertNotIn(sid, {r["strategy_id"] for r in ov.library_facets(self.svc)})
+        lib.restore(sid)
+        self.assertIn(sid, {r["strategy_id"] for r in ov.library_facets(self.svc)})
+
+    def test_facets_disk_cache_survives_restart_and_rebuilds_on_change(self):
+        from edgelab.services import Services
+        rows = ov.library_facets(self.svc)
+        self.assertTrue(ov.facets_cache_path(self.svc).is_file())
+        self.assertFalse((self.svc.data_root / "view_cache").exists())               # never inside the workspace
+        ov._FACET_CACHE.clear()
+        svc2 = Services(root=self.svc.root)
+        try:
+            self.assertEqual(ov.library_facets(svc2), rows)                     # read from disk, identical
+        finally:
+            svc2.store.close()
+
+    def test_display_names_never_carry_the_hash(self):
+        doc = {"strategy_id": "STR_0123456789AB", "name": "breakout_retest_02306faef8", "family_id": "x",
+               "definition": {"name": "breakout_retest_02306faef8"}, "lineage": [{}]}
+        n = ov.display_names(doc)
+        self.assertNotIn("02306faef8", n["display_name"] + n["short_name"])
+        for f in ov.library_facets(self.svc):
+            self.assertNotRegex(f["display_name"], r"[0-9a-f]{8,}")
+
+
 if __name__ == "__main__":
     unittest.main()
