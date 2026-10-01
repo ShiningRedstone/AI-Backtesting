@@ -180,8 +180,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--offset", type=int, default=0)
 
     p = sub.add_parser("research", help="Phase 4 batch search: validate, plan, run, rank, background job")
-    p.add_argument("action", choices=("validate", "plan", "run", "rank", "job"))
-    p.add_argument("target", help="search spec file (YAML/JSON), or a SRCH_ id for rank")
+    p.add_argument("action", choices=("validate", "plan", "run", "rank", "job", "campaign-freeze", "campaign-check",
+                                      "campaign-run", "campaign-status"))
+    p.add_argument("target", help="search spec file (YAML/JSON), a SRCH_ id for rank, an FM_ manifest id for "
+                                   "campaign-freeze, or a CMP_ campaign id for campaign-check / -run / -status")
+    p.add_argument("--dataset", action="append", default=[], metavar="TF=DATASET_ID",
+                   help="campaign-freeze: explicit dataset for a timeframe (must be the protocol source or derived from it)")
+    p.add_argument("--protocol", help="campaign-freeze: the ACTIVE protocol id (default: the only ACTIVE protocol)")
+    p.add_argument("--max-failures", type=int, default=0,
+                   help="campaign-run: stop after this many failed cells (default 0 = stop at the first failure)")
     p.add_argument("--workers", type=int, help="run: worker processes (default: the spec's workers, 1)")
     p.add_argument("--metric", help="rank: expectancy_r | profit_factor | net_r (default: the search spec's)")
     p.add_argument("--min-sample-label", help="rank: LOW SAMPLE SIZE | MODERATE SAMPLE | ADEQUATE SAMPLE")
@@ -393,6 +400,8 @@ def _strategy(svc, a, ap) -> int:
 
 def _research(svc, a) -> int:
     """Thin wrappers over the Phase 4 research services (the same calls /api/research makes)."""
+    if a.action.startswith("campaign-"):
+        return _campaign(svc, a)
     if a.action == "validate":
         r = svc.validate_search(a.target)
         if a.json:
@@ -436,6 +445,35 @@ def _research(svc, a) -> int:
             print(r["note"])
         return 0
     return _research_job(svc, a)
+
+
+def _campaign(svc, a) -> int:
+    """Frozen-manifest discovery campaign (ADR-68): freeze -> check (read-only) -> run (workers 1, resumable)."""
+    from edgelab.research.campaign import CampaignError
+    try:
+        if a.action == "campaign-freeze":
+            ds = dict(x.split("=", 1) for x in a.dataset)
+            r = svc.campaign_freeze(a.target, protocol_id=a.protocol, datasets=ds or None)
+            _print(r, a.json)
+            return 0
+        if a.action == "campaign-check":
+            r = svc.campaign_check(a.target)
+            if a.json:
+                _print(r, True)
+            else:
+                for c in r["checks"]:
+                    print(f"  [{'OK  ' if c['ok'] else 'FAIL'}] {c['check']}" + ("" if c["ok"] else f": {c['detail']}"))
+                print(("READY" if r["ready"] else "NOT READY") + f" - {r['campaign_id']} ({r['note']})")
+            return 0 if r["ready"] else 2
+        if a.action == "campaign-run":
+            r = svc.campaign_run(a.target, workers=a.workers if a.workers is not None else 1, max_failures=a.max_failures)
+            _print(r, a.json)
+            return 0 if r["complete"] else 1
+        _print(svc.campaign_status(a.target), a.json)
+        return 0
+    except CampaignError as exc:
+        print(json.dumps(exc.to_dict(), indent=1, default=str), file=sys.stderr)
+        return 2
 
 
 def _research_job(svc, a) -> int:

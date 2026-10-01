@@ -1641,3 +1641,29 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   interpretation is never VERIFIED (funded start timing, Growth funded contract limit, Select trailing interpretation of
   "EOD", unsupplied balance requirements); the LucidFlex consistency ratio definition is VERIFIED; the Select Daily winning-day
   threshold is inactive in daily mode.
+
+### ADR-68 Frozen-manifest discovery campaign (launcher only)
+- **Mechanism.** `edgelab/research/campaign.py` + `research campaign-freeze|campaign-check|campaign-run|campaign-status`.
+  `freeze` builds a spec bound to the manifest (id, file sha256s, strategies/catalog/capability hashes, factory/space
+  versions), the ACTIVE protocol (id, version, material hash, budget, family rule, holdout-look budget), the resolved
+  datasets (content hashes), the discovery period, the config hash and the four prop profiles; `CMP_` id = hash(spec);
+  written once to `<data>/campaigns/<CMP>/campaign.json`, never overwritten. It then materializes every manifest row into the
+  library (the EXACT manifest definition, compiled and checked against strategy_id / logic_hash / definition_hash;
+  factory lineage with manifest id, catalog hash, family_spec_sha256, setup, campaign id). No evaluation.
+- **One strategy = one cell = one trial.** Execution is ONE Phase-4 search (`research.batch.run_search`, `workers = 1`,
+  `max_cells = n`) over the frozen spec: every strategy's own timeframe resolves to exactly one dataset of the protocol
+  source's import (root or derived), so the other timeframes are ineligible cells that never run; MTF features are derived
+  inside the evaluation (`features.mtf`); prop profiles audit the same trades. Trial key unchanged:
+  (protocol, logic_hash, evaluated discovery-slice content hash, config hash).
+- **Discovery only.** Period = [discovery session open, holdout session open - 1 s]; the protocol gate refuses anything else.
+- **Resumable.** search id = f(frozen spec, config, protocol); completed cells are skipped, so no second event. Exceptions
+  stay failed cells and failed (uncounted) protocol events (ADR-56 semantics), retried next run; the run stops at the first
+  failure by default (`--max-failures`).
+- **Preflight** (`campaign-check`, read-only): manifest integrity, uniqueness, every row's timeframe/MTF/MNQ binding, protocol
+  identity/capacity/family/discovery/config, zero foreign trials, protocol trials = completed campaign cells, zero holdout
+  access, datasets present/unchanged/runnable/covering, plan = one eligible cell per strategy, library copies compile to the
+  frozen identity, MNQ spec, $50K, cap 40, day-trading engine config, four prop profiles, workers 1, holdout disabled.
+- **Found while building it:** `canonical_definition` (the hashing normal form) is not valid DSL input for `exit.trailing`
+  without ATR (`atr_period: null`) or `exit.no_progress` (flattened); a library copy saved through `save_strategy` would not
+  compile. The campaign therefore stores the exact manifest definition; the DSL is unchanged (changing the normal form would
+  change definition hashes). Fixing `save_strategy`'s round trip is a separate task.

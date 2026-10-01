@@ -600,6 +600,31 @@ class Services:
         from edgelab.research.batch import run_search
         return run_search(self, spec if isinstance(spec, Mapping) else self._definition(spec), workers)
 
+    # ------------------------------------------------------------ frozen-manifest campaign (ADR-68)
+    def campaign_freeze(self, manifest_id: str, protocol_id: str | None = None,
+                        datasets: Mapping[str, str] | None = None) -> dict:
+        """Freeze a discovery campaign over a factory manifest and materialize its strategies (no evaluation)."""
+        from edgelab.research import campaign
+        out = campaign.freeze(self, manifest_id, protocol_id=protocol_id, datasets=datasets)
+        return _jsonable({k: out[k] for k in ("campaign_id", "path", "materialized")} | {
+            "search_id": out["spec"]["search"]["search_id"], "protocol_id": out["spec"]["protocol"]["protocol_id"],
+            "n_strategies": out["spec"]["manifest"]["n_strategies"],
+            "datasets": out["spec"]["dataset_resolution"]["by_timeframe"]})
+
+    def campaign_check(self, campaign_id: str) -> dict:
+        """Read-only preflight of a frozen campaign (no backtest, no trial, no holdout access)."""
+        from edgelab.research import campaign
+        return _jsonable(campaign.check(self, campaign_id))
+
+    def campaign_run(self, campaign_id: str, workers: int = 1, max_failures: int = 0) -> dict:
+        """Run a frozen campaign through the protocol-gated search (preflight first; resumable)."""
+        from edgelab.research import campaign
+        return _jsonable(campaign.run(self, campaign_id, workers=workers, max_failures=max_failures))
+
+    def campaign_status(self, campaign_id: str) -> dict:
+        from edgelab.research import campaign
+        return _jsonable(campaign.status(self, campaign_id))
+
     def validate_search(self, spec: Any) -> dict:
         """Structural check of a search spec (keys, types, values); references are checked by plan."""
         from edgelab.research.search import canonical_search_spec, search_hash, validate_search_spec

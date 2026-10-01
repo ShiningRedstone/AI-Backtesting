@@ -25,6 +25,14 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Packaged Windows build + update on Windows | NOT VERIFIED HERE (must be built and exercised on Windows) |
 | Publishing a GitHub Release | NOT DONE (maintainer action) |
 | Code signing, delta updates, installer | NOT IMPLEMENTED |
+## Frozen-manifest discovery campaign launcher (ADR-68)
+
+| Item | Status |
+|---|---|
+| `research campaign-freeze / campaign-check / campaign-run / campaign-status`: frozen campaign spec, materialization with exact identity and factory lineage, read-only preflight, protocol-gated resumable run (workers 1, one trial per strategy, discovery only) | IMPLEMENTED, TESTED (synthetic workspace, 30-strategy manifest; 10,000-row pure checks) |
+| The real campaign over FM_3B0B01CFC81AB15E under RP_D8EAE439C41A | NOT RUN (user workspace) |
+| Library round trip of `canonical_definition` for trailing without ATR / no_progress | KNOWN DEFECT (campaign stores the exact manifest definition; DSL unchanged) |
+
 ## Pre-campaign governance (ADR-67)
 
 | Item | Status |

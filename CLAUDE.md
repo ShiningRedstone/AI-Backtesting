@@ -55,6 +55,8 @@ results are PASS / FAIL / INCOMPATIBLE / NOT_APPLICABLE "UNDER DEFAULT ASSUMED R
 ADR-67: protocol version 3 (10,000 unique trials, Bonferroni family = declared budget, 5,000,000 bootstrap replicates, holdout looks
 independent); an unused protocol is superseded (`create_protocol(supersedes=)`, `scripts/protocol_supersede.py`), never edited.
 Prop profiles v4 (metadata-only correction). Manifest FM_3B0B01CFC81AB15E (10,000) verified reproducible.
+ADR-68: frozen-manifest campaign launcher `research/campaign.py` (`research campaign-freeze|check|run|status`): one strategy = one
+cell = one trial through the protocol-gated search, workers 1, discovery only, resumable; preflight is read-only.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
