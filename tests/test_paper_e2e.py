@@ -120,6 +120,7 @@ class TestPaperBrowserFlow(unittest.TestCase):
         pg.reload()                                                          # already on #/paper after the start
         self.wait_text(pg, "paper-source-status", "same prices")
         self.tid(pg, f"paper-row-{aid}").click()
+        self.tid(pg, "paper-attempts").locator("tbody tr").first.wait_for()  # the drawer loads its rows asynchronously
         self.assertGreater(self.tid(pg, "paper-attempts").locator("tbody tr").count(), 0)
         self.tid(pg, "paper-stop").click()
         self.tid(pg, "paper-resume").wait_for()
