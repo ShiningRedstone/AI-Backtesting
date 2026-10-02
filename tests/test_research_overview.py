@@ -106,8 +106,14 @@ class TestResearchTerminal(ProtocolBase):
         self.assertEqual(c.get(f"/api/explorer/strategies?protocol={self.pid}").get_json()["total"], 1)
         big = c.get("/api/explorer/strategies?min_trades=100000").get_json()
         self.assertEqual(big["total"], 0)
-        for bad in ("sort=win_ratez", "scope=holdout", "page=x", "min_trades=abc", "page_size=-1"):
+        for bad in ("sort=win_ratez", "scope=bogus", "page=x", "min_trades=abc", "page_size=-1"):
             self.assertEqual(c.get(f"/api/explorer/strategies?{bad}").status_code, 400, bad)
+        # ADR-85: the holdout view lists ONLY holdout-evaluation runs; no status scope ever lists one
+        ho = c.get("/api/explorer/strategies?scope=holdout&tested_only=1").get_json()
+        self.assertEqual({x["ref_run"]["run_id"] for x in ho["rows"]}, {self.holdout_run})
+        for sc in ("in_sample", "oos", "walk_forward", "any"):
+            rows = c.get(f"/api/explorer/strategies?scope={sc}").get_json()["rows"]
+            self.assertNotIn(self.holdout_run, {(x["ref_run"] or {}).get("run_id") for x in rows}, sc)
 
     def test_home_overview_and_execution_identity(self):
         c, _ = self.client()

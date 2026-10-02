@@ -72,6 +72,20 @@ class CampaignJob(Job):
                 "processes": self.processes, "live": dict(self.live)}
 
 
+class HoldoutJob(Job):
+    """Holdout backtests of chosen survivors (ADR-85): one strategy at a time through Services.evaluate_holdout."""
+
+    def __init__(self, job_id: str, protocol_id: str, items: list[dict]):
+        super().__init__(job_id, "", {})
+        self.kind, self.protocol_id = "holdout", protocol_id
+        self.items = [{**it, "state": "queued"} for it in items]
+        self.live: dict = {"current": None, "done": 0}
+
+    def snapshot(self) -> dict:
+        return {**super().snapshot(), "kind": "holdout", "protocol_id": self.protocol_id,
+                "items": [dict(x) for x in self.items], "n_items": len(self.items), "live": dict(self.live)}
+
+
 class JobManager:
     def __init__(self, services, lock):
         self.services, self.lock = services, lock
@@ -184,6 +198,43 @@ class JobManager:
         job.finished_at = _now()
         job._set(final)
 
+    # ------------------------------------------------------------------ holdout jobs (ADR-85)
+    def start_holdout(self, strategy_ids: list[str]) -> dict:
+        """Holdout backtests of a checked survivor selection; the same one-research-job-at-a-time rule."""
+        from edgelab.research import holdout as H
+        reading = getattr(self.services, "in_read_context", lambda: False)()
+        with (nullcontext() if reading else self.lock):
+            plan = H.plan(self.services, strategy_ids)            # refuses non-survivors, tested ones, over-budget
+        with self._mu:
+            if self._active is not None and self._active.state in ACTIVE:
+                raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
+            job = HoldoutJob("JOB_" + uuid.uuid4().hex[:12].upper(), plan["protocol"]["protocol_id"], plan["items"])
+            self._jobs[job.job_id] = job
+            self._active = job
+            self._thread = threading.Thread(target=self._work_holdout, args=(job,), name=f"edgelab-{job.job_id}",
+                                            daemon=True)
+            self._thread.start()
+        return job.snapshot()
+
+    def _work_holdout(self, job: HoldoutJob) -> None:
+        from edgelab.research import holdout as H
+        job.started_at = _now()
+        job._set("running")
+        try:
+            H.run_items(self.services, job, self.lock)
+            final = "cancelled" if job.cancel_requested.is_set() else "completed"
+        except BaseException as exc:                         # recorded, never swallowed silently
+            job.error = f"{type(exc).__name__}: {exc}"
+            final = "failed"
+        job.finished_at = _now()
+        job._set(final)
+
+    def holdout_status(self, job_id: str) -> dict:
+        job = self._get(job_id)
+        if not isinstance(job, HoldoutJob):
+            raise KeyError(job_id)
+        return job.snapshot()
+
     def campaign_status(self, job_id: str) -> dict:
         """Lock-free: the in-memory live record of a campaign job (durable copy: the run record file)."""
         job = self._get(job_id)
@@ -199,11 +250,11 @@ class JobManager:
         job = self._get(job_id)
         if job.state in ACTIVE:
             job.cancel_requested.set()
-        return job.snapshot() if isinstance(job, CampaignJob) else self.status(job_id)
+        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob)) else self.status(job_id)
 
     def status(self, job_id: str) -> dict:
         job = self._get(job_id)
-        if isinstance(job, CampaignJob):
+        if isinstance(job, (CampaignJob, HoldoutJob)):
             return job.snapshot()
         return {**job.snapshot(), "progress": self.progress(job.search_id)}
 

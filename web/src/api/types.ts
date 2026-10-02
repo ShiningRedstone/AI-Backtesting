@@ -367,6 +367,9 @@ export interface ExplorerRow {
   stop_type: string | null; target_type: string; source: string | null; proposal_id: string | null; created_at: string | null;
   logic_hash: string | null; state: string; state_label: string; n_runs: number; n_oos_runs: number; protocols: string[];
   oos_expectancy_r: Num; oos_run_id: string | null; holdout_outcome: string | null; holdout_random_control_p: Num;
+  /** ADR-85 holdout view only */
+  holdout_cost_stress_met?: boolean | null; holdout_cost_stress?: Record<string, number | null> | null;
+  discovery_expectancy_r?: Num; discovery_net_r?: Num; discovery_trade_count?: number | null; discovery_run_id?: string | null;
   ref_run: { run_id: string; status: string; scope: string; dataset_id: string; instrument: string; synthetic: boolean;
     cost_status: string | null; start: string; end: string } | null;
   instrument: string | null; trade_count: number | null; trades_per_week: Num; win_rate: Num; expectancy_r: Num;
@@ -479,6 +482,7 @@ export interface YearRow extends PeriodStats { year: number; months: (PeriodStat
 export interface HoldoutPeriod { from: string; to: string; trading_dates: [string, string]; evaluated: boolean; run_id: string | null;
   years: (YearRow | { year: number; locked: true })[]; curve: RunCurve | null }
 export interface StrategyPanelData {
+  is_holdout?: boolean;                       // ADR-85: the panel's run is a holdout-evaluation run
   strategy_id: string; display_name: string; explanation: string; family_id: string | null; family_name: string | null;
   facets: Record<string, unknown>; scope: string; risk_per_trade_usd: number; survivor_rule: string; tested: boolean;
   technical: Record<string, string | null | undefined>; rules: { rule: string; text: string }[];
@@ -563,4 +567,36 @@ export interface PaperAccountDetail {
     "n_trades" | "balance" | "last_day" | "computed_at"> & { fees: PaperFees; start_ts: string; logic_hash?: string; definition_hash?: string;
     stopped_at?: string | null; label: string };
   state: PaperState | null;
+}
+
+/* ---------------------------------------------------------------- holdout backtests (ADR-85) */
+export interface HoldoutProtocol {
+  protocol_id: string; name: string | null; looks_used: number; looks_budget: number; looks_left: number;
+  holdout_trading_dates: [string, string]; holdout_first_bar: string; holdout_last_bar: string;
+}
+export interface HoldoutCandidate {
+  strategy_id: string; display_name: string | null; family_id: string | null; family_name: string | null; timeframe: string | null;
+  session: string | null; run_id: string; dataset_id: string | null; synthetic: boolean | null; trade_count: number | null;
+  trades_per_week: number | null; avg_rr: number | null; profit_factor: number | null; max_drawdown_r: number | null;
+  expectancy_r: number | null; net_r: number | null; max_loss_streak: number | null; win_rate: number | null;
+  negative_months: number | null; protocol_id: string | null; eligible: boolean; reason: string | null; search_id: string | null;
+  tested: { access_id: string; status: string; run_id: string | null; outcome: string | null; created_at: string } | null;
+  ranks: Record<string, number>; score: number; position: number;
+}
+export interface HoldoutCandidates {
+  criteria_profile: string | null; ranking_rule: string; protocols: HoldoutProtocol[]; protocol: HoldoutProtocol | null;
+  criteria: { key: string; label: string; higher_is_better: boolean; weight: number }[];
+  rows: HoldoutCandidate[]; n_survivors: number; n_eligible: number;
+}
+export interface HoldoutHistoryRow {
+  access_id: string; protocol_id: string; strategy_id: string; display_name: string | null; status: string;
+  reason_code: string | null; reason: string | null; run_id: string | null; outcome: string | null; trade_count: number | null;
+  created_at: string; completed_at: string | null;
+}
+export interface HoldoutJob {
+  job_id: string; kind: "holdout"; protocol_id: string; state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  created_at: string; started_at: string | null; finished_at: string | null; error: string | null; cancel_requested: boolean;
+  n_items: number; live: { current: string | null; done: number };
+  items: { strategy_id: string; display_name: string | null; search_id: string; state: string; run_id?: string | null;
+    outcome?: string | null; error?: string; code?: string | null }[];
 }

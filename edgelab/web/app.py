@@ -865,6 +865,30 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def campaigns_job_cancel(jid):                  # sets a flag; the running cell finishes, nothing is marked done
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
+    # ------------------------------------------------------------------ holdout backtests (ADR-85)
+    @app.get("/api/holdout/candidates")
+    def holdout_candidates():
+        return jsonify(call(svc.holdout_candidates))
+
+    @app.get("/api/holdout/history")
+    def holdout_history():
+        return jsonify(call(svc.holdout_history))
+
+    @app.post("/api/holdout/jobs")
+    def holdout_start():
+        sids = body().get("strategy_ids")
+        if not isinstance(sids, list) or not sids or not all(isinstance(x, str) and STRATEGY_ID.match(x) for x in sids):
+            raise _bad("strategy_ids must be a non-empty list of STR_ ids")
+        return jsonify(call(svc.start_holdout_job, sids)), 202
+
+    @app.get("/api/holdout/jobs/<jid>")
+    def holdout_job(jid):                           # lock-free: in-memory job record
+        return jsonify(svc.holdout_job(_id(jid, JOB_ID, "job id")))
+
+    @app.post("/api/holdout/jobs/<jid>/cancel")
+    def holdout_cancel(jid):                        # stops BEFORE the next strategy; a granted test always finishes
+        return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
+
     @app.get("/api/research/searches")
     def research_searches():
         return jsonify(call(svc.list_searches))

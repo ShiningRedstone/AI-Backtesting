@@ -32,18 +32,23 @@ function optLabel(k: string, v: string, states?: Record<string, string>): string
   return facetLabel(k, v);
 }
 const DEFAULTS: Record<string, string> = { scope: "in_sample", sort: "expectancy_r", order: "desc", page: "1", page_size: "50" };
+/** ADR-85 Holdout results: the same explorer over each strategy's holdout-evaluation run. */
+const HOLDOUT_DEFAULTS: Record<string, string> = { ...DEFAULTS, scope: "holdout", tested_only: "1" };
+const OUTCOME_TEXT: Record<string, string> = { HOLDOUT_CRITERIA_MET: "Criteria met", HOLDOUT_CRITERIA_NOT_MET: "Criteria not met" };
 
-function readQuery(q: URLSearchParams): Record<string, string> {
-  const out: Record<string, string> = { ...DEFAULTS };
+function readQuery(q: URLSearchParams, defaults: Record<string, string> = DEFAULTS): Record<string, string> {
+  const out: Record<string, string> = { ...defaults };
   for (const k of KEYS) { const v = q.get(k); if (v) out[k] = v; }
   return out;
 }
 
-export function ExplorerPage() {
+export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
   const route = useRoute();
   const { prefs } = useApp();
   const crit = useCriteriaName();
-  const [f, setF] = useState<Record<string, string>>(() => readQuery(route.query));
+  const defs = holdout ? HOLDOUT_DEFAULTS : DEFAULTS;
+  const base = holdout ? "/holdout-results" : "/explorer";
+  const [f, setF] = useState<Record<string, string>>(() => readQuery(route.query, defs));
   const [open, setOpen] = useState<string | null>(route.query.get("open"));
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const q = useDebounced(f.q ?? "", 300);
@@ -55,30 +60,33 @@ export function ExplorerPage() {
   useEffect(() => {        // keep filters in the URL so Back from a strategy page restores them (no history spam)
     const qs = new URLSearchParams(params);
     if (open) qs.set("open", open);
-    window.history.replaceState(null, "", `#/explorer${qs.toString() ? `?${qs}` : ""}`);
+    window.history.replaceState(null, "", `#${base}${qs.toString() ? `?${qs}` : ""}`);
   }, [params, open]);
   const { data, error, loading } = useApi<ExplorerResponse>(`/api/explorer/strategies?${params}`, [params]);
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v, ...(k !== "page" ? { page: "1" } : {}) }));
-  const active = Object.entries(f).filter(([k, v]) => v && !["sort", "order", "page", "page_size"].includes(k) && DEFAULTS[k] !== v);
-  const reset = () => setF({ ...DEFAULTS });
+  const active = Object.entries(f).filter(([k, v]) => v && !["sort", "order", "page", "page_size"].includes(k) && defs[k] !== v);
+  const reset = () => setF({ ...defs });
   const onSort = (k: string, o: "asc" | "desc") => setF((x) => ({ ...x, sort: k, order: o, page: "1" }));
   const facet = (k: string) => data?.facets[k] ?? [];
   const toggle = (id: string) => setSelected((s) => { const nx = new Set(s); if (nx.has(id)) nx.delete(id); else nx.add(id); return nx; });
   const sortProps = { sort: f.sort, order: f.order as "asc" | "desc", onSort };
   return (
-    <div className="page" data-testid="explorer">
+    <div className="page" data-testid={holdout ? "holdout-results" : "explorer"}>
       <header className="page-head">
-        <div><h1>Strategy explorer</h1></div>
+        <div><h1>{holdout ? "Holdout results" : "Strategy explorer"}</h1></div>
         <div className="actions">
-          <div className="segmented small" role="group" aria-label="scope">
+          {!holdout && <div className="segmented small" role="group" aria-label="scope">
             {[["in_sample", "In-sample"], ["oos", "Out-of-sample"], ["walk_forward", "Walk-forward"], ["any", "Any"]].map(([k, l]) =>
               <button key={k} className={f.scope === k ? "on" : ""} onClick={() => set("scope", k)} data-testid={`scope-${k}`}>{l}</button>)}
-          </div>
+          </div>}
           {selected.size >= 1 && <Button small onClick={() => go(`/compare?source=runs&id=${[...selected].map((s) => data?.rows.find((x) => x.strategy_id === s)?.ref_run?.run_id).filter(Boolean).join(",")}`)}
             disabled={![...selected].some((s) => data?.rows.find((x) => x.strategy_id === s)?.ref_run)}>Compare {selected.size} selected</Button>}
         </div>
       </header>
 
+      {holdout && <p className="small muted" data-testid="holdout-results-note">Each strategy's one holdout test: a backtest on exactly the locked
+        holdout dates, judged by the protocol's pre-registered criteria. These results are kept apart from the discovery results under
+        Strategies. Run tests under Run backtest → <a href={href("/holdout")}>Holdout backtest</a>.</p>}
       <div className="filterbar" data-testid="explorer-filters">
         <input className={`input search-box${f.q ? " active" : ""}`} placeholder="Search name, ID, family, hypothesis…" value={f.q ?? ""}
           aria-label="search" data-testid="explorer-q" onChange={(e: { target: HTMLInputElement }) => set("q", e.target.value)} />
@@ -118,35 +126,45 @@ export function ExplorerPage() {
       </div>
       {active.length > 0 && <div className="active-filters" data-testid="active-filters">Active:
         {active.map(([k, v]) => <span key={k} className="fchip">{CHIP[k] ?? FILTERS.find((x) => x.key === k)?.label ?? humanize(k)}: {optLabel(k, v, data?.states)}
-          <button aria-label={`clear ${k}`} onClick={() => set(k, k === "scope" ? "in_sample" : "")}>×</button></span>)}</div>}
+          <button aria-label={`clear ${k}`} onClick={() => set(k, k === "scope" ? defs.scope : (defs[k] ?? ""))}>×</button></span>)}</div>}
 
       <Card className="flush" title={<>{data ? <><b className="num">{data.total.toLocaleString()}</b> of {data.library_total.toLocaleString()} strategies</> : "Strategies"}
-        {data && <><Scope kind={f.scope === "oos" ? "oos" : f.scope === "walk_forward" ? "wf" : "is"}>{data.scope_label}</Scope><Scope kind="net" /></>}
+        {data && <><Scope kind={holdout ? "holdout" : f.scope === "oos" ? "oos" : f.scope === "walk_forward" ? "wf" : "is"}>{data.scope_label}</Scope><Scope kind="net" /></>}
         {loading && <span className="spinner" aria-label="loading" />}</>} testId="explorer-results">
         {error ? <div className="card-body"><ErrorPanel error={error} /></div> : !data ? <div className="card-body"><Loading label="Loading strategies…" /></div>
+          : !data.rows.length && holdout && active.length === 0 ? <div className="card-body"><Empty>No holdout tests yet. Pick survivors under Run backtest →
+              {" "}<a href={href("/holdout")}>Holdout backtest</a>.</Empty></div>
           : !data.rows.length ? <div className="card-body"><Empty>{data.library_total ? <>No strategy matches these filters.{" "}
               <button className="linklike" onClick={reset}>Clear all filters</button>{f.scope !== "any" && <> or switch the scope to <b>Any</b>
               (a strategy without a run in this scope shows empty metrics).</>}</> : <>The strategy library is empty. <a href={href("/builder?new=1")}>Create a strategy</a>.</>}</Empty></div>
           : <>
-            <TableWrap testId="explorer-table" className="fit"><table className="dense fit-table">
+            <TableWrap testId="explorer-table" className={holdout ? "" : "fit"}><table className={holdout ? "dense" : "dense fit-table"}>
               <thead><tr>
                 <th style={{ width: 26 }} /><th style={{ width: 30 }} aria-label="favorite" />
                 <SortTh k="short_name" label="Strategy" {...sortProps} />
                 <SortTh k="family_id" label="Family" {...sortProps} />
-                <th>Market</th><SortTh k="timeframe" label="Time­frame" {...sortProps} /><th>Session</th>
+                {!holdout && <th>Market</th>}<SortTh k="timeframe" label="Time­frame" {...sortProps} />{!holdout && <th>Session</th>}
+                {holdout && <th title="the protocol's pre-registered criteria, all must be met">Verdict</th>}
                 <SortTh k="trade_count" label="Trades" right {...sortProps} />
                 <SortTh k="trades_per_week" label="Per week" right {...sortProps} />
                 <SortTh k="expectancy_r" label="Net R per trade" right {...sortProps} title="average result per trade after costs" />
                 <SortTh k="net_r" label="Total net R" right {...sortProps} />
                 <SortTh k="avg_rr" label="Reward to risk" right {...sortProps} />
                 <SortTh k="profit_factor" label="Profit factor" right {...sortProps} />
-                <SortTh k="win_rate" label="Win rate" right {...sortProps} title="shown for completeness; never a ranking criterion" />
+                {!holdout && <SortTh k="win_rate" label="Win rate" right {...sortProps} title="shown for completeness; never a ranking criterion" />}
                 <SortTh k="max_drawdown_r" label="Max draw­down (R)" right {...sortProps} />
                 <th title={`Prop firm evaluation under ${crit} (change the account in Settings)`}>Eval</th>
                 <th title={`First payout under ${crit} (change the account in Settings)`}>Payout</th>
+                {holdout && <>
+                  <SortTh k="holdout_random_control_p" label="Random comparison" right {...sortProps}
+                    title="share of 100 random-entry runs doing at least as well (p-value); lower is better, required ≤ 0.05" />
+                  <th title="net R stays at or above zero with costs × 1.5 and × 2">Cost stress</th>
+                  <SortTh k="discovery_expectancy_r" label="Discovery net R per trade" right {...sortProps}
+                    title="the same strategy on the discovery period (before the holdout), for comparison" />
+                </>}
               </tr></thead>
               <tbody>{data.rows.map((x) => <Row key={x.strategy_id} x={x} sel={selected.has(x.strategy_id)} onSel={() => toggle(x.strategy_id)}
-                onOpen={() => setOpen(x.strategy_id)} />)}</tbody>
+                onOpen={() => setOpen(x.strategy_id)} holdout={holdout} />)}</tbody>
             </table></TableWrap>
             <Pager page={data.page} pages={data.pages} total={data.total} pageSize={data.page_size}
               onPage={(p) => set("page", String(p))} onPageSize={(s) => set("page_size", String(s))} />
@@ -157,7 +175,7 @@ export function ExplorerPage() {
       <Drawer open={!!open} onClose={() => setOpen(null)} testId="strategy-drawer"
         title={open ? (data?.rows.find((x) => x.strategy_id === open)?.display_name ?? "Strategy") : ""}
         actions={open ? <Button small onClick={() => go(`/strategies/${open}`)}>Open strategy page</Button> : null}>
-        {open && <StrategyDetail key={open} id={open} />}
+        {open && <StrategyDetail key={open} id={open} scope={holdout ? "holdout" : undefined} />}
       </Drawer>
     </div>
   );
@@ -168,7 +186,7 @@ const PassFail = ({ v }: { v: boolean | null | undefined }) => (v == null ? <spa
   : <span className={`pf ${v ? "pf-pass" : "pf-fail"}`}>{v ? "Passed" : "Failed"}</span>);
 
 
-function Row({ x, sel, onSel, onOpen }: { x: ExplorerRow; sel: boolean; onSel: () => void; onOpen: () => void }) {
+function Row({ x, sel, onSel, onOpen, holdout }: { x: ExplorerRow; sel: boolean; onSel: () => void; onOpen: () => void; holdout?: boolean }) {
   return (
     <tr className={`clickable${sel ? " selected" : ""}`} onClick={onOpen} data-testid={`xrow-${x.strategy_id}`}>
       <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><input type="checkbox" checked={sel} onChange={onSel}
@@ -177,16 +195,23 @@ function Row({ x, sel, onSel, onOpen }: { x: ExplorerRow; sel: boolean; onSel: (
       <td className="name-cell"><div className="cell-title">{x.short_name ?? humanize(x.name ?? "—")}</div>
         <div className="cell-badges">{x.survivor && <Badge tone="ok">Survivor</Badge>}{x.synthetic && <Scope kind="synthetic">synthetic</Scope>}</div></td>
       <td className="small wrap">{x.family_name ?? facetLabel("family_id", x.family_id)}</td>
-      <td className="small">{facetLabel("instrument", x.instrument)}</td><td>{facetLabel("timeframe", x.timeframe)}</td>
-      <td className="small wrap">{facetLabel("session", x.session)}</td>
+      {!holdout && <td className="small">{facetLabel("instrument", x.instrument)}</td>}<td>{facetLabel("timeframe", x.timeframe)}</td>
+      {!holdout && <td className="small wrap">{facetLabel("session", x.session)}</td>}
+      {holdout && <td data-testid={`verdict-${x.strategy_id}`}>{x.holdout_outcome ? <Badge tone={x.holdout_outcome === "HOLDOUT_CRITERIA_MET" ? "ok" : "warn"}>
+        {OUTCOME_TEXT[x.holdout_outcome] ?? humanize(x.holdout_outcome)}</Badge> : <span className="faint">—</span>}</td>}
       <td className="r num">{x.trade_count ?? "—"}</td><td className="r num">{n(x.trades_per_week, 1)}</td>
       <td className={`r num ${signCls(x.expectancy_r)}`} style={{ fontWeight: 650 }}>{x.expectancy_r == null ? "—" : n(x.expectancy_r, 3)}</td>
       <td className={`r num ${signCls(x.net_r)}`}>{n(x.net_r, 1)}</td>
       <td className="r num">{x.avg_rr == null ? "—" : `${n(x.avg_rr, 2)}`}</td>
-      <td className="r num">{n(x.profit_factor)}</td><td className="r num faint">{pct(x.win_rate, 0)}</td>
+      <td className="r num">{n(x.profit_factor)}</td>{!holdout && <td className="r num faint">{pct(x.win_rate, 0)}</td>}
       <td className="r num">{n(x.max_drawdown_r, 1)}</td>
       <td data-testid={`pass-eval-${x.strategy_id}`}><PassFail v={x.prop_pass_eval} /></td>
       <td data-testid={`pass-payout-${x.strategy_id}`}><PassFail v={x.prop_pass_payout} /></td>
+      {holdout && <>
+        <td className="r num">{x.holdout_random_control_p == null ? "—" : n(x.holdout_random_control_p, 3)}</td>
+        <td><PassFail v={x.holdout_cost_stress_met} /></td>
+        <td className={`r num ${signCls(x.discovery_expectancy_r)}`}>{x.discovery_expectancy_r == null ? "—" : n(x.discovery_expectancy_r, 3)}</td>
+      </>}
     </tr>
   );
 }

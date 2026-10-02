@@ -2107,3 +2107,49 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Months.** A month outside the tested period reads "outside the period", not "no trades".
 - **No governance change.** This is read only. Nothing is backtested, no holdout look is used, and the protocol ledgers
   are untouched (tested). A workspace without a protocol shows no holdout section.
+
+### ADR-85 Holdout backtests of chosen survivors; timeframe-aware holdout gate
+- **Why.** The holdout gate (`Services.evaluate_holdout`, ADR-56/67) existed but nothing reached it. As built, it could
+  only test strategies on the protocol source's own timeframe: it checked "exactly the holdout bars" only after spending
+  the look. A 5/15/30/60-minute strategy on a 1-minute protocol source would therefore fail and burn a look.
+- **Gate fix (minimal, earlier-phase module).**
+  - `protocol.stage_of(..., tf_ns)`: a dataset derived from the protocol source on a coarser timeframe classifies as
+    holdout when its first bar opens at or after the holdout session open and contains the first source bar, and its
+    last bar contains the last source bar. On the source timeframe this is the old exact test.
+  - `_protocol_gate` passes `tf_ns` only with a holdout access id, so the discovery classification is unchanged.
+  - `Services._holdout_dataset` runs before the look is granted. It resolves the strategy's own timeframe dataset from
+    the protocol source import (`campaign.resolve_datasets`), cuts it to the holdout session open through the last
+    source bar, and checks that the cut classifies as holdout, the instrument identity, and the costs. Any problem is a
+    refused access (`HOLDOUT_DATASET_UNRESOLVED`, `HOLDOUT_WINDOW_MISMATCH`), which uses no look.
+  - Tests: existing protocol tests unchanged; 5m-on-1m success; locks without an access; a pre-check refusal costs no
+    look; `stage_of` known answers.
+- **Candidates (`research/holdout.py`).**
+  - Every current survivor (latest in-sample run, Settings pass-criteria account) is ranked for prop trading from
+    discovery numbers only, on 8 criteria: trades per week, negative months (New York exit month, like Results by
+    year), reward to risk, profit factor, max drawdown, net R per trade, total net R, longest losing streak.
+  - Ranks use the average for ties; a missing value ranks last; |drawdown| is used.
+  - Score = weighted mean rank, with max drawdown and negative months weighted ×2. It is a display order only.
+  - Eligibility: not yet holdout-tested (one look per logic hash), and a counted discovery trial from a search
+    attributed to the protocol. A survivor from a Single backtest is listed but cannot be tested.
+- **Job.**
+  - `HoldoutJob` sits in the existing `JobManager`, so the one-research-job-at-a-time rule applies: no holdout test
+    during a research run, and vice versa.
+  - `holdout.plan` refuses non-survivors, tested or ineligible strategies, mixed protocols, and selections above the
+    looks left.
+  - The worker tests one strategy at a time under the service lock (pages read lock-free, ADR-78). It first adds the
+    strategy to its search's shortlist tag (kept, not replaced), then runs `evaluate_holdout`.
+  - Cancel stops before the next strategy; a granted test always finishes.
+- **API.**
+  - `GET /api/holdout/candidates|history`, `POST /api/holdout/jobs`, `GET /api/holdout/jobs/<id>`,
+    `POST /api/holdout/jobs/<id>/cancel`.
+  - Holdout results reuse `/api/explorer/strategies?scope=holdout` and `/api/results-view/strategies/<id>?scope=holdout`
+    (`overview.HOLDOUT_VIEW`, `scoped_runs`). Explorer rows add the verdict, the random-comparison p, the cost-stress
+    result and the discovery net R per trade. The panel marks `is_holdout`, so the run is labelled Holdout, never OOS.
+- **UI.**
+  - Run backtest → **Holdout backtest** (`/holdout`): tests left, holdout dates, a ranked survivor table (sortable,
+    family/timeframe filters, tested rows greyed), start with a permanent-use confirm, live progress with cancel, and
+    the history of every attempt (refusals included).
+  - Backtest results → **Holdout results** (`/holdout-results`): the Strategies explorer in holdout mode (same filters
+    and drawer on the holdout run) plus the verdict columns. The Strategies tab stays discovery-only.
+- **Unchanged:** the engine, fills, costs, sizing, prop rules, trial counting, the protocol's criteria, the look budget,
+  and the discovery classification.

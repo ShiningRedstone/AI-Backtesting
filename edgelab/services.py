@@ -1924,7 +1924,10 @@ class Services:
                                      protocol_id=pid, protocol_config_hash=mat["config_hash"],
                                      current_config_hash=self._config_hash())
         first, last = int(ds.bars.ts_ns[0]), int(ds.bars.ts_ns[-1])
-        stage = rp.stage_of(p, first, last)
+        # ADR-85: the exact holdout window may also be read on a timeframe derived from the protocol source, only
+        # through a granted access (the discovery test is unchanged)
+        tf_ns = int(ds.bars.tf_minutes) * 60_000_000_000 if holdout_access_id else None
+        stage = rp.stage_of(p, first, last, tf_ns)
         ident = strat.compiled.identity
         ctx = {"protocol_id": pid, "stage": stage, "entry_point": entry_point,
                "window": [rp._iso(first), rp._iso(last)], "strategy_id": ident.strategy_id,
@@ -2078,6 +2081,54 @@ class Services:
                                                  "generation_id": rep.batch_id, "gate_status": "rejected",
                                                  "logic_hash": None, "strategy_id": None, "created_at": now})
 
+    # ------------------------------------------------------------ holdout backtests of survivors (ADR-85)
+    def holdout_candidates(self) -> dict:
+        """Current survivors ranked for prop trading (discovery numbers only), whether each can take a holdout test,
+        and the protocol's looks left."""
+        from edgelab.research import holdout
+        return _jsonable(holdout.candidates(self))
+
+    def holdout_history(self) -> list[dict]:
+        from edgelab.research import holdout
+        return _jsonable(holdout.history(self))
+
+    def start_holdout_job(self, strategy_ids: list) -> dict:
+        """Holdout backtests of the chosen survivors in the background (one research job at a time)."""
+        return _jsonable(self.jobs.start_holdout(strategy_ids))
+
+    def holdout_job(self, job_id: str) -> dict:
+        return _jsonable(self.jobs.holdout_status(job_id))
+
+    def _holdout_dataset(self, protocol: Mapping, frozen: Mapping, refuse) -> tuple[str, tuple]:
+        """(dataset id, period) for a holdout evaluation, checked without spending a look (ADR-85): the dataset of
+        the strategy's own timeframe from the protocol source import, the period = the holdout session open .. the
+        last holdout source bar; the cut must classify as exactly the holdout window, and costs and the instrument
+        identity must allow a backtest. Any problem calls ``refuse`` (recorded as a refused access)."""
+        from edgelab.engine.costs import cost_model_from_config
+        from edgelab.instruments import check_identity
+        from edgelab.research import campaign
+        from edgelab.research import protocol as rp
+        mat = protocol["material"]
+        tf = str(frozen.get("timeframe") or (frozen.get("logic") or {}).get("timeframe") or "")
+        by_tf, problems = campaign.resolve_datasets(self, protocol, {tf})
+        if tf not in by_tf:
+            refuse("HOLDOUT_DATASET_UNRESOLVED", f"no {tf} dataset of the protocol source import to test on",
+                   timeframe=tf, problems=problems)
+        h = mat["windows"]["holdout"]
+        period = (pd.Timestamp(h["boundary_open"]), pd.Timestamp(h["last_bar"]))
+        did = by_tf[tf]["dataset_id"]
+        try:
+            ds = self._cell_dataset(did, period)
+            check_identity(ds.instrument)
+            cost_model_from_config(self.cfg, ds.instrument.symbol, provider=ds.manifest.provider)
+        except Exception as exc:                                   # refused: no look spent
+            refuse("HOLDOUT_DATASET_UNRESOLVED", f"the {tf} holdout data cannot be backtested: {exc}", dataset_id=did)
+        tf_ns = int(ds.bars.tf_minutes) * 60_000_000_000
+        if rp.stage_of(protocol, int(ds.bars.ts_ns[0]), int(ds.bars.ts_ns[-1]), tf_ns) != "holdout":
+            refuse("HOLDOUT_WINDOW_MISMATCH", f"the {tf} data does not cover exactly the holdout window",
+                   dataset_id=did, first_bar=rp._iso(int(ds.bars.ts_ns[0])), last_bar=rp._iso(int(ds.bars.ts_ns[-1])))
+        return did, period
+
     def evaluate_holdout(self, protocol_id: str, search_id: str, strategy_id: str) -> dict:
         """THE holdout stage (ADR-56). One look per frozen, shortlisted candidate, within the protocol's
         holdout-look budget: runs the candidate on exactly the locked holdout bars (run status
@@ -2131,11 +2182,12 @@ class Services:
         if (ident.strategy_id, ident.logic_hash) != (strategy_id, doc["logic_hash"]):             # before the look is spent
             refuse("HOLDOUT_DEFINITION_CHANGED", "the stored definition no longer compiles to the shortlisted "
                    "candidate's identity", compiled_strategy_id=ident.strategy_id)
+        # ADR-85: everything that could fail is checked BEFORE the look is spent: the dataset of the strategy's own
+        # timeframe (the protocol source import or a dataset derived from it), cut to exactly the holdout trading dates
+        src, period = self._holdout_dataset(p, frozen, refuse)
         n_trials = self.store.count_trials(protocol_id)
         self.store.add_holdout_access({**base, "status": "granted"})              # the look is spent from here on
         h = mat["windows"]["holdout"]
-        period = (pd.Timestamp(h["first_bar"]), pd.Timestamp(h["last_bar"]))
-        src = mat["source_dataset"]["dataset_id"]
         try:
             cell = self._run_cell(copy_frozen(frozen), src, True, period=period, status="OUT_OF_SAMPLE",
                                   notes=f"protocol {protocol_id} holdout evaluation {aid}",

@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Holdout backtest and Holdout results (ADR-85)
+
+| Item | Status |
+|---|---|
+| Run backtest → Holdout backtest: every survivor ranked best → worst for prop trading (8 discovery criteria, drawdown and negative months count double; click any column to sort), select up to the tests left, confirm, live progress with cancel, history of every attempt | IMPLEMENTED, TESTED (ranking known answers; browser test) |
+| Each test goes through the protocol's holdout gate: once per strategy, within the protocol's look limit, with the random-entry comparison, cost stress and pre-registered criteria; strategies are shortlisted automatically; no holdout test during a research run (and vice versa) | IMPLEMENTED, TESTED |
+| Holdout gate fix: strategies are tested on their own timeframe's data (derived from the protocol source) cut to exactly the holdout dates; every check runs before a test is used, so a problem never wastes one | IMPLEMENTED, TESTED (5m strategy on a 1m protocol; refused pre-check costs no look; discovery classification and locks unchanged) |
+| Backtest results → Holdout results: the Strategies table, filters and drawer over each strategy's holdout run, plus verdict, random comparison, cost stress and discovery net R per trade; holdout runs labelled Holdout | IMPLEMENTED, TESTED |
+| Real holdout tests on your Dukascopy data | REQUIRES REAL DATA (runs on your PC) |
+| Backtests, research runs, prop rules, trial counting, protocol criteria and look limit | UNCHANGED |
+
 ## Strategy panel shows the locked holdout period (ADR-84)
 
 | Item | Status |

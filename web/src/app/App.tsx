@@ -20,6 +20,7 @@ import { ControlsPage } from "../pages/Controls";
 import { PipelinePage } from "../pages/Pipeline";
 import { PaperPage } from "../pages/Paper";
 import { RunsPage } from "../pages/Runs";
+import { HoldoutPage } from "../pages/Holdout";
 import { RunBacktestPage } from "../pages/RunBacktest";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
@@ -31,9 +32,9 @@ interface NavItem { path: string; label: string; tid: string; icon: string; head
 const NAV: NavItem[] = [
   { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
   { path: "/strategies", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
-  { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research"] },
+  { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research", "holdout"] },
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
-    heads: ["dashboard", "explorer", "results", "compare", "controls", "pipeline"] },
+    heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop & paper", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
@@ -42,8 +43,10 @@ const NAV: NavItem[] = [
 const SUBTABS: Record<string, { path: string; label: string; head: string }[]> = {
   strategies: [{ path: "/strategies", label: "Library", head: "strategies" }, { path: "/families", label: "Families", head: "families" },
     { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" }],
-  run: [{ path: "/runs", label: "Research runs", head: "runs" }, { path: "/run", label: "Single backtest", head: "run" }],
+  run: [{ path: "/runs", label: "Research runs", head: "runs" }, { path: "/run", label: "Single backtest", head: "run" },
+    { path: "/holdout", label: "Holdout backtest", head: "holdout" }],
   results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
+    { path: "/holdout-results", label: "Holdout results", head: "holdout-results" },
     { path: "/results", label: "All runs", head: "results" }, { path: "/compare", label: "Compare", head: "compare" },
     { path: "/controls", label: "Random controls", head: "controls" }, { path: "/pipeline", label: "Candidate pipeline", head: "pipeline" }],
   paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
@@ -110,6 +113,8 @@ function Page() {
     case "": return <HomePage />;
     case "dashboard": return <DashboardPage />;
     case "explorer": return <ExplorerPage />;
+    case "holdout-results": return <ExplorerPage key="holdout" holdout />;
+    case "holdout": return <HoldoutPage />;
     case "strategies": return route.parts[1] ? <StrategyPage key={route.parts[1]} /> : <LibraryPage />;
     case "builder": return <BuilderPage />;
     case "families": return <FamiliesPage />;

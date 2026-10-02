@@ -405,3 +405,13 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
 - The builder offers the timeframes in `configs/web.yaml` plus those of imported datasets; the backend accepts any `Nm`/`Nh`.
 - AI Discovery requests are synchronous and run under the service lock: an external provider call (up to 120 s)
   delays other requests until it returns. Only one external provider kind (Anthropic Messages API) is implemented.
+
+## Holdout backtest and Holdout results (ADR-85)
+
+- **Run backtest → Holdout backtest (`#/holdout`).**
+  - Survivors only, ranked best → worst for prop trading from discovery numbers.
+  - Select up to the protocol's tests left and confirm; each strategy is tested once.
+  - Live progress with cancel, and the history of every attempt.
+- **Backtest results → Holdout results (`#/holdout-results`).**
+  - The Strategies explorer over each strategy's holdout run.
+  - Adds the verdict, random comparison, cost stress and discovery net R per trade.

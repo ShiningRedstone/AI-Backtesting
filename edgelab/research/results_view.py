@@ -84,7 +84,7 @@ def _latest_scoped(svc, scope: str, campaign_run: Any = None) -> tuple[list[dict
         by.setdefault(r["strategy_id"], []).append(r)
     rows = []
     for f in facets:
-        scoped = [r for r in by.get(f["strategy_id"], []) if r["status"] in ov.SCOPES[scope] and not r["holdout"]]
+        scoped = ov.scoped_runs(by.get(f["strategy_id"], []), scope)
         rows.append({"facets": f, "ref": scoped[-1] if scoped else None})
     return rows, by
 
@@ -445,8 +445,8 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     from edgelab.research import lab
     from edgelab.strategy import presentation as pr
     scope = str(params.get("scope") or "in_sample")
-    if scope not in ov.SCOPES:
-        raise ValueError(f"scope must be one of {sorted(ov.SCOPES)}")
+    if scope not in ov.SCOPES and scope != ov.HOLDOUT_VIEW:           # ADR-85: the holdout run as the panel's run
+        raise ValueError(f"scope must be one of {sorted(ov.SCOPES) + [ov.HOLDOUT_VIEW]}")
     doc = svc.library.load(strategy_id)
     f = ov.strategy_facets(doc)
     gp = ((doc.get("lineage") or [{}])[0] or {}).get("generation_parameters") or {}
@@ -490,6 +490,7 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     hm = rec.get("headline_metrics") or {}
     out.update(
         tested=True, run_id=ref["run_id"], synthetic=ref["synthetic"], status=ref["status"], scope_label=ref["scope"],
+        is_holdout=bool(ref.get("holdout")),                  # a holdout-evaluation run is labelled Holdout, never OOS
         survivor=ref["survivor"], cost_status=ref["cost_status"],
         kpis={"expectancy_r": ref["expectancy_r"], "trades": ref["trade_count"], "trades_per_week": ref["trades_per_week"],
               "win_rate": ref["win_rate"], "avg_rr": ref["avg_rr"], "net_r": ref["net_r"],

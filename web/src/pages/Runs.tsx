@@ -95,6 +95,9 @@ function ActiveJobBanner({ except }: { except?: string } = {}) {
     poll();
     return () => { live = false; window.clearTimeout(t); };
   }, []);
+  if (job && (job.kind as string) === "holdout" && !CAMPAIGN_JOB_FINAL.has(job.state))      // ADR-85: one research job at a time
+    return <Banner tone="info" testId="active-job">A holdout backtest is in progress; research runs can start when it is done.{" "}
+      <a href={href(`/holdout?job=${job.job_id}`)}>Show progress ›</a></Banner>;
   if (!job || job.kind !== "campaign" || CAMPAIGN_JOB_FINAL.has(job.state) || job.campaign_id === except) return null;
   return <Banner tone="info" testId="active-job">A research run is in progress — {plainText(job.live.phase)}.{" "}
     <a href={href(`/runs/${job.campaign_id}?job=${job.job_id}`)}>Show progress ›</a></Banner>;

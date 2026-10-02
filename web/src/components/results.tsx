@@ -139,8 +139,8 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
 }
 
 // ------------------------------------------------------------------------------ strategy panel
-export function StrategyPanel({ id }: { id: string }) {
-  const { data: p, error } = useApi<StrategyPanelData>(`/api/results-view/strategies/${id}`, [id]);
+export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) {
+  const { data: p, error } = useApi<StrategyPanelData>(`/api/results-view/strategies/${id}${scope ? `?scope=${scope}` : ""}`, [id, scope]);
   if (error) return <ErrorPanel error={error} />;
   if (!p) return <Loading label="Loading strategy…" />;
   const k = p.kpis;
@@ -151,7 +151,7 @@ export function StrategyPanel({ id }: { id: string }) {
         <div className="inline" style={{ flexWrap: "wrap", gap: 6 }}>
           {p.tested && <FavStar id={p.strategy_id} testId="panel-fav" />}<b style={{ fontSize: 16 }}>{p.display_name}</b>
           {p.survivor && <Badge tone="ok">Survivor</Badge>}
-          {p.tested && <Scope kind={p.status === "OUT_OF_SAMPLE" ? "oos" : p.status === "WALK_FORWARD" ? "wf" : "is"} />}
+          {p.tested && <Scope kind={panelScope(p.status, p.is_holdout)} />}
           {p.tested && <Scope kind="net" />}{p.synthetic && <Scope kind="synthetic" />}
         </div>
         <p className="small muted" style={{ margin: "6px 0 0" }}>{p.explanation}</p>
@@ -175,7 +175,7 @@ export function StrategyPanel({ id }: { id: string }) {
         </div>
         <p className="small muted">Dollar figures are R multiplied by your risk per trade ({usd(p.risk_per_trade_usd)}, set in Settings); the
           backtest itself is unchanged.</p>
-        {p.curve && <Card title={<>Equity curve <Scope kind={panelScope(p.status)} /><Scope kind="net" /></>} testId="panel-equity">
+        {p.curve && <Card title={<>Equity curve <Scope kind={panelScope(p.status, p.is_holdout)} /><Scope kind="net" /></>} testId="panel-equity">
           <StepTimeChart points={p.curve.points.map((x) => ({ t: x.exit_ts, v: x.equity_r, n: x.i }))} start={p.dataset?.start}
             end={hp?.to ?? p.dataset?.end} testId="panel-equity-chart"
             band={hp ? { from: hp.from, to: hp.to, label: hp.evaluated ? "Holdout evaluation" : "Holdout · locked, not backtested",
@@ -190,7 +190,7 @@ export function StrategyPanel({ id }: { id: string }) {
               : <>The shaded period ({dayMonthYear(hp.trading_dates[0])} to {dayMonthYear(hp.trading_dates[1])}) is the research protocol's locked holdout.
                   Research backtests never use it, so this strategy has no results there yet. It is kept unseen for the final holdout evaluation.</>}</p>}
         </Card>}
-        {!!p.years?.length && <Card title={<>Results by year <Scope kind={panelScope(p.status)} /><Scope kind="net" /></>} testId="panel-years">
+        {!!p.years?.length && <Card title={<>Results by year <Scope kind={panelScope(p.status, p.is_holdout)} /><Scope kind="net" /></>} testId="panel-years">
           <YearTable years={p.years} dataset={p.dataset} holdout={hp ?? undefined} />
           <p className="small muted" style={{ marginBottom: 0 }}>Click a year to see its months. Each trade counts in the year and month of its
             exit (New York time), so a year's total matches the equity curve. Dollar figures are R × your risk per trade ({usd(p.risk_per_trade_usd)}).
@@ -220,7 +220,7 @@ export function StrategyPanel({ id }: { id: string }) {
   );
 }
 
-const panelScope = (status?: string) => (status === "OUT_OF_SAMPLE" ? "oos" : status === "WALK_FORWARD" ? "wf" : "is");
+const panelScope = (status?: string, holdout?: boolean) => (holdout ? "holdout" : status === "OUT_OF_SAMPLE" ? "oos" : status === "WALK_FORWARD" ? "wf" : "is");
 
 /** Per-year results with an expandable row per year showing its twelve months (from the backend read model). Holdout
     years follow, labelled Holdout: "locked, not backtested", or this strategy's holdout evaluation. */

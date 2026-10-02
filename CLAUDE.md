@@ -101,6 +101,10 @@ ADR-83: paper feed checked against the research data (`paper/feed.py::source_che
 `<data>/paper/feed/source_check.json`; mismatch pauses paper accounts until a match or "Continue anyway"); browser test `tests/test_paper_e2e.py`.
 ADR-84: the strategy panel shows the protocol's locked holdout after a discovery run (`results_view.holdout_period`: shaded curve
 band and "locked, not backtested" year rows; a holdout evaluation's own years and second curve line, labelled Holdout); read only.
+ADR-85: Run backtest → Holdout backtest (`/holdout`, `research/holdout.py`: survivors ranked on 8 discovery criteria, drawdown and
+negative months ×2; `HoldoutJob` in the one-at-a-time JobManager; auto-shortlist; `evaluate_holdout` per strategy) and Backtest
+results → Holdout results (`/holdout-results` = explorer `scope=holdout`); holdout gate made timeframe-aware (`stage_of(tf_ns)`,
+`Services._holdout_dataset` checks everything BEFORE a look is spent).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -128,9 +132,9 @@ remains. Do not rely on this file alone.
 - **Tabs (UI, plain English):**
   - Home
   - Strategies: Library, Families, Builder, Variations
-  - Run backtest: **Research runs** (default), Single backtest. The Experiments tab was removed; `/research` →
+  - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ADR-85). The Experiments tab was removed; `/research` →
     `/runs`, and job/result deep links still work.
-  - Backtest results: Overview, Strategies explorer, All runs, Compare, Random controls, Candidate pipeline
+  - Backtest results: Overview, Strategies explorer, Holdout results, All runs, Compare, Random controls, Candidate pipeline
   - Prop & paper: Paper accounts, Start paper trading (batch), Backtest prop check (the old simulator)
   - Settings, including CPU cores for research runs, the pass-criteria prop account, prop account fees, display
     switches and delete-all.
@@ -274,11 +278,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..83.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..85.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..83, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..85, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -342,4 +346,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-84). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-85). Update `README.md` status for phases.

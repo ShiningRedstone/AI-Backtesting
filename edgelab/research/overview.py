@@ -39,7 +39,16 @@ DESCRIPTIVE = ("Descriptive statistics of stored backtests under the stated assu
                "and are not independent.")
 SORT_KEYS = ("strategy_id", "name", "family_id", "timeframe", "trade_count", "trades_per_week", "win_rate",
              "expectancy_r", "gross_r_per_trade", "net_r", "profit_factor", "max_drawdown_r", "cost_r_per_trade",
-             "created_at", "n_runs", "avg_rr", "short_name")
+             "created_at", "n_runs", "avg_rr", "short_name", "discovery_expectancy_r", "holdout_random_control_p")
+HOLDOUT_VIEW = "holdout"           # ADR-85: Holdout results = each strategy's holdout-evaluation run (never a SCOPES status)
+
+
+def scoped_runs(runs: list[dict], scope: str) -> list[dict]:
+    """Runs of one strategy in a results scope: a status scope never includes holdout runs; the holdout view is only
+    holdout runs (ADR-85)."""
+    if scope == HOLDOUT_VIEW:
+        return [r for r in runs if r["holdout"]]
+    return [r for r in runs if r["status"] in SCOPES[scope] and not r["holdout"]]
 
 
 def _f(x) -> float | None:
@@ -349,7 +358,8 @@ def protocol_facts(svc) -> dict:
                     "protocol_id": p["protocol_id"], "access_id": h["access_id"], "status": h["status"],
                     "reason_code": h.get("reason_code"), "run_id": h.get("run_id"), "search_id": h.get("search_id"),
                     "outcome": res.get("outcome"), "accepted": False, "created_at": h.get("created_at"),
-                    "random_control": (res.get("criteria") or {}).get("random_control")})
+                    "random_control": (res.get("criteria") or {}).get("random_control"),
+                    "cost_stress": (res.get("criteria") or {}).get("cost_stress")})
         except Exception:                                    # noqa: BLE001
             pass
     try:
@@ -482,7 +492,7 @@ def _explorer_rows(svc, scope: str) -> tuple[list[dict], dict]:
     rows = []
     for f in facets:
         sruns = by_strat.get(f["strategy_id"], [])
-        scoped = [r for r in sruns if r["status"] in SCOPES[scope] and not r["holdout"]]
+        scoped = scoped_runs(sruns, scope)
         ref = scoped[-1] if scoped else None
         pipe = pipeline_state(f, sruns, pf, trial_ids)
         state = _summary_state(pipe)
@@ -504,6 +514,13 @@ def _explorer_rows(svc, scope: str) -> tuple[list[dict], dict]:
                                                         "synthetic", "avg_rr", "max_loss_streak", "avg_hold_minutes",
                                                         "prop_pass_eval", "prop_pass_payout")},
                      "survivor": bool(ref and ref.get("survivor")), "favorite": f["strategy_id"] in favorites})
+        if scope == HOLDOUT_VIEW:                     # ADR-85: the verdict and the discovery figures beside it
+            disc = scoped_runs(sruns, "in_sample")
+            d = disc[-1] if disc else {}
+            cs = (ho[-1].get("cost_stress") or {}) if ho else {}
+            rows[-1].update(holdout_cost_stress_met=cs.get("met"), holdout_cost_stress=cs.get("net_r"),
+                            discovery_expectancy_r=d.get("expectancy_r"), discovery_net_r=d.get("net_r"),
+                            discovery_trade_count=d.get("trade_count"), discovery_run_id=d.get("run_id"))
 
     _FACET_CACHE[("explorer", scope)] = (key, rows, pf)
     return rows, pf
@@ -511,8 +528,8 @@ def _explorer_rows(svc, scope: str) -> tuple[list[dict], dict]:
 
 def explorer(svc, params: Mapping[str, Any]) -> dict:
     scope = str(params.get("scope") or "in_sample")
-    if scope not in SCOPES:
-        raise ValueError(f"scope must be one of {sorted(SCOPES)}")
+    if scope not in SCOPES and scope != HOLDOUT_VIEW:
+        raise ValueError(f"scope must be one of {sorted(SCOPES) + [HOLDOUT_VIEW]}")
     sort = str(params.get("sort") or "strategy_id")
     if sort not in SORT_KEYS:
         raise ValueError(f"sort must be one of {list(SORT_KEYS)}")
@@ -567,7 +584,7 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
     return {"rows": ordered[(page - 1) * size: page * size], "total": total, "page": page, "page_size": size,
             "pages": max(1, math.ceil(total / size)), "scope": scope, "scope_label": {
                 "in_sample": "In-sample (exploratory)", "oos": "Out-of-sample", "walk_forward": "Walk-forward",
-                "any": "Latest run of any status"}[scope],
+                "any": "Latest run of any status", HOLDOUT_VIEW: "Holdout (the locked protocol period)"}[scope],
             "sort": sort, "order": "desc" if desc else "asc", "facets": facet_values,
             "states": STATE_LABEL, "protocols": pf["protocols"], "library_total": len(rows),
             "criteria_profile": criteria_profile(svc), "campaign_run": params.get("campaign_run") or None,

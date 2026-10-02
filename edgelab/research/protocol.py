@@ -186,14 +186,23 @@ def resolve_windows(ds, discovery: Sequence, holdout: Sequence) -> dict:
     return out
 
 
-def stage_of(protocol: Mapping, first_ns: int, last_ns: int) -> str:
-    """discovery | holdout | overlap for an evaluation whose bars run from first_ns to last_ns."""
+def stage_of(protocol: Mapping, first_ns: int, last_ns: int, tf_ns: int | None = None) -> str:
+    """discovery | holdout | overlap for an evaluation whose bars run from first_ns to last_ns.
+
+    Holdout = exactly the holdout window: the first and last resolved source bars. ADR-85: a dataset DERIVED from the
+    protocol source on a coarser timeframe (``tf_ns`` = its bar length) covers the same window when its first bar opens
+    at or after the holdout session open and contains the first source bar, and its last bar contains the last source
+    bar. On the source timeframe (1-minute grid) this is the same exact-equality test as before."""
     w = protocol["material"]["windows"]
     d, h = w["discovery"], w["holdout"]
     if first_ns >= d["boundary_open_ns"] and last_ns < h["boundary_open_ns"]:
         return "discovery"
     if first_ns == h["first_bar_ns"] and last_ns == h["last_bar_ns"]:
         return "holdout"
+    if tf_ns and tf_ns > 0:
+        f, l = h["first_bar_ns"], h["last_bar_ns"]
+        if first_ns >= h["boundary_open_ns"] and first_ns <= f < first_ns + tf_ns and last_ns <= l < last_ns + tf_ns:
+            return "holdout"
     return "overlap"
 
 

@@ -13,7 +13,7 @@ import { Badge, Banner, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, Scope
 
 type Tab = "summary" | "overview" | "performance" | "equity" | "trades" | "robustness" | "pipeline";
 
-export function StrategyDetail({ id, tab: initial = "summary" }: { id: string; tab?: Tab }) {
+export function StrategyDetail({ id, tab: initial = "summary", scope }: { id: string; tab?: Tab; scope?: "holdout" }) {
   const [tab, setTab] = useState<Tab>(initial);
   const s = useApi<StoredStrategy>(`/api/strategies/${id}`, [id]);
   const ex = useApi<ExplainResult>(`/api/strategies/${id}/explain`, [id]);
@@ -21,9 +21,13 @@ export function StrategyDetail({ id, tab: initial = "summary" }: { id: string; t
   const pl = useApi<StrategyPipeline>(`/api/strategies/${id}/pipeline`, [id]);
   const runs = sr.data?.runs ?? [];
   const defaultRun = useMemo(() => {
+    if (scope === "holdout") {                       // ADR-85 Holdout results: the strategy's holdout-evaluation run
+      const ho = (pl.data?.holdout ?? []).filter((h) => h.run_id);
+      return ho[ho.length - 1]?.run_id ?? null;
+    }
     const is = runs.filter((x) => x.status === "IN_SAMPLE");
     return (is[is.length - 1] ?? runs[runs.length - 1])?.run_id ?? null;
-  }, [sr.data]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sr.data, pl.data]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [runId, setRunId] = useState<string | null>(null);
   useEffect(() => { setRunId(defaultRun); }, [defaultRun]);
   const an = useApi<RunAnalytics>(runId && tab !== "summary" && tab !== "overview" && tab !== "pipeline" ? `/api/results/${runId}/analytics` : null, [runId]);
@@ -53,7 +57,7 @@ export function StrategyDetail({ id, tab: initial = "summary" }: { id: string; t
         { id: "equity", label: "Equity" }, { id: "trades", label: "Trade behaviour" }, { id: "robustness", label: "Robustness" },
         { id: "pipeline", label: "Pipeline" }]} />
       {tab !== "summary" && tab !== "overview" && tab !== "pipeline" && runPicker}
-      {tab === "summary" && <StrategyPanel id={id} />}
+      {tab === "summary" && <StrategyPanel id={id} scope={scope} />}
       {tab === "overview" && <>
         <Card title="Identity" testId="detail-identity">
           <KeyValues rows={[["Name", strategyLabel(d.name)], ["Family", familyLabel(d.family_id, def.family?.name)],
