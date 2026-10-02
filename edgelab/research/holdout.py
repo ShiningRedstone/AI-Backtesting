@@ -83,14 +83,17 @@ def protocol_summary(p: Mapping | None, used: int) -> dict | None:
     mat = p["material"]
     budget = int(mat["holdout_budget"]["max_unique_candidate_evaluations"])
     h = mat["windows"]["holdout"]
+    from edgelab.research.protocol import is_flip
     return {"protocol_id": p["protocol_id"], "name": mat.get("name"), "looks_used": used, "looks_budget": budget,
+            "role": "flip" if is_flip(p) else "research",                                      # ADR-88
             "looks_left": max(0, budget - used), "holdout_trading_dates": h["trading_dates"],
             "holdout_first_bar": h["first_bar"], "holdout_last_bar": h["last_bar"]}
 
 
-def _protocol_of(svc, ref: Mapping) -> dict | None:
+def _protocol_of(svc, ref: Mapping, logic_hash: str | None = None) -> dict | None:
+    """The protocol that governs this strategy on the run's data (ADR-88: a registered flip -> its flip protocol)."""
     try:
-        return svc._governing_protocol(ref.get("instrument"), ref.get("provider"))
+        return svc._governing_protocol(ref.get("instrument"), ref.get("provider"), logic_hash=logic_hash)
     except Exception:                                        # noqa: BLE001 - a store without protocol tables
         return None
 
@@ -108,8 +111,9 @@ def candidates(svc) -> dict:
         ref, f = x["ref"], x["facets"]
         if not ref or not ref.get("trade_count") or not ref.get("survivor"):
             continue
-        p = _protocol_of(svc, ref)
-        pid = None if p is None else p["protocol_id"]
+        p = _protocol_of(svc, ref, f.get("logic_hash") or _logic_hash(svc, f["strategy_id"]))
+        pid = None if p is None or p["status"] != "ACTIVE" else p["protocol_id"]
+        p = p if pid else None
         if pid is not None and pid not in ledgers:
             protos[pid] = p
             ledgers[pid] = _ledger(svc, pid)
@@ -121,7 +125,8 @@ def candidates(svc) -> dict:
                "profit_factor": ref.get("profit_factor"), "max_drawdown_r": ref.get("max_drawdown_r"),
                "expectancy_r": ref.get("expectancy_r"), "net_r": ref.get("net_r"),
                "max_loss_streak": ref.get("max_loss_streak"), "win_rate": ref.get("win_rate"),
-               "negative_months": negative_months(svc, ref["run_id"]), "protocol_id": pid}
+               "negative_months": negative_months(svc, ref["run_id"]), "protocol_id": pid,
+               "flipped": bool(f.get("mirror_of")), "mirror_of": f.get("mirror_of")}
         row.update(_eligibility(svc, row, f, ledgers.get(pid)))
         out.append(row)
     ranked = rank_rows(out)
@@ -211,7 +216,8 @@ def plan(svc, strategy_ids: Any) -> dict:
         raise ValueError(f"{bad[0]['display_name']}: {bad[0]['reason']}")
     pids = {by[s]["protocol_id"] for s in strategy_ids}
     if len(pids) != 1:
-        raise ValueError("the selection spans several research protocols; test one protocol's survivors at a time")
+        raise ValueError("the selection mixes flipped and ordinary survivors (or several research protocols); flipped "
+                         "strategies use their flip protocol's own holdout tests, so test one group at a time")
     proto = next(p for p in c["protocols"] if p["protocol_id"] in pids)
     if len(strategy_ids) > proto["looks_left"]:
         raise ValueError(f"{len(strategy_ids)} selected but only {proto['looks_left']} holdout test"

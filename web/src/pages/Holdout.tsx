@@ -36,7 +36,9 @@ export function HoldoutPage() {
     }).catch(() => undefined);
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
   const rows = cands.data?.rows ?? [];
-  const p = cands.data?.protocol ?? null;
+  const protos = cands.data?.protocols ?? [];
+  const p = cands.data?.protocol?.role === "flip" ? null : cands.data?.protocol ?? protos.find((x) => x.role !== "flip") ?? null;
+  const fp = protos.find((x) => x.role === "flip") ?? null;              // ADR-88: flipped survivors use their own tests
   const fams = useMemo(() => [...new Map(rows.map((r) => [r.family_id ?? "", r.family_name ?? facetLabel("family_id", r.family_id)])).entries()], [rows]);
   const tfs = useMemo(() => [...new Set(rows.map((r) => r.timeframe ?? ""))].filter(Boolean), [rows]);
   const shown = useMemo(() => {
@@ -50,7 +52,10 @@ export function HoldoutPage() {
       return sort.desc ? -c : c;
     });
   }, [rows, fam, tf, sort]);
-  const left = p?.looks_left ?? 0;
+  const firstSel = rows.find((r) => sel.has(r.strategy_id));
+  const selProto = firstSel ? protos.find((x) => x.protocol_id === firstSel.protocol_id) ?? null : p;
+  const left = selProto?.looks_left ?? 0;
+  const mixed = new Set(rows.filter((r) => sel.has(r.strategy_id)).map((r) => r.protocol_id)).size > 1;
   const running = !!jobId;
   const toggle = (sid: string, on: boolean) => setSel((s) => { const nx = new Set(s); if (on) nx.add(sid); else nx.delete(sid); return nx; });
   const start = () => {
@@ -73,23 +78,28 @@ export function HoldoutPage() {
       {cands.error ? <ErrorPanel error={cands.error} /> : !cands.data ? <Loading label="Loading survivors…" kind="table" /> : <>
         <div className="kpis">
           <Kpi label="Holdout tests left" value={p ? `${p.looks_left} of ${p.looks_budget}` : "—"} accent testId="holdout-left"
-            meter={p ? p.looks_used / Math.max(1, p.looks_budget) : null} sub={p ? `${p.looks_used} used` : "no active research protocol"} />
+            meter={p ? p.looks_used / Math.max(1, p.looks_budget) : null} sub={p ? `${p.looks_used} used` : fp ? "no ordinary survivors yet" : "no active research protocol"} />
           <Kpi label="Holdout dates" value={p ? p.holdout_trading_dates[0] : "—"} sub={p ? `to ${p.holdout_trading_dates[1]} · locked for research runs` : undefined} />
+          {fp && <Kpi label="Flip holdout tests left" value={`${fp.looks_left} of ${fp.looks_budget}`} testId="holdout-flip-left"
+            meter={fp.looks_used / Math.max(1, fp.looks_budget)} sub="for flipped survivors (Flip scan)" />}
           <Kpi label="Survivors" value={cands.data.n_survivors} sub={`${cands.data.n_eligible} can be tested`} />
           <Kpi label="Selected" value={sel.size} />
         </div>
-        {cands.data.protocols.length > 1 && <Banner tone="warn">Survivors come from more than one research protocol; select survivors of one
+        {fp && protos.length === 2 ? <Banner tone="info">Flipped survivors (marked <b>Flipped</b>) come from the Flip scan and use its own
+          holdout tests; select flipped or ordinary survivors, not both at once.</Banner>
+          : protos.length > 1 && <Banner tone="warn">Survivors come from more than one research protocol; select survivors of one
           protocol at a time.</Banner>}
         {jobId && <LiveHoldout jobId={jobId} onFinished={() => { cands.reload(); hist.reload(); }} onClose={() => setJobId(null)} />}
         <Card title="Survivors, best to worst for prop trading" testId="holdout-candidates"
-          actions={<Button kind="primary" onClick={() => setAsk(true)} disabled={!sel.size || running || sel.size > left} testId="holdout-start">
+          actions={<Button kind="primary" onClick={() => setAsk(true)} disabled={!sel.size || running || sel.size > left || mixed} testId="holdout-start">
             Start holdout backtest{sel.size ? ` (${sel.size})` : ""}</Button>}>
           <div className="inline">
             <select className="input" value={fam} aria-label="family" onChange={(e: { target: HTMLSelectElement }) => setFam(e.target.value)}>
               <option value="">Family: all</option>{fams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
             <select className="input" value={tf} aria-label="timeframe" onChange={(e: { target: HTMLSelectElement }) => setTf(e.target.value)}>
               <option value="">Timeframe: all</option>{tfs.map((x) => <option key={x} value={x}>{facetLabel("timeframe", x)}</option>)}</select>
-            <span className="small muted">{sel.size} selected{sel.size > left ? ` · only ${left} test${left === 1 ? "" : "s"} left` : ""}</span>
+            <span className="small muted">{sel.size} selected{mixed ? " · flipped and ordinary survivors cannot be tested together"
+              : sel.size > left ? ` · only ${left} test${left === 1 ? "" : "s"} left` : ""}</span>
           </div>
           {!rows.length ? <Empty>No survivors yet under {crit}. Survivors come from research runs (Run backtest → Research runs).</Empty> : (
             <TableWrap className="fit"><table className="dense fit-table">
@@ -105,6 +115,7 @@ export function HoldoutPage() {
                     data-testid={`hpick-${r.strategy_id}`} onChange={(e: { target: HTMLInputElement }) => toggle(r.strategy_id, e.target.checked)} /></td>
                   <td className="num">{r.position}</td>
                   <td className="name-cell"><div className="cell-title">{r.display_name ?? "Unnamed strategy"}</div>
+                    {r.flipped && <Badge tone="info" title="a full mirror from the Flip scan; tested under its flip protocol">Flipped</Badge>}
                     {r.synthetic && <Badge tone="demo">synthetic</Badge>}</td>
                   <td className="small wrap">{r.family_name ?? facetLabel("family_id", r.family_id)}</td><td>{facetLabel("timeframe", r.timeframe)}</td>
                   <td className="r num">{n(r.trades_per_week, 1)}</td><td className="r num">{r.negative_months ?? "—"}</td>

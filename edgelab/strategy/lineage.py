@@ -33,7 +33,8 @@ from typing import Any, Mapping
 
 GENERATION_METHODS = ("user", "manual_edit", "duplicate", "mode_a_variation", "mode_b_proposal",
                       "mode_b_modification",          # AI Discovery: a new version of an existing strategy
-                      "factory_variant")              # strategy factory manifest (ADR-58)
+                      "factory_variant",              # strategy factory manifest (ADR-58)
+                      "mirror")                       # flip scan: full mirror of a stored strategy (ADR-88)
 INDEX_VERSION = 1
 BATCH_KINDS = ("variation", "proposal")
 

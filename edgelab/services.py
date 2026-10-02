@@ -1773,9 +1773,11 @@ class Services:
     def _scope_key(instrument: str, provider: str) -> str:
         return f"{instrument}@{provider}"
 
-    def _governing_protocol(self, instrument: str, provider: str) -> dict | None:
+    def _governing_protocol(self, instrument: str, provider: str, logic_hash: str | None = None) -> dict | None:
         """The ACTIVE protocol of an instrument/provider (verified against its identity), or None.
-        Protocol storage is SQLite-only like search storage; other backends have no protocols."""
+        Protocol storage is SQLite-only like search storage; other backends have no protocols.
+        ADR-88: with ``logic_hash``, a strategy registered in the flip companion of that protocol is governed by the
+        companion (whatever its status; the gate refuses a retired one), never by the parent."""
         if getattr(self.store, "backend", None) != "sqlite":
             return None
         from edgelab.research.protocol import verify_record
@@ -1783,7 +1785,27 @@ class Services:
         if not act:
             return None
         verify_record(act[0])
+        if logic_hash is not None:
+            flip = self._flip_protocol_of(act[0], logic_hash)
+            if flip is not None:
+                return flip
         return act[0]
+
+    def _flip_protocols(self, parent: Mapping) -> list[dict]:
+        """Flip companion protocols of a parent (ADR-88), any status, oldest first."""
+        from edgelab.research.protocol import FLIP_SCOPE_SUFFIX
+        sc = parent["material"]["scope"]
+        key = self._scope_key(sc["instrument"], sc["provider"]) + FLIP_SCOPE_SUFFIX
+        return [p for p in self.store.list_protocols(key)
+                if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
+
+    def _flip_protocol_of(self, parent: Mapping, logic_hash: str) -> dict | None:
+        from edgelab.research.protocol import verify_record
+        for p in self._flip_protocols(parent):
+            if any(r["logic_hash"] == logic_hash for r in p["material"]["mirror_set"]):
+                verify_record(p)
+                return p
+        return None
 
     def create_protocol(self, dataset_id: str, discovery: tuple, holdout: tuple, *, name: str = "",
                         pre_protocol_exposure: list | tuple = (), exposure_statement: str = "",
@@ -1869,6 +1891,8 @@ class Services:
             self.store.retire_protocol(supersedes)
         if replaces is not None:
             self.store.retire_protocol(replaces)
+            for c in self._flip_protocols(old):              # ADR-88: its flip protocol belongs to the replaced study
+                self.store.retire_protocol(c["protocol_id"])
         created = self.store.save_protocol(rec, key)
         return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
 
@@ -1881,6 +1905,8 @@ class Services:
     def list_protocols(self) -> list[dict]:
         return _jsonable([{k: r[k] for k in ("protocol_id", "status", "created_at")} | {
             "scope": r["material"]["scope"], "name": r["material"]["name"],
+            "role": r["material"].get("role") or "research",                                   # ADR-88
+            "parent_protocol_id": (r["material"].get("parent") or {}).get("protocol_id"),
             "protocol_version": r["material"].get("protocol_version"),
             "source_dataset_id": r["material"]["source_dataset"]["dataset_id"],
             "discovery_trading_dates": r["material"]["windows"]["discovery"]["trading_dates"],
@@ -1888,9 +1914,14 @@ class Services:
             "discovery_period": self.protocol_discovery_period(r)} for r in self.store.list_protocols()])
 
     def retire_protocol(self, protocol_id: str) -> dict:
-        """ACTIVE -> RETIRED (the only lifecycle change; material and ledgers are kept unchanged)."""
-        self.store.get_protocol(protocol_id)
+        """ACTIVE -> RETIRED (the only lifecycle change; material and ledgers are kept unchanged). Retiring a protocol
+        also retires its flip companion (ADR-88), which only exists inside the parent's study."""
+        p = self.store.get_protocol(protocol_id)
         self.store.retire_protocol(protocol_id)
+        from edgelab.research.protocol import is_flip
+        if not is_flip(p):
+            for c in self._flip_protocols(p):
+                self.store.retire_protocol(c["protocol_id"])
         return self.get_protocol(protocol_id)
 
     def protocol_status(self, protocol_id: str) -> dict:
@@ -1907,9 +1938,11 @@ class Services:
         looks = [h for h in ho if h["status"] != "refused"]
         n, budget = len(counted), mat["trial_budget"]["max_unique_trials"]
         hb = mat["holdout_budget"]["max_unique_candidate_evaluations"]
+        from edgelab.research import protocol as rp_family_rules
         from edgelab.research.protocol import family_size
         mt = bonferroni(mat["multiple_testing"], family_size(mat, n))
-        declared = mat["multiple_testing"].get("family_size_rule") == "declared_max_unique_trials"
+        declared = mat["multiple_testing"].get("family_size_rule") in ("declared_max_unique_trials",
+                                                                        rp_family_rules.FLIP_FAMILY_RULE)
         return _jsonable({
             "protocol_id": protocol_id, "status": p["status"], "scope": mat["scope"],
             "source_dataset": mat["source_dataset"],
@@ -1941,6 +1974,7 @@ class Services:
                    "counted trials)" if declared else
                    "; alpha shrinks with every counted unique trial (family_size) and is recomputed at evaluation time"))},
             "supersedes": mat.get("supersedes"),
+            "role": mat.get("role") or "research", "parent": mat.get("parent"),                    # ADR-88
             "pre_protocol_exposure": mat["pre_protocol_exposure"]})
 
     def _protocol_gate(self, ds, strat, entry_point: str, holdout_access_id: str | None) -> dict | None:
@@ -1948,13 +1982,16 @@ class Services:
         Returns the attribution context (None when no protocol governs the dataset)."""
         from edgelab.research import protocol as rp
         m = ds.manifest
-        p = self._governing_protocol(m.instrument, m.provider)
+        p = self._governing_protocol(m.instrument, m.provider, logic_hash=strat.compiled.identity.logic_hash)
         if p is None:
             if holdout_access_id:
                 raise rp.ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "no ACTIVE protocol governs this dataset",
                                          dataset_id=m.dataset_id)
             return None
         pid, mat = p["protocol_id"], p["material"]
+        if p["status"] != "ACTIVE":                      # ADR-88: a registered flip of a retired flip protocol
+            raise rp.ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "this flipped strategy is governed by its flip protocol, "
+                                     "which is retired", protocol_id=pid, strategy_id=strat.compiled.identity.strategy_id)
         if self._config_hash() != mat["config_hash"]:
             raise rp.ProtocolRefusal("PROTOCOL_CONFIG_CHANGED", "the research config (costs, fills, sessions, backtest "
                                      "rules) differs from the protocol's; create a new protocol",
@@ -2073,18 +2110,36 @@ class Services:
         for s, e in windows:                               # all windows before any window runs (no side effects)
             self._protocol_interval_check(manifest, s, e, entry_point)
 
-    def _protocol_plan_check(self, manifests: list, period: Mapping | None) -> str | None:
-        """plan_search hook: every governed dataset must be searched inside the discovery window."""
+    def _protocol_plan_check(self, manifests: list, period: Mapping | None,
+                             logic_hashes: list[str] | None = None) -> str | None:
+        """plan_search hook: every governed dataset must be searched inside the discovery window. ADR-88: a search of
+        registered flipped strategies is governed by their flip protocol (same windows); flips and other strategies
+        never share one search."""
         pids = set()
         for m in manifests:
             pid = self._protocol_interval_check(m, None if period is None else period["start"],
                                                 None if period is None else period["end"], "search_cell")
             if pid:
                 pids.add(pid)
+        from edgelab.research.protocol import ProtocolRefusal
         if len(pids) > 1:
-            from edgelab.research.protocol import ProtocolRefusal
             raise ProtocolRefusal("PROTOCOL_MISMATCH", "one search cannot span several protocols",
                                   protocol_ids=sorted(pids))
+        if pids and logic_hashes:
+            parent = self.store.get_protocol(next(iter(pids)))
+            flips = self._flip_protocols(parent)
+            if flips:
+                routed = {next((f["protocol_id"] for f in flips
+                                if any(r["logic_hash"] == lh for r in f["material"]["mirror_set"])), parent["protocol_id"])
+                          for lh in logic_hashes}
+                if len(routed) > 1:
+                    raise ProtocolRefusal("PROTOCOL_MISMATCH", "flipped strategies run under their flip protocol; search "
+                                          "them separately from other strategies", protocol_ids=sorted(routed))
+                pid = next(iter(routed))
+                if pid != parent["protocol_id"] and self.store.get_protocol(pid)["status"] != "ACTIVE":
+                    raise ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "these flipped strategies are governed by their flip "
+                                          "protocol, which is retired", protocol_id=pid)
+                return pid
         return next(iter(pids), None)
 
     def _protocol_budget_check(self, protocol_id: str, cells_to_run: list) -> None:
@@ -2105,7 +2160,10 @@ class Services:
             return
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
+        from edgelab.research.protocol import is_flip
         for p in self.store.list_protocols(status="ACTIVE"):
+            if is_flip(p):                               # ADR-88: a flip protocol only holds its registered flips
+                continue
             for i, a in enumerate(rep.accepted):
                 sid = a.get("strategy_id") if isinstance(a, Mapping) else a
                 self.store.add_proposal_attempt({"protocol_id": p["protocol_id"],
@@ -2135,6 +2193,39 @@ class Services:
 
     def holdout_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.holdout_status(job_id))
+
+    # ------------------------------------------------------------ flip scan (ADR-88)
+    def flip_scan(self, protocol_id: str | None = None, cap: int | None = None) -> dict:
+        """The Flip scan page (read-only): the active protocol's flip protocol and its results, or a preview of the
+        flips a scan would create (worst clearly-negative-before-costs discovery results that can be mirrored exactly)."""
+        from edgelab.research import flips
+        self.store._require_search_storage()
+        try:
+            return _jsonable(flips.preview(self, protocol_id, flips.DEFAULT_CAP if cap is None else cap))
+        except flips.FlipError as exc:
+            if exc.code != "NO_PROTOCOL":
+                raise
+            return {"state": "no_protocol", "message": exc.message}
+
+    def create_flip_scan(self, protocol_id: str | None = None, cap: int | None = None,
+                         holdout_looks: int | None = None) -> dict:
+        """Create the ONE flip protocol of the active research protocol and save its flipped strategies (no backtest)."""
+        from edgelab.research import flips
+        self.store._require_search_storage()
+        return _jsonable(flips.create(self, protocol_id, flips.DEFAULT_CAP if cap is None else cap, holdout_looks))
+
+    def start_flip_job(self, protocol_id: str | None = None) -> dict:
+        """Backtest (or resume) the registered flips in the background: one research job at a time, the Settings CPU
+        cores, the normal protocol-gated search path (one trial per flip, counted in the flip protocol)."""
+        from edgelab.research import flips
+        self.store._require_search_storage()
+        flip = flips.flip_protocol(self, flips.parent_protocol(self, protocol_id))
+        if flip is None:
+            raise flips.FlipError("NO_FLIP_SCAN", "create the flip scan first")
+        return _jsonable(self.jobs.start_flip(flip["protocol_id"], self.research_processes()["processes"]))
+
+    def flip_job(self, job_id: str) -> dict:
+        return _jsonable(self.jobs.flip_status(job_id))
 
     # ------------------------------------------------------------ strategy pool 2 (ADR-87)
     def pool2_status(self) -> dict:

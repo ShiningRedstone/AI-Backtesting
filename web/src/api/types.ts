@@ -573,7 +573,7 @@ export interface PaperAccountDetail {
 
 /* ---------------------------------------------------------------- holdout backtests (ADR-85) */
 export interface HoldoutProtocol {
-  protocol_id: string; name: string | null; looks_used: number; looks_budget: number; looks_left: number;
+  protocol_id: string; name: string | null; looks_used: number; looks_budget: number; looks_left: number; role?: "research" | "flip";
   holdout_trading_dates: [string, string]; holdout_first_bar: string; holdout_last_bar: string;
 }
 export interface HoldoutCandidate {
@@ -584,6 +584,7 @@ export interface HoldoutCandidate {
   negative_months: number | null; protocol_id: string | null; eligible: boolean; reason: string | null; search_id: string | null;
   tested: { access_id: string; status: string; run_id: string | null; outcome: string | null; created_at: string } | null;
   ranks: Record<string, number>; score: number; position: number;
+  flipped?: boolean; mirror_of?: string | null;
 }
 export interface HoldoutCandidates {
   criteria_profile: string | null; ranking_rule: string; protocols: HoldoutProtocol[]; protocol: HoldoutProtocol | null;
@@ -601,4 +602,45 @@ export interface HoldoutJob {
   n_items: number; live: { current: string | null; done: number };
   items: { strategy_id: string; display_name: string | null; search_id: string; state: string; run_id?: string | null;
     outcome?: string | null; error?: string; code?: string | null }[];
+}
+
+/** ADR-88 flip scan (Run backtest → Flip scan). */
+export interface FlipSelectionRow {
+  strategy_id: string; run_id: string; display_name: string | null; family_id: string | null; family_name: string | null;
+  timeframe?: string | null; trades: number; gross_r_per_trade: number | null; gross_upper_bound: number | null;
+  net_r_per_trade: number | null; synthetic: boolean | null; clearly_negative: boolean;
+  mirror: { strategy_id: string } | null; skip: string | null; skip_label: string | null; duplicate_of?: string | null;
+}
+export interface FlipSelection {
+  parent_protocol_id: string; cap: number; rule: string; n_discovery_results: number; n_with_enough_trades: number;
+  n_clearly_negative: number; n_selected: number; n_not_examined: number;
+  skipped: Record<string, { count: number; label: string }>; rows: FlipSelectionRow[];
+}
+export interface FlipSide {
+  strategy_id: string; display_name: string | null; family_id: string | null; family_name: string | null; timeframe: string | null;
+  run_id: string | null; trades: number | null; net_r_per_trade: number | null; gross_r_per_trade: number | null; net_r: number | null;
+  profit_factor: number | null; max_drawdown_r: number | null; prop_pass_eval: boolean | null; prop_pass_payout: boolean | null;
+  survivor: boolean; synthetic: boolean | null;
+}
+export interface FlipRow {
+  flip: FlipSide & { status: string; error: string | null; holdout: { status: string; outcome: string | null; run_id: string | null } | null };
+  original: FlipSide;
+}
+export interface FlipResults {
+  protocol_id: string; status: string; name: string | null; created_at: string | null; family_size: number; per_test_alpha: number;
+  selection: Record<string, unknown> & { rule: string; n_selected: number; n_clearly_negative: number };
+  trials: { used: number; budget: number }; holdout: { looks_used: number; looks_budget: number; looks_left: number };
+  counts: { flips: number; completed: number; failed: number; remaining: number; net_positive: number; pass_eval: number; payout: number; survivors: number };
+  search_ids: string[]; criteria_profile: string | null; rows: FlipRow[];
+}
+export interface FlipView {
+  state: "preview" | "created" | "no_protocol";
+  parent: { protocol_id: string; name: string | null; trial_budget: number; discovery_trading_dates: [string, string]; holdout_trading_dates: [string, string] };
+  min_trades: number; default_cap: number; max_cap: number; default_holdout_looks: number;
+  selection?: FlipSelection; family_size?: number; flip?: FlipResults;
+}
+export interface FlipJob {
+  job_id: string; kind: "flip"; protocol_id: string; search_id: string; state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  created_at: string; started_at: string | null; finished_at: string | null; error: string | null; cancel_requested: boolean;
+  processes: number; live: { current: string | null; done: number; total: number; completed: number; failed: number; skipped: number };
 }

@@ -416,6 +416,14 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
   - The Strategies explorer over each strategy's holdout run.
   - Adds the verdict, random comparison, cost stress and discovery net R per trade.
 
+## Flip scan (ADR-88)
+
+- **Run backtest → Flip scan (`#/flips`).**
+  - Preview: research results that lose clearly before costs, worst first; each row says "Will be flipped" or why not.
+  - One confirmation creates the flip protocol and saves the flipped strategies; nothing is backtested yet.
+  - "Backtest the flipped strategies" runs them as one background research job (live progress, stop, resume).
+  - The results table shows each flip beside its original; survivors go to Holdout backtest (marked "Flipped").
+
 ## Display options (ADR-86)
 
 - **Theme:** Settings → Display → Theme (Dark / Light / Same as Windows).

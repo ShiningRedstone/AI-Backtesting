@@ -3,6 +3,19 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Flip scan: the worst strategies, fully mirrored and tested again (ADR-88)
+
+| Item | Status |
+|---|---|
+| Run backtest → Flip scan: lists your research results that lose clearly before costs (30+ trades, 95% sure the average trade loses before costs), worst first, with why any of them cannot be flipped | IMPLEMENTED, TESTED |
+| Full mirror: every trade on the other side, the old target as the new stop and the old stop as the new target, stop entries become limit entries, exit signals swap sides; trailing-stop, no-progress and no-target strategies are refused by name | IMPLEMENTED, TESTED (engine signal arrays: same bars, opposite side, levels swapped exactly) |
+| One confirmation creates the flip protocol: exactly the listed flips (at most 200 by default), each one backtest on the research dates, its own 10 holdout tests, and a significance bar counting all research trials plus the flips | IMPLEMENTED, TESTED |
+| "Backtest the flipped strategies": background job with live progress, all Settings CPU cores, resumable; each flip shown beside its original (net R per trade, before-cost R per trade, profit factor, pass eval, payout, survivor) | IMPLEMENTED, TESTED (browser check on synthetic data) |
+| Flipped strategies are new strategies ("Flipped · …"), never governed by your research protocol; flipped survivors appear in Holdout backtest marked "Flipped" and use the flip protocol's own tests | IMPLEMENTED, TESTED |
+| Flips of strategies already holdout-tested, and flips that are already known strategies, are skipped | IMPLEMENTED, TESTED |
+| A scan on your real Dukascopy research results | REQUIRES REAL DATA (runs on your PC) |
+| Backtests, fills, costs, sizing, prop rules, survivor rule, your research protocol and its holdout tests, Phase 1 demo | UNCHANGED |
+
 ## Strategy pool 2: a second 10,000 strategies and one 20,000-strategy protocol (ADR-87)
 
 | Item | Status |

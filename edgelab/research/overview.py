@@ -114,6 +114,7 @@ def strategy_facets(doc: Mapping) -> dict:
             "trailing": trailing_kind(ex), "signal_exit": "yes" if ex.get("signal") else "no",
             "source": first.get("generation_method"), "proposal_id": gp.get("proposal_id"),
             "parent_strategy_id": first.get("parent_strategy_id"),
+            "mirror_of": gp.get("mirror_of") if first.get("generation_method") == "mirror" else None,   # ADR-88
             "created_at": first.get("generation_timestamp"), "logic_hash": doc.get("logic_hash"),
             "archived": bool(doc.get("archived")), **display_names(doc)}
 
@@ -136,10 +137,14 @@ def display_names(doc: Mapping) -> dict:
         full = pr.humanize(_HASH_TAIL.sub("", str(doc.get("name") or d.get("name") or "Strategy")))
     fp = (v or {}).get("family_params") or {}
     short = pr._params_text(pr._name_params(fp)) if fp else pr.humanize(_HASH_TAIL.sub("", str(doc.get("name") or d.get("name") or "")))
-    return {"display_name": full, "short_name": short or full}
+    short = short or full
+    if ((doc.get("lineage") or [{}])[0] or {}).get("generation_method") == "mirror":        # ADR-88 flip scan
+        tail = re.compile(r"[\s_]+flipped$", re.I)                # the mirror's own name suffix, shown once
+        full, short = f"Flipped · {tail.sub('', full)}", f"Flipped · {tail.sub('', short)}"
+    return {"display_name": full, "short_name": short}
 
 
-FACETS_CACHE_VERSION = "facets/2"
+FACETS_CACHE_VERSION = "facets/3"
 
 
 def facets_cache_path(svc) -> Path:

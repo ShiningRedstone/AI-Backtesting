@@ -457,6 +457,14 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     runs = by.get(strategy_id, [])
     ref = next((x["ref"] for x in rows if x["facets"]["strategy_id"] == strategy_id), None)
     risk = svc.risk_per_trade()["risk_per_trade_usd"]
+    if f.get("mirror_of"):                                   # ADR-88: a flip-scan mirror says so (names, never ids)
+        try:
+            orig = ov.display_names(svc.library.load(f["mirror_of"]))["display_name"]
+        except (KeyError, FileNotFoundError):
+            orig = "another strategy"
+        pres = {**pres, "display_name": f["display_name"],
+                "explanation": (f"Full mirror of {orig}: every trade on the other side, its profit target used as the stop "
+                                "and its stop as the target. " + str(pres["explanation"] or ""))}
     out = {"strategy_id": strategy_id, "display_name": pres["display_name"], "explanation": pres["explanation"],
            "family_id": f["family_id"], "family_name": f.get("family_name"), "facets": f, "scope": scope,
            "risk_per_trade_usd": risk, "survivor_rule": survivor_rule(svc), "favorite": strategy_id in _favorites(svc),

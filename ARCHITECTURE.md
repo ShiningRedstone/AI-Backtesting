@@ -2244,3 +2244,50 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   Synthetic data cannot show how often the new filters trigger on real NQ (e.g. "wide first hour" never fired there).
 - **Unchanged:** the engine, fills, costs, sizing, compiler, DSL, prop rules, protocol criteria and the trial key; pool 1's
   manifest, campaign and results.
+
+### ADR-88 Flip scan: full mirrors of the worst discovery results under a companion flip protocol
+- **Question (user):** can the worst strategies be flipped (buy ↔ sell) and checked for passing an evaluation with a
+  payout? Decisions the user made: a *full mirror*, only strategies that lose *clearly before costs*, a *companion flip
+  protocol*, at most 200 flips per scan.
+- **Mirror** (`strategy/mirror.py`, pure): on the resolved logic, the long condition becomes the short one and vice versa;
+  the target becomes the stop and the stop the target, each in its own kind (points from the fill, ATR from the
+  reference, price levels moved to the other side). A risk/reward target is resolved first: points/ATR stops scale by R,
+  and a price stop's mirror stop is `reference + R × (reference − stop)` as an `arith` operand on the engine's own
+  reference. Stop entries ↔ limit entries at the same price; signal exits swap sides; `reentry.block_day_after` swaps
+  stop ↔ target. Refused by name, never approximated: `exit.trailing` (would need a trailing target), `exit.no_progress`
+  (would need an adverse-excursion exit), no target (no stop). Known-answer test on the engine's own signal arrays:
+  same signal bars, opposite direction, stop = original target, target = original stop, to the bit (1e-9).
+  Disclosed differences: the mirror pays its own spread/commission/slippage (other side of the BID/ASK quote), limit
+  fill rules replace stop fill rules, risk sizing uses the mirror's stop distance.
+- **Selection** (`research/flips.py`, read-only preview): the parent protocol's counted discovery trials with ≥ 30
+  trades and a one-sided 95% upper bound of the gross (before-cost) R per trade below zero, worst first. A loss only
+  after costs is excluded on purpose: its mirror pays the same costs. Skipped with a reason: holdout-tested originals
+  (their inverse holdout result would be known), unmirrorable definitions, mirrors whose strategy id is already in the
+  library (already tested as an original), originals that ran on another dataset than the flip search would use.
+- **Companion flip protocol** (`protocol.build_flip_material`, role `flip_companion`, scope key `<instrument>@<provider>#flip`):
+  - at most one per parent, created with the scan; parent's windows, data, execution and config hash;
+  - pre-registers the exact `mirror_set`; the trial budget is that set, own holdout looks (default 10);
+  - Bonferroni family = the parent's DECLARED budget + the flips (`FLIP_FAMILY_RULE`): the flips were picked from the
+    parent's results, so a flip never passes more easily than an original; bootstrap replicates follow that family.
+    Each protocol controls its own familywise error.
+- **Routing** (minimal, backward compatible): `_governing_protocol(..., logic_hash=)` returns the flip protocol for a
+  registered flip (any status; the gate refuses a retired one) and the parent otherwise, so a flip is governed by the
+  flip protocol wherever it is evaluated (single backtest, search cell, holdout, random control) and never by the parent.
+  `plan_search` passes the plan's logic hashes; flips and other strategies never share one search (`PROTOCOL_MISMATCH`).
+  Campaigns, Mode B attempts and strategy pool 2 (ADR-87) ignore flip protocols; retiring a parent, or replacing it
+  through the pool-2 switch (`create_protocol(replaces=)`), retires its flip protocol, and the scan also skips
+  strategies holdout-tested under an earlier protocol (`holdout_exposed`). Searches without flips keep their protocol
+  id and search id (identities unchanged).
+- **Run:** the registered flips go through the normal `batch.run_search` → `Services._run_cell` path (engine, costs,
+  fills, prop audit, trial ledger), one trial each, Settings CPU cores, resumable, as a `FlipJob` in the
+  one-research-job-at-a-time JobManager. Flipped strategies are saved with lineage `generation_method: mirror`
+  (parent = the original; a mirrored variation for names only); display names start with "Flipped ·".
+- **UI:** Run backtest → Flip scan (`#/flips`, `web/src/pages/Flips.tsx`): preview (worst first, why each row is skipped),
+  one confirmation creates the flip protocol, then "Backtest the flipped strategies" with live progress and the table of
+  each flip beside its original. Holdout backtest marks flipped survivors and shows the flip protocol's own tests left;
+  flipped and ordinary survivors are tested separately. API: `GET/POST /api/flips`, `/api/flips/jobs[/<id>[/cancel]]`.
+- **Known limitations:** one flip scan per research protocol (a later scan needs a new research protocol); with several
+  ACTIVE research protocols (several instruments) the page refuses (`PROTOCOL_AMBIGUOUS`; the service takes
+  `protocol_id`); a mirror of a mirror with a risk/reward target is the same behaviour but a different logic hash.
+- **Unchanged:** the engine, fills, costs, sizing, compiler, prop rules, the survivor rule, the parent protocol's ledgers
+  and gate, existing search identities and the Phase 1 demo (verified identical).
