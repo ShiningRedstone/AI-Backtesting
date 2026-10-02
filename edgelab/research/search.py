@@ -231,8 +231,10 @@ class SearchPlan:
                 "note": "plan only: nothing has been executed"}
 
 
-def _resolve_strategies(canon: Mapping, library) -> tuple[dict[str, dict], list[dict], dict, list[Issue]]:
-    """strategy_id -> {sources, timeframe}; archived batch/family members are excluded and reported."""
+def _resolve_strategies(canon: Mapping, library, logic_hashes: dict | None = None
+                        ) -> tuple[dict[str, dict], list[dict], dict, list[Issue]]:
+    """strategy_id -> {sources, timeframe}; archived batch/family members are excluded and reported. ``logic_hashes``
+    (optional) is filled with strategy_id -> logic_hash of every resolved strategy (ADR-87 protocol routing)."""
     found: dict[str, dict] = {}
     excluded: dict[str, dict] = {}
     n = {"references": 0, "collapsed": 0}
@@ -251,6 +253,8 @@ def _resolve_strategies(canon: Mapping, library) -> tuple[dict[str, dict], list[
             else:
                 excluded.setdefault(sid, {"strategy_id": sid, "reason": "archived", "sources": []})["sources"].append(source)
             return
+        if logic_hashes is not None:
+            logic_hashes[sid] = doc.get("logic_hash")
         if sid in found:
             n["collapsed"] += 1
         row = found.setdefault(sid, {"strategy_id": sid, "timeframe": doc["definition"].get("timeframe"),
@@ -307,7 +311,8 @@ def plan_search(spec: Mapping, services) -> SearchPlan:
     cfg_hash = services._config_hash()
     s_hash = _hash_canonical(canon, cfg_hash)
 
-    strategies, excluded, ref_counts, iss = _resolve_strategies(canon, services.library)
+    lhs: dict[str, str] = {}
+    strategies, excluded, ref_counts, iss = _resolve_strategies(canon, services.library, lhs)
     n_refs, n_collapsed = ref_counts["references"], ref_counts["collapsed"]
     rows = {d["dataset_id"]: d for d in services.list_datasets()}
     for did in canon["datasets"]:
@@ -331,7 +336,8 @@ def plan_search(spec: Mapping, services) -> SearchPlan:
     # the governing protocol is part of the search identity (the same spec under another protocol is
     # a different search whose cells are counted in that protocol's ledger)
     guard = getattr(services, "_protocol_plan_check", None)
-    protocol_id = guard(manifests, period) if guard is not None else None
+    protocol_id = (guard(manifests, period, logic_hashes=sorted({lhs[s] for s in strategies if lhs.get(s)}))
+                   if guard is not None else None)
     if protocol_id:
         s_hash = hash_obj({"search_hash": s_hash, "protocol_id": protocol_id})
 

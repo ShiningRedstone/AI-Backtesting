@@ -39,6 +39,12 @@ late one. The bootstrap-t replicate count is derived from that family (>= 25 rep
 keep their counted-family rule. A protocol that has not been used (zero counted trials, zero holdout looks) can be SUPERSEDED
 by a new protocol (new identity, ``supersedes`` recorded; the old record is retired, never edited).
 
+Flip companion (ADR-87). One ACTIVE research protocol may get ONE flip companion (role ``flip_companion``, stored under
+the scope key ``<instrument>@<provider>#flip``, so the one-ACTIVE-per-scope rule above is unchanged): the parent's windows,
+data, execution and config, a pre-registered ``mirror_set`` of fully mirrored strategies (its trial budget), its own
+holdout looks, and a Bonferroni family of the parent's declared budget plus the flips. A registered flip is governed by
+the companion wherever it is evaluated, never by the parent (``Services._governing_protocol(..., logic_hash=)``).
+
 Refusals are ``ProtocolRefusal`` (a ValueError) with a machine-readable ``code``.
 Nothing here reads results into AI context; the AI layer only sees the protocol id and the
 discovery window (edgelab/ai/context.py FORBIDDEN_KEYS still applies).
@@ -124,11 +130,84 @@ def bootstrap_replicates_for(trial_budget: int, familywise_alpha: float = FAMILY
 
 
 def family_size(material: Mapping, counted_trials: int) -> int:
-    """The Bonferroni family of a protocol: the declared budget (version 3) or the counted trials (version <= 2)."""
+    """The Bonferroni family of a protocol: the declared budget (version 3) or the counted trials (version <= 2). A flip
+    protocol (ADR-87) declares its parent's budget PLUS its own: its strategies were chosen from the parent's results."""
     mt = material["multiple_testing"]
     if mt.get("family_size_rule") == "declared_max_unique_trials":
         return max(int(material["trial_budget"]["max_unique_trials"]), int(counted_trials), 1)
+    if mt.get("family_size_rule") == FLIP_FAMILY_RULE:
+        return max(int(material["parent"]["trial_budget"]) + int(material["trial_budget"]["max_unique_trials"]),
+                   int(counted_trials), 1)
     return max(1, int(counted_trials))
+
+
+# ============================================================ flip (mirror) companion protocol (ADR-87)
+FLIP_ROLE = "flip_companion"
+FLIP_SCOPE_SUFFIX = "#flip"
+FLIP_FAMILY_RULE = "declared_parent_plus_own"
+
+
+def is_flip(rec: Mapping) -> bool:
+    """True for a flip companion protocol record (or its material)."""
+    mat = rec.get("material", rec)
+    return mat.get("role") == FLIP_ROLE
+
+
+def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,
+                        datasets_by_timeframe: Mapping, discovery_period: Mapping, parent_looks_used: int,
+                        holdout_looks: int = DEFAULT_HOLDOUT_LOOKS, name: str = "") -> dict:
+    """The material of the ONE flip companion of an ACTIVE parent protocol: the parent's data, windows, execution and
+    config, its own pre-registered set of flipped strategies (the trial budget is exactly that set), its own holdout
+    looks, and a Bonferroni family of the parent's declared budget plus the flips (the flips were selected from the
+    parent's discovery results, so the honest family includes them)."""
+    import copy as _copy
+    pm = parent["material"]
+    if not isinstance(holdout_looks, int) or isinstance(holdout_looks, bool) or holdout_looks < 1:
+        raise ProtocolRefusal("PROTOCOL_INVALID", "holdout_looks must be a positive integer", value=holdout_looks)
+    if not mirror_set:
+        raise ProtocolRefusal("FLIP_EMPTY", "no flipped strategy to register")
+    own, parent_budget = len(mirror_set), int(pm["trial_budget"]["max_unique_trials"])
+    family = parent_budget + own
+    mt = {**DEFAULT_MULTIPLE_TESTING, "familywise_alpha": float(pm["multiple_testing"]["familywise_alpha"]),
+          "family_size_rule": FLIP_FAMILY_RULE,
+          "family_size": f"the parent protocol's DECLARED trial budget ({parent_budget}) plus this protocol's registered "
+                         f"flipped strategies ({own}) = {family}: the flips were chosen from the parent's discovery "
+                         "results, so every parent trial counts in their family; each protocol controls its own "
+                         "familywise error"}
+    acceptance = _copy.deepcopy(pm["acceptance_criteria"])
+    oc = acceptance.get("oos_confidence") or {}
+    if oc.get("method_id") == "min_normal_bootstrap_t_v1":
+        oc["bootstrap"]["replicates"] = bootstrap_replicates_for(family, mt["familywise_alpha"])
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "role": FLIP_ROLE,
+        "name": name,
+        "parent": {"protocol_id": parent["protocol_id"], "material_hash": parent["material_hash"],
+                   "trial_budget": parent_budget, "holdout_looks_used_at_creation": int(parent_looks_used)},
+        "scope": dict(pm["scope"]), "source_dataset": dict(pm["source_dataset"]), "windows": dict(pm["windows"]),
+        "execution": dict(pm["execution"]), "config_hash": pm["config_hash"],
+        "search_constraints": {
+            "strategies": "only the registered flipped strategies (mirror_set); every other strategy stays governed by "
+                          "the parent protocol, and a registered flip is never governed by the parent",
+            "evaluation_windows": "every discovery evaluation must lie entirely inside the discovery window",
+            "stages": {"discovery": "the flip scan's search (one trial per flipped strategy)",
+                       "holdout": "only Services.evaluate_holdout for a flipped survivor, within this protocol's looks"}},
+        "trial_budget": {"max_unique_trials": own,
+                         "unit": "unique numerical trial = (protocol, logic_hash, content hash of the evaluated bars "
+                                 "[dataset + window], config hash); the budget is exactly the registered set"},
+        "holdout_budget": {"max_unique_candidate_evaluations": holdout_looks, "per_candidate": 1},
+        "acceptance_criteria": acceptance,
+        "multiple_testing": mt,
+        "pre_protocol_exposure": {
+            "statement": (f"Flipped strategies were selected from the parent protocol's discovery results (before-cost R "
+                          f"per trade; see selection). The parent had used {int(parent_looks_used)} holdout look(s) when "
+                          "this protocol was created; flips of holdout-tested strategies are excluded."),
+            "runs": []},
+        "mirror_set": [dict(r) for r in mirror_set],
+        "selection": dict(selection),
+        "search": {"datasets_by_timeframe": dict(datasets_by_timeframe), "period": dict(discovery_period)},
+        "supersedes": None,
+    }
 
 
 class ProtocolRefusal(ValueError):

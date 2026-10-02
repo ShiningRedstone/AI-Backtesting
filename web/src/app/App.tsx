@@ -19,6 +19,7 @@ import { PipelinePage } from "../pages/Pipeline";
 import { PaperPage } from "../pages/Paper";
 import { RunsPage } from "../pages/Runs";
 import { HoldoutPage } from "../pages/Holdout";
+import { FlipsPage } from "../pages/Flips";
 import { RunBacktestPage } from "../pages/RunBacktest";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
@@ -30,7 +31,7 @@ interface NavItem { path: string; label: string; tid: string; icon: string; head
 const NAV: NavItem[] = [
   { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
   { path: "/strategies", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
-  { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research", "holdout"] },
+  { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research", "holdout", "flips"] },
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop & paper", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
@@ -42,7 +43,7 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   strategies: [{ path: "/strategies", label: "Library", head: "strategies" }, { path: "/families", label: "Families", head: "families" },
     { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" }],
   run: [{ path: "/runs", label: "Research runs", head: "runs" }, { path: "/run", label: "Single backtest", head: "run" },
-    { path: "/holdout", label: "Holdout backtest", head: "holdout" }],
+    { path: "/holdout", label: "Holdout backtest", head: "holdout" }, { path: "/flips", label: "Flip scan", head: "flips" }],
   results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
     { path: "/holdout-results", label: "Holdout results", head: "holdout-results" },
     { path: "/results", label: "All runs", head: "results" }, { path: "/compare", label: "Compare", head: "compare" },
@@ -86,6 +87,7 @@ function Page() {
     case "explorer": return <ExplorerPage />;
     case "holdout-results": return <ExplorerPage key="holdout" holdout />;
     case "holdout": return <HoldoutPage />;
+    case "flips": return <FlipsPage />;
     case "strategies": return route.parts[1] ? <StrategyPage key={route.parts[1]} /> : <LibraryPage />;
     case "builder": return <BuilderPage />;
     case "families": return <FamiliesPage />;

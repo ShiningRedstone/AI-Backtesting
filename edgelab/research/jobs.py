@@ -86,6 +86,20 @@ class HoldoutJob(Job):
                 "items": [dict(x) for x in self.items], "n_items": len(self.items), "live": dict(self.live)}
 
 
+class FlipJob(Job):
+    """The flip scan's search (ADR-87): the registered flips of one flip protocol through the normal search path."""
+
+    def __init__(self, job_id: str, protocol_id: str, search_id: str, n: int):
+        super().__init__(job_id, search_id, {})
+        self.kind, self.protocol_id = "flip", protocol_id
+        self.processes = 1
+        self.live: dict = {"current": None, "done": 0, "total": n, "completed": 0, "failed": 0, "skipped": 0}
+
+    def snapshot(self) -> dict:
+        return {**super().snapshot(), "kind": "flip", "protocol_id": self.protocol_id, "processes": self.processes,
+                "live": dict(self.live)}
+
+
 class JobManager:
     def __init__(self, services, lock):
         self.services, self.lock = services, lock
@@ -229,6 +243,76 @@ class JobManager:
         job.finished_at = _now()
         job._set(final)
 
+    # ------------------------------------------------------------------ flip scan jobs (ADR-87)
+    def start_flip(self, flip_id: str, processes: int = 1) -> dict:
+        """Run (or resume) a flip protocol's search in the background; the same one-research-job-at-a-time rule."""
+        from edgelab.research import flips as F
+        reading = getattr(self.services, "in_read_context", lambda: False)()
+        with (nullcontext() if reading else self.lock):
+            flip = self.services.store.get_protocol(flip_id)
+            if flip["status"] != "ACTIVE":
+                raise F.FlipError("PROTOCOL_NOT_ACTIVE", "the flip protocol is retired", protocol_id=flip_id)
+            F.materialize(self.services, flip)
+            plan = plan_search(F.search_spec(flip), self.services)     # references, routing and refusals up front
+        with self._mu:
+            if self._active is not None and self._active.state in ACTIVE:
+                raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
+            job = FlipJob("JOB_" + uuid.uuid4().hex[:12].upper(), flip_id, plan.search_id, len(plan.eligible_cells()))
+            job.processes = processes
+            self._jobs[job.job_id] = job
+            self._active = job
+            self._thread = threading.Thread(target=self._work_flip, args=(job,), name=f"edgelab-{job.job_id}", daemon=True)
+            self._thread.start()
+        return job.snapshot()
+
+    def _work_flip(self, job: FlipJob) -> None:
+        from edgelab.research import flips as F
+        from edgelab.research.overview import display_names
+        job.started_at = _now()
+        job._set("running")
+
+        def on_cell(event: str, c: Mapping, k: int, total: int) -> None:
+            live = dict(job.live, total=total)
+            if event == "start":
+                try:
+                    live["current"] = display_names(self.services.library.load(c["strategy_id"]))["display_name"]
+                except Exception:                            # noqa: BLE001 - a name never stops a run
+                    live["current"] = c["strategy_id"]
+            else:
+                live["done"] = live.get("done", 0) + 1
+                live["current"] = None
+                if event == "skip":
+                    live["skipped"] = live.get("skipped", 0) + 1
+                elif c.get("_status") == "completed":
+                    live["completed"] = live.get("completed", 0) + 1
+                else:
+                    live["failed"] = live.get("failed", 0) + 1
+            job.live = live
+
+        try:
+            out = F.run(self.services, job.protocol_id, processes=job.processes, lock=self.lock,
+                        cancel=job.cancel_requested.is_set, on_cell=on_cell)
+            final = "cancelled" if out["status"] == "cancelled" else "completed"
+        except BaseException as exc:                         # recorded, never swallowed silently
+            job.error = f"{type(exc).__name__}: {exc}"
+            final = "failed"
+            try:
+                with self.lock:
+                    b = self.services.store.get_search_batch(job.search_id)
+                    if b is not None and b["status"] == "running":
+                        self.services.store.update_search_batch(job.search_id, status="failed", finished_at=_now())
+            except Exception as exc2:
+                job.error += f" (and the batch could not be marked failed: {type(exc2).__name__}: {exc2})"
+        job.live = dict(job.live, current=None)
+        job.finished_at = _now()
+        job._set(final)
+
+    def flip_status(self, job_id: str) -> dict:
+        job = self._get(job_id)
+        if not isinstance(job, FlipJob):
+            raise KeyError(job_id)
+        return job.snapshot()
+
     def holdout_status(self, job_id: str) -> dict:
         job = self._get(job_id)
         if not isinstance(job, HoldoutJob):
@@ -250,11 +334,11 @@ class JobManager:
         job = self._get(job_id)
         if job.state in ACTIVE:
             job.cancel_requested.set()
-        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob)) else self.status(job_id)
+        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob, FlipJob)) else self.status(job_id)
 
     def status(self, job_id: str) -> dict:
         job = self._get(job_id)
-        if isinstance(job, (CampaignJob, HoldoutJob)):
+        if isinstance(job, (CampaignJob, HoldoutJob, FlipJob)):
             return job.snapshot()
         return {**job.snapshot(), "progress": self.progress(job.search_id)}
 

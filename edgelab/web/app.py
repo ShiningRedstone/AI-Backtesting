@@ -152,6 +152,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         from edgelab.prop.simulator import PropDataError
         from edgelab.research.jobs import JobConflict
         from edgelab.research.campaign import CampaignError
+        from edgelab.research.flips import FlipError
         from edgelab.research.ranking import RankingError
         from edgelab.research.search import SearchSpecError
         from edgelab.strategy.compiler import StrategyCompileError
@@ -165,6 +166,9 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, ProtocolRefusal):                   # ADR-56: machine-readable refusal code
             return jsonify({"error": {"kind": "protocol_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409
+        if isinstance(e, FlipError):                         # ADR-87: flip scan refusals (machine-readable code)
+            return jsonify({"error": {"kind": "flip_refusal", "code": e.code, "message": e.message,
+                                      "refusal": e.to_dict()}}), 409 if e.code in ("FLIP_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
         if isinstance(e, SearchSpecError):
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],
@@ -890,6 +894,42 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
 
     @app.post("/api/holdout/jobs/<jid>/cancel")
     def holdout_cancel(jid):                        # stops BEFORE the next strategy; a granted test always finishes
+        return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
+
+    # ------------------------------------------------------------------ flip scan (ADR-87)
+    def _cap(x: Any) -> int | None:
+        if x in (None, ""):
+            return None
+        try:
+            v = int(x)
+        except (TypeError, ValueError):
+            raise _bad("cap must be a whole number") from None
+        if isinstance(x, bool) or (isinstance(x, float) and not float(x).is_integer()):
+            raise _bad("cap must be a whole number")
+        return v
+
+    @app.get("/api/flips")
+    def flips_view():
+        return jsonify(call(svc.flip_scan, None, _cap(request.args.get("cap"))))
+
+    @app.post("/api/flips")
+    def flips_create():
+        b = body()
+        looks = b.get("holdout_looks")
+        if looks is not None and (not isinstance(looks, int) or isinstance(looks, bool) or not 1 <= looks <= 100):
+            raise _bad("holdout_looks must be a whole number from 1 to 100")
+        return jsonify(call(svc.create_flip_scan, None, _cap(b.get("cap")), looks)), 201
+
+    @app.post("/api/flips/jobs")
+    def flips_start():
+        return jsonify(call(svc.start_flip_job)), 202
+
+    @app.get("/api/flips/jobs/<jid>")
+    def flips_job(jid):                             # lock-free: in-memory job record
+        return jsonify(svc.flip_job(_id(jid, JOB_ID, "job id")))
+
+    @app.post("/api/flips/jobs/<jid>/cancel")
+    def flips_cancel(jid):                          # sets a flag; running cells finish and are recorded
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
     @app.get("/api/research/searches")

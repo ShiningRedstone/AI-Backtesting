@@ -285,13 +285,13 @@ def check_capacity(n_strategies: int, max_cells: int, trial_budget: int, workers
 
 # ======================================================================================== protocol / datasets
 def governing_protocol(svc, protocol_id: str | None = None) -> dict:
-    from edgelab.research.protocol import verify_record
-    act = svc.store.list_protocols(status="ACTIVE")
+    from edgelab.research.protocol import is_flip, verify_record
+    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not is_flip(p)]     # ADR-87: never a flip protocol
     if protocol_id:
         act = [p for p in act if p["protocol_id"] == protocol_id]
     if len(act) != 1:
         raise CampaignError("PROTOCOL_NOT_RESOLVED", "exactly one ACTIVE research protocol must govern the campaign",
-                            active=[p["protocol_id"] for p in svc.store.list_protocols(status="ACTIVE")],
+                            active=[p["protocol_id"] for p in svc.store.list_protocols(status="ACTIVE") if not is_flip(p)],
                             requested=protocol_id)
     verify_record(act[0])
     return act[0]
