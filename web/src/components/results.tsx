@@ -261,7 +261,7 @@ export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) 
 
 /** Per-year results with an expandable row per year showing its twelve months (from the backend read model). Holdout
     years follow, labelled Holdout: "locked, not backtested", or this strategy's holdout evaluation. */
-function YearTable({ years, dataset, holdout }: { years: YearRow[]; dataset?: StrategyPanelData["dataset"]; holdout?: HoldoutPeriod }) {
+export function YearTable({ years, dataset, holdout }: { years: YearRow[]; dataset?: StrategyPanelData["dataset"]; holdout?: HoldoutPeriod }) {
   const usd = useMoney().fmt;
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (key: string) => setOpen((o) => { const s = new Set(o); if (s.has(key)) s.delete(key); else s.add(key); return s; });

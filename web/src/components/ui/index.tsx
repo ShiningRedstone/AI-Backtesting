@@ -239,6 +239,7 @@ const SKEL_LAYOUTS: Record<string, SkelBlock[]> = {
   "paper-new": [{ t: "filters" }, { t: "card", body: "table", rows: 10 }],
   library: [{ t: "filters" }, { t: "grid", n: 6, body: "lines", rows: 4 }],
   families: [{ t: "grid", n: 6, body: "lines", rows: 4 }],
+  combos: [{ t: "kpis", n: 4 }, { t: "filters" }, { t: "grid", n: 2, body: "table", rows: 8 }],
   settings: [{ t: "grid", n: 2, body: "lines", rows: 5 }, { t: "grid", n: 2, body: "lines", rows: 4 }, { t: "grid", n: 2, body: "lines", rows: 4 }],
   table: [{ t: "card", body: "table", rows: 8 }],
 };

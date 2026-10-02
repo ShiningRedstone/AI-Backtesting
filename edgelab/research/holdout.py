@@ -50,9 +50,8 @@ def negative_months(svc, run_id: str | None) -> int | None:
         if t is None or not len(t):
             _MONTHS[key] = 0
         else:
-            local = pd.DatetimeIndex(pd.to_datetime(t["exit_ts"], utc=True)).tz_convert(ov.LOCAL_TZ)
-            per = pd.Series(t["net_r"].to_numpy(float)).groupby([local.year, local.month]).sum()
-            _MONTHS[key] = int((per < 0).sum())
+            from edgelab.research.combos import negative_months_of        # ADR-92: shared with combinations
+            _MONTHS[key] = negative_months_of(t["exit_ts"], t["net_r"].to_numpy(float))
     return _MONTHS[key]
 
 
@@ -140,9 +139,10 @@ def candidates(svc) -> dict:
 
 def _ledger(svc, pid: str) -> dict:
     from edgelab.research.protocol import holdout_exposed
+    p = svc.store.get_protocol(pid)
     return {"access": svc.store.list_holdout_access(pid), "trials": svc.store.list_trial_events(pid),
             "batches": {b["search_id"]: b for b in svc.store.list_search_batches()},
-            "exposed": holdout_exposed(svc.store.get_protocol(pid))}
+            "exposed": holdout_exposed(p), "combo_seen": svc._combo_seen(p)}
 
 
 def _logic_hash(svc, sid: str) -> str | None:
@@ -164,6 +164,9 @@ def _eligibility(svc, row: Mapping, facets: Mapping, led: Mapping | None) -> dic
         return {"eligible": False, "reason": "already holdout-tested (one test per strategy)", "search_id": a["search_id"],
                 "tested": {"access_id": a["access_id"], "status": a["status"], "run_id": a.get("run_id"),
                            "outcome": res.get("outcome"), "created_at": a.get("created_at")}}
+    if lh in led.get("combo_seen", {}):                      # ADR-92: already ran on the holdout inside a combination
+        return {"eligible": False, "search_id": None, "tested": None,
+                "reason": "already ran on the holdout inside a combination test (one holdout per strategy)"}
     if row["strategy_id"] in led.get("exposed", ()):
         return {"eligible": False, "search_id": None, "tested": None,
                 "reason": "already holdout-tested under an earlier protocol (one test per strategy)"}
@@ -187,7 +190,10 @@ def history(svc) -> list[dict]:
         protos = svc.store.list_protocols()
     except Exception:                                        # noqa: BLE001
         return out
+    from edgelab.research.protocol import is_combo
     for p in protos:
+        if is_combo(p):                                      # ADR-92: combination tests live on the Combinations page
+            continue
         for a in svc.store.list_holdout_access(p["protocol_id"]):
             res = json.loads(a["result_json"]) if a.get("result_json") else {}
             out.append({"access_id": a["access_id"], "protocol_id": p["protocol_id"], "strategy_id": a["strategy_id"],

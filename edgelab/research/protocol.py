@@ -138,6 +138,8 @@ def family_size(material: Mapping, counted_trials: int) -> int:
     if mt.get("family_size_rule") == FLIP_FAMILY_RULE:
         return max(int(material["parent"]["trial_budget"]) + int(material["trial_budget"]["max_unique_trials"]),
                    int(counted_trials), 1)
+    if mt.get("family_size_rule") == COMBO_FAMILY_RULE:                 # ADR-92: parent budget + combinations evaluated
+        return max(int(material["parent"]["trial_budget"]) + int(mt["evaluated_combinations"]), int(counted_trials), 1)
     return max(1, int(counted_trials))
 
 
@@ -206,6 +208,85 @@ def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selec
         "mirror_set": [dict(r) for r in mirror_set],
         "selection": dict(selection),
         "search": {"datasets_by_timeframe": dict(datasets_by_timeframe), "period": dict(discovery_period)},
+        "supersedes": None,
+    }
+
+
+# ============================================================ combination companion protocol (ADR-92)
+COMBO_ROLE = "combo_companion"
+COMBO_SCOPE_SUFFIX = "#combo"
+COMBO_FAMILY_RULE = "declared_parent_plus_evaluated"
+
+
+def is_combo(rec: Mapping) -> bool:
+    """True for a combination companion protocol record (or its material)."""
+    mat = rec.get("material", rec)
+    return mat.get("role") == COMBO_ROLE
+
+
+def is_companion(rec: Mapping) -> bool:
+    """A flip (ADR-88) or combination (ADR-92) companion: never the ACTIVE research protocol of a scope."""
+    return is_flip(rec) or is_combo(rec)
+
+
+def build_combo_material(parent: Mapping, *, combo_set: Sequence[Mapping], n_evaluated: int, selection: Mapping,
+                         parent_looks_used: int, members_seen: Sequence[Mapping] = (),
+                         holdout_looks: int = DEFAULT_HOLDOUT_LOOKS, name: str = "", merge_rule: str = "") -> dict:
+    """The material of the ONE combination companion of an ACTIVE parent protocol (ADR-92): the parent's data, windows,
+    execution, config and criteria; a pre-registered set of combinations (each = up to five of the parent's surviving
+    strategies, merged one position at a time); its own holdout tests (one per combination); and a Bonferroni family of
+    the parent's declared budget PLUS every distinct combination evaluated before registration (the registered ones
+    were chosen from all of them). No discovery trials: a combination's discovery evidence is its members' counted
+    trials in the parent."""
+    import copy as _copy
+    pm = parent["material"]
+    if not isinstance(holdout_looks, int) or isinstance(holdout_looks, bool) or holdout_looks < 1:
+        raise ProtocolRefusal("PROTOCOL_INVALID", "holdout_looks must be a positive integer", value=holdout_looks)
+    if not combo_set:
+        raise ProtocolRefusal("COMBO_EMPTY", "no combination to register")
+    own, parent_budget = len(combo_set), int(pm["trial_budget"]["max_unique_trials"])
+    evaluated = max(int(n_evaluated), own)
+    family = parent_budget + evaluated
+    mt = {**DEFAULT_MULTIPLE_TESTING, "familywise_alpha": float(pm["multiple_testing"]["familywise_alpha"]),
+          "family_size_rule": COMBO_FAMILY_RULE, "evaluated_combinations": evaluated,
+          "family_size": f"the parent protocol's DECLARED trial budget ({parent_budget}) plus every distinct "
+                         f"combination evaluated before registration ({evaluated}) = {family}: the registered "
+                         "combinations were chosen from all of them; each protocol controls its own familywise error"}
+    acceptance = _copy.deepcopy(pm["acceptance_criteria"])
+    oc = acceptance.get("oos_confidence") or {}
+    if oc.get("method_id") == "min_normal_bootstrap_t_v1":
+        oc["bootstrap"]["replicates"] = bootstrap_replicates_for(family, mt["familywise_alpha"])
+    seen = [{"strategy_id": r["strategy_id"], "note": "member holdout-tested on its own before registration (allowed; "
+                                                      "ADR-92)"} for r in members_seen]
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "role": COMBO_ROLE,
+        "name": name,
+        "parent": {"protocol_id": parent["protocol_id"], "material_hash": parent["material_hash"],
+                   "trial_budget": parent_budget, "holdout_looks_used_at_creation": int(parent_looks_used)},
+        "scope": dict(pm["scope"]), "source_dataset": dict(pm["source_dataset"]), "windows": dict(pm["windows"]),
+        "execution": dict(pm["execution"]), "config_hash": pm["config_hash"],
+        "search_constraints": {
+            "strategies": "only the registered combinations (combo_set); every member stays governed by the parent "
+                          "protocol for its own discovery trials and its own holdout test",
+            "evaluation_windows": "combinations are scored on their members' recorded discovery trades only",
+            "stages": {"discovery": "none in this protocol (the members' counted trials in the parent)",
+                       "holdout": "only Services.evaluate_combination_holdout for a registered combination, within "
+                                  "this protocol's tests; every member runs on exactly the holdout bars and the "
+                                  "results are merged with the registered merge rule"}},
+        "trial_budget": {"max_unique_trials": own,
+                         "unit": "registered combination (no numerical discovery trials in this protocol)"},
+        "holdout_budget": {"max_unique_candidate_evaluations": holdout_looks, "per_candidate": 1},
+        "acceptance_criteria": acceptance,
+        "multiple_testing": mt,
+        "pre_protocol_exposure": {
+            "statement": (f"Combinations were chosen from the parent protocol's discovery results (survivors only; see "
+                          f"selection). The parent had used {int(parent_looks_used)} holdout look(s) when this protocol "
+                          f"was created; {len(seen)} member(s) had their own holdout test before registration."),
+            "runs": seen},
+        "merge_rule": merge_rule,
+        "combo_set": [dict(r) for r in combo_set],
+        "selection": dict(selection),
         "supersedes": None,
     }
 

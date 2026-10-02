@@ -18,6 +18,7 @@ import { PaperPage } from "../pages/Paper";
 import { RunsPage } from "../pages/Runs";
 import { HoldoutPage } from "../pages/Holdout";
 import { FlipsPage } from "../pages/Flips";
+import { CombinationsPage } from "../pages/Combinations";
 import { RunBacktestPage } from "../pages/RunBacktest";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
@@ -30,7 +31,7 @@ import type { CampaignJob } from "../api/campaigns";
 interface NavItem { path: string; label: string; tid: string; icon: string; heads: string[]; planned?: boolean }
 const NAV: NavItem[] = [
   { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
-  { path: "/families", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
+  { path: "/families", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations", "combinations"] },
   { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research", "holdout", "flips"] },
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
@@ -41,7 +42,8 @@ const NAV: NavItem[] = [
 /** Sub-views inside a tab (links, so every view keeps its own address). */
 const SUBTABS: Record<string, { path: string; label: string; head: string }[]> = {
   strategies: [{ path: "/families", label: "Families", head: "families" }, { path: "/strategies", label: "Library", head: "strategies" },
-    { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" }],
+    { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" },
+    { path: "/combinations", label: "Combinations", head: "combinations" }],
   run: [{ path: "/runs", label: "Research runs", head: "runs" }, { path: "/run", label: "Single backtest", head: "run" },
     { path: "/holdout", label: "Holdout backtest", head: "holdout" }, { path: "/flips", label: "Flip scan", head: "flips" }],
   results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
@@ -91,6 +93,7 @@ function Page() {
     case "builder": return <BuilderPage />;
     case "families": return <FamiliesPage />;
     case "variations": return <VariationsPage />;
+    case "combinations": return <CombinationsPage />;
     case "datasets": return <DatasetsPage />;
     case "research":                                       // no Experiments tab: only job / result deep links remain
       return route.parts[1] || route.query.get("job") || route.query.get("setup") ? <ResearchPage /> : <RedirectTo path="/runs" />;

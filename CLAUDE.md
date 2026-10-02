@@ -138,6 +138,18 @@ ADR-91: research memory/speed: `FeatureCache(max_bytes)` (env `EDGELAB_FEATURE_C
 with half the cores after MemoryError; `core/memo.py` byte-bounded derived-input memo (HTF bars, session membership, trading dates)
 keyed by exact bar content hash; `BarArrays.content_hash` remembered while read-only (truncations via `_head_of`); zero-copy
 `hash_arrays`. Bit-identical (tests/test_memory_speed.py); never change the causality check's procedure.
+ADR-92: strategy combinations (Strategies → Combinations, `research/combos.py`, read-only): up to 5 survivors, one prop account,
+one position at a time (merge rule `one_position_first_entry_v1`: earlier entry wins, overlaps skipped and counted, recorded sizing);
+score = weighted rank (losing months ×2, max DD $ ×2, net R/trade, trades/week capped at `ui.combo_tpw_cap` = 5, rolling monthly-start
+pass %, median days to pass / first payout via the unchanged lifecycle, `PropRunner.first_payout` = full replay, tested); greedy search
+from every survivor while the result stays a survivor (top 10 cheap candidates per step, memo, multi-process = 1 core);
+evaluated combinations in `<data>/combinations/ledger.json`. Holdout: ONE combination companion protocol per research protocol
+(role `combo_companion`, scope `…#combo`, typed REGISTER, 10 tests, family = parent budget + combinations evaluated;
+`protocol.is_companion` excludes flip/combo companions from active-protocol lookups); `Services.evaluate_combination_holdout`
+(members on the holdout via `entry_point="combination_holdout"`, controls merged, unchanged `assess_holdout`; member runs are holdout
+runs but not their own result, `overview.combination_run_ids`; a member's own holdout test is refused afterwards); jobs
+`ComboHoldoutJob` (one research job) and `ComboSearchJob` (own slot). `prop/lifecycle.py` day groups as row tuples (`_ROW_GROUPS`,
+byte-identical, ~8× faster). Paper trading of combinations: not yet.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -171,9 +183,10 @@ remains. Do not rely on this file alone.
     `C:\Users\Ethan\Documents\AI-Backtesting`), so the repository's `configs/` ARE their settings: any committed change
     to `configs/*.yaml` that alters the parsed values breaks their active protocol (ADR-89). Comments are safe.
 - **Research flow the user follows:** discovery (Research runs; the protocol's discovery window only) → survivors
-  (net > 0 AND the trades pass a prop evaluation with a payout under the Settings account) → Holdout backtest (the
-  locked final period, protocol gate, 10 tests in total by default, once per strategy, "criteria met / not met")
-  → Prop Trading (paper accounts on new days; default list = strategies that passed the holdout).
+  (net > 0 AND the trades pass a prop evaluation with a payout under the Settings account) → optionally
+  Combinations (ADR-92: best sets of up to 5 survivors; registered combinations get their own 10 holdout tests)
+  → Holdout backtest (the locked final period, protocol gate, 10 tests in total by default, once per strategy,
+  "criteria met / not met") → Prop Trading (paper accounts on new days; default list = strategies that passed the holdout).
 - **Paper trading (ADR-81/83):** daily forward Dukascopy days (downloaded by dukascopy-python at start, every 30 min,
   "Update now"); accounts start the next trading day; failed eval → new attempt (reset fee, else eval price);
   pass → activation fee, funded, every payout; funded loss / live point / payout limit → new eval; net = payouts
@@ -183,7 +196,7 @@ remains. Do not rely on this file alone.
 - **Tabs (UI, plain English):**
   - Home (heading "Munyun Lab"): system facts (strategies, stored runs, backtested trades, AI generations, datasets,
     version), latest results.
-  - Strategies: Families (default), Library, Builder, Variations
+  - Strategies: Families (default), Library, Builder, Variations, Combinations (ADR-92: list left, detail right)
   - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ranked best → worst
     for prop trading on 8 discovery criteria with drawdown and negative months ×2), Flip scan (ADR-88). `/research` →
     `/runs`; job and result deep links still work.
@@ -342,11 +355,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..91.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..92.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..91, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..92, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -355,7 +368,7 @@ events/regimes, instruments/datasets, strategy families and controlled variation
   service layer; `read_context`, background backtest jobs, campaigns), `cli.py`, `desktop.py` / `desktop_window.py` /
   `desktop_splash.py` / `workspace_host.py` / `runtime.py` (desktop app). Research runs: `research/campaign.py`,
   `research/batch.py` (sequential + process-parallel runner), `research/jobs.py` (one research job at a time: campaign
-  and holdout jobs), `research/holdout.py` (holdout candidates/ranking/job). Paper trading: `paper/{feed,engine,store,
+  and holdout jobs), `research/holdout.py` (holdout candidates/ranking/job), `research/combos.py` (combinations, ADR-92). Paper trading: `paper/{feed,engine,store,
   manager}.py`. Read models: `research/overview.py` (explorer incl. `scope=holdout`), `research/results_view.py`.
   Small files written while pages read them use `core/fsutil.atomic_write_text` (Windows sharing violations). Packaging: `packaging/` (`edgelab.spec`, `build.py`, `release.py`, `installer.iss`,
   `build_installer.py`, `icon.py`, smoke tests). Empty placeholders for later phases: `reports/`, `journal/`,
@@ -415,4 +428,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-91). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-92). Update `README.md` status for phases.

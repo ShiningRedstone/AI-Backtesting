@@ -3,6 +3,21 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy combinations before the holdout (ADR-92)
+
+| Item | Status |
+|---|---|
+| Strategies → Combinations: combine up to 5 survivors in one prop account, one position at a time (overlapping trades skipped and counted), from their recorded research trades; nothing is backtested again | IMPLEMENTED, TESTED (known answers) |
+| Automatic search: from every survivor, keep adding the survivor that improves the ranked score (losing months ×2, drawdown ×2, net R per trade, trades per week up to your limit, evaluations passed, days to pass, days to first payout) while the combination stays a survivor, up to 5 | IMPLEMENTED, TESTED (deterministic; several cores = one core) |
+| Evaluation speed from rolling monthly starts through the unchanged prop simulator; the shortcut that stops at the first payout gives the same answers as a full replay | IMPLEMENTED, TESTED |
+| Build your own, save named combinations, compare a combination with each strategy alone, equity curve, results by year with months | IMPLEMENTED, TESTED (browser) |
+| Holdout tests for combinations: register once per research protocol (type REGISTER), 10 combination tests, criteria judged on the merged holdout trades with every combination checked counted in the fairness correction; members can no longer be holdout-tested alone afterwards | IMPLEMENTED, TESTED (synthetic) |
+| Settings: "Combinations: trades per week limit" (default 5; display preference, never a backtest) | IMPLEMENTED, TESTED |
+| Prop simulator about 8× faster (each day's trades read without building a table per day); results byte-identical | IMPLEMENTED, TESTED |
+| Search time on your PC with your survivors | REQUIRES REAL DATA (synthetic: 20 survivors, 206 s on 1 core, 78 s on 4) |
+| Paper trading of combinations | NOT IMPLEMENTED (later step) |
+| Backtests, fills, costs, sizing, prop rules, the strategies' own holdout tests and trial counting, configs | UNCHANGED |
+
 ## Research runs: no out-of-memory, faster, identical results (ADR-91)
 
 | Item | Status |

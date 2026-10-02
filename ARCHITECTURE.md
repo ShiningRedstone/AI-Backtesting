@@ -2432,3 +2432,79 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   - Real runs (hundreds of strategies per family on the same datasets) reuse more.
 - **Unchanged:** engine, fills, costs, sizing, compiler, prop rules, protocols, identities, the causality check's
   procedure, the Phase 1 demo.
+
+### ADR-92 Strategy combinations before the holdout
+- **Request (user):** under Strategies, combine up to 5 surviving strategies and automatically find the best combinations,
+  to get fewer losing months, more trades per week (up to a limit), higher net R per trade, and faster evaluation pass
+  and first payout.
+- **User decisions:**
+  - one prop account, one position at a time;
+  - each member keeps its recorded sizing;
+  - greedy search from every survivor, adding members while the score improves;
+  - a combination must stay a survivor;
+  - a weighted rank like the Holdout ranking, with trades per week capped at 5;
+  - speed from rolling monthly starts;
+  - holdout tests in a companion protocol of their own, registered once, 10 tests;
+  - members already holdout-tested are allowed (no label);
+  - paper trading of combinations later;
+  - list left, detail right.
+- **`research/combos.py`** (read-only; no runs, no trials, no backtests):
+  - **Merge rule `one_position_first_entry_v1`:** member trades are ordered by entry, signal time, member (strategy id)
+    and trade number. A trade is taken only if it enters at or after the last taken exit; overlapping trades are skipped
+    and counted. This is the no-overlap rule `lifecycle.prepare` enforces. A skipped member might have re-entered
+    earlier, so the result is an approximation from recorded trades; it says so on screen.
+  - **Statistics:** recorded `net_usd` / `net_r`; losing months by New York exit month (the shared
+    `negative_months_of`, also used by `holdout.negative_months`); trades per week over the tested window
+    (`metrics.trades_per_week`), capped for the score (`ui.combo_tpw_cap`, outside the config hash).
+  - **Prop:** the merged trades go through the UNCHANGED lifecycle under the Settings pass-criteria account.
+    - The survivor rule: evaluation PASS with a payout, and net R per trade > 0.
+    - Rolling starts: one evaluation from every New York month start (window start + months at least a week later):
+      % passed among decided starts, median trading days to pass, and to the first payout.
+    - `PropRunner` prepares once and replays on a growing window. A decision is accepted only when it fell before the
+      window's last trading day, or the window holds every trade. The answer equals a full replay (tested for every
+      profile and start).
+  - **Score:** weighted average rank over losing months ×2, max drawdown $ ×2, net R per trade, capped trades per week,
+    pass %, median days to pass, and median days to the first payout.
+  - **Search:** from every survivor, candidates are ranked on the cheap criteria. The top 10 that stay survivors go to
+    the rolling-start stage together with the current set; if the current set ranks first, stop (5 members at most).
+    - Memoised on the member set.
+    - Several processes split the seeds; the parent combines them in seed order, so the result equals one core (tested).
+    - Measured on synthetic 4-year members (about 700 trades each, 20 survivors): 206 s on 1 core, 78 s on 4 cores,
+      identical lists.
+  - **Ledger:** every distinct combination evaluated is recorded per parent protocol in `<data>/combinations/ledger.json`.
+    Searches and saved combinations live beside it.
+- **Combination companion protocol** (`protocol.build_combo_material`; role `combo_companion`, scope `…#combo`):
+  - one per ACTIVE research protocol (`COMBO_EXISTS`), with typed confirmation `REGISTER`;
+  - the parent's data, windows, execution, config and criteria;
+  - trial budget = the registered combinations; 10 holdout tests;
+  - Bonferroni family `declared_parent_plus_evaluated` = parent budget + every combination evaluated before
+    registration, since the registered ones were chosen from all of them;
+  - members already holdout-tested are listed in its exposure statement (no UI label, as decided).
+  - `is_companion` keeps flip and combination companions out of the active-protocol lookups (campaigns, pool 2, Flip
+    scan, Mode B). Retiring or replacing the parent retires them.
+- **`Services.evaluate_combination_holdout`:**
+  - Every refusal is recorded before the test is spent: not registered, protocol retired, config changed, already
+    tested, budget used, a member's definition changed, a member's holdout dataset.
+  - Then one `holdout_access` row (strategy id = combination id) is granted.
+  - Each member runs on exactly the holdout bars (`entry_point="combination_holdout"`; the gate allows it only for a
+    granted combination access containing that logic hash) with its matched random-entry controls.
+    `random_entry_control(trades_out=)` returns the controls' trades; its default output is byte-identical.
+  - The results and control i of every member are merged with the same rule, and the unchanged `assess_holdout`
+    applies the criteria with the companion's family.
+  - Member runs are holdout runs (never shown as out-of-sample) but never a member's own holdout result
+    (`overview.combination_run_ids`).
+  - Afterwards a member's own holdout test is refused (`HOLDOUT_ALREADY_EVALUATED`), so a strategy's holdout is still
+    seen once.
+  - It runs as `ComboHoldoutJob` in the one-research-job JobManager. The search is a `ComboSearchJob` in its own slot,
+    on read-only connections, one core while a research job runs.
+- **`prop/lifecycle.py` speed (results byte-identical):** each trading day's trades are plain row tuples from one
+  `itertuples()` pass instead of a pandas group per day (`_ROW_GROUPS`; tests compare full results with the original
+  path for every profile). About 8× faster per lifecycle; backtest prop audits and the bootstrap benefit too.
+- **UI:** Strategies → Combinations (`web/src/pages/Combinations.tsx`):
+  - pool picker, "Find best combinations" (live progress), size filter, ranked list, "Build your own" (up to 5), saved
+    combinations, registration with typed confirmation;
+  - a detail panel with KPIs, a comparison with each member alone, the equity curve (holdout band after a test), results
+    by year with months, members (taken / skipped), the holdout test and its criteria;
+  - Settings → "Combinations: trades per week limit".
+- **Unchanged:** engine, fills, costs, sizing, compiler, prop rules, the strategies' own trial counting and holdout
+  gate, `configs/`, the Phase 1 demo.
