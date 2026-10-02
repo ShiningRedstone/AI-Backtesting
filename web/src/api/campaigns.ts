@@ -38,7 +38,7 @@ export interface CampaignSummary {
   prop_simulation: { enabled: boolean; profiles: { profile_id: string; version: number; profile_hash: string }[] };
   progress: ScopeProgress; error?: { code: string; message: string };
 }
-export interface CampaignListRow extends CampaignSummary { n_runs: number; latest_run: CampaignRunRecord | null }
+export interface CampaignListRow extends CampaignSummary { n_runs: number; latest_run: CampaignRunRecord | null; label?: string | null }
 export interface CampaignFamily {
   family_id: string; name: string; group: string | null; hypothesis: string | null; n_strategies: number;
   timeframes: Record<string, number>; completed: number; failed: number; remaining: number;

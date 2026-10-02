@@ -1,4 +1,4 @@
-"""Flip scan (ADR-87): the worst discovery results, flipped (fully mirrored) and tested again as NEW strategies.
+"""Flip scan (ADR-88): the worst discovery results, flipped (fully mirrored) and tested again as NEW strategies.
 
     preview -> read-only: which discovery results lose clearly BEFORE costs, which of them can be mirrored exactly,
                which mirrors would be new logic; nothing is saved, evaluated or counted
@@ -138,6 +138,7 @@ def select(svc, parent: Mapping, cap: int = DEFAULT_CAP) -> dict:
     res = discovery_results(svc, parent)
     neg = [r for r in res if r["clearly_negative"]]
     looked = {a["logic_hash"] for a in svc.store.list_holdout_access(parent["protocol_id"]) if a["status"] != "refused"}
+    exposed = rp.holdout_exposed(parent)                     # holdout-tested under an EARLIER protocol (pool switch)
     known = {r["strategy_id"] for r in svc.library.list(include_archived=True)}     # id = STR_ + logic hash prefix
     by_tf: dict[str, Mapping] = {}
     tried: set[str] = set()
@@ -159,7 +160,7 @@ def select(svc, parent: Mapping, cap: int = DEFAULT_CAP) -> dict:
             if tf not in tried:
                 tried.add(tf)
                 by_tf.update(C.resolve_datasets(svc, parent, {tf})[0])
-            if r["logic_hash"] in looked:
+            if r["logic_hash"] in looked or r["strategy_id"] in exposed:
                 row["skip"] = "HOLDOUT_TESTED"
             elif why is not None:
                 row["skip"] = why.code

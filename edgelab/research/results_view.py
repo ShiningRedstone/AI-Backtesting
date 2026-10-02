@@ -457,7 +457,7 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
     runs = by.get(strategy_id, [])
     ref = next((x["ref"] for x in rows if x["facets"]["strategy_id"] == strategy_id), None)
     risk = svc.risk_per_trade()["risk_per_trade_usd"]
-    if f.get("mirror_of"):                                   # ADR-87: a flip-scan mirror says so (names, never ids)
+    if f.get("mirror_of"):                                   # ADR-88: a flip-scan mirror says so (names, never ids)
         try:
             orig = ov.display_names(svc.library.load(f["mirror_of"]))["display_name"]
         except (KeyError, FileNotFoundError):

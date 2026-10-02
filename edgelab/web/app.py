@@ -166,7 +166,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, ProtocolRefusal):                   # ADR-56: machine-readable refusal code
             return jsonify({"error": {"kind": "protocol_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409
-        if isinstance(e, FlipError):                         # ADR-87: flip scan refusals (machine-readable code)
+        if isinstance(e, FlipError):                         # ADR-88: flip scan refusals (machine-readable code)
             return jsonify({"error": {"kind": "flip_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409 if e.code in ("FLIP_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
         if isinstance(e, SearchSpecError):
@@ -896,7 +896,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def holdout_cancel(jid):                        # stops BEFORE the next strategy; a granted test always finishes
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
-    # ------------------------------------------------------------------ flip scan (ADR-87)
+    # ------------------------------------------------------------------ flip scan (ADR-88)
     def _cap(x: Any) -> int | None:
         if x in (None, ""):
             return None
@@ -931,6 +931,26 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.post("/api/flips/jobs/<jid>/cancel")
     def flips_cancel(jid):                          # sets a flag; running cells finish and are recorded
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
+
+    # ------------------------------------------------------------------ strategy pool 2 (ADR-87)
+    @app.get("/api/pool2")
+    def pool2_status():
+        return jsonify(call(svc.pool2_status))
+
+    @app.post("/api/pool2/generate")
+    def pool2_generate():
+        return jsonify(call(svc.start_pool2_job, "generate")), 202
+
+    @app.post("/api/pool2/switch")
+    def pool2_switch():
+        conf = body().get("confirm")
+        if not isinstance(conf, str):
+            raise _bad("confirm must be the confirmation word")
+        return jsonify(call(svc.start_pool2_job, "switch", conf)), 202
+
+    @app.get("/api/pool2/jobs/<jid>")
+    def pool2_job(jid):                             # lock-free: in-memory job record
+        return jsonify(svc.pool2_job(_id(jid, JOB_ID, "job id")))
 
     @app.get("/api/research/searches")
     def research_searches():

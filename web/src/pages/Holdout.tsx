@@ -38,7 +38,7 @@ export function HoldoutPage() {
   const rows = cands.data?.rows ?? [];
   const protos = cands.data?.protocols ?? [];
   const p = cands.data?.protocol?.role === "flip" ? null : cands.data?.protocol ?? protos.find((x) => x.role !== "flip") ?? null;
-  const fp = protos.find((x) => x.role === "flip") ?? null;              // ADR-87: flipped survivors use their own tests
+  const fp = protos.find((x) => x.role === "flip") ?? null;              // ADR-88: flipped survivors use their own tests
   const fams = useMemo(() => [...new Map(rows.map((r) => [r.family_id ?? "", r.family_name ?? facetLabel("family_id", r.family_id)])).entries()], [rows]);
   const tfs = useMemo(() => [...new Set(rows.map((r) => r.timeframe ?? ""))].filter(Boolean), [rows]);
   const shown = useMemo(() => {

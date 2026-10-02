@@ -7,6 +7,7 @@ import type { CampaignDetail, CampaignJob, CampaignListRow, CampaignRunRecord, C
 import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, metricLabel, profileLabel, statusLabel, valueLabel } from "../app/labels";
 import { go, href, useRoute } from "../app/router";
+import { Pool2Panel } from "../components/pool2";
 import { plainText } from "../components/research";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, ReadOnly, TableWrap, TechDetails, fmt, n, r,
   shortTime } from "../components/ui";
@@ -71,18 +72,20 @@ function RunsHome() {
   const broken = list.data.filter((c) => c.error).map((c) => (
     <Card key={c.campaign_id} title="Research campaign"><Banner tone="error">{c.error!.message}</Banner>
       <TechDetails rows={[["Campaign id", <Mono>{c.campaign_id}</Mono>], ["Error code", <Mono>{c.error!.code}</Mono>]]} /></Card>));
-  const ok = [...list.data.filter((c) => !c.error)].sort((x, y) => lastRunAt(y).localeCompare(lastRunAt(x)));
-  if (!ok.length) return <div className="page" data-testid="runs-page">{head}<ActiveJobBanner />{broken}
+  const retired = (c: CampaignListRow) => (c.label ?? "").includes("retired") ? 1 : 0;      // ADR-87: active protocol first
+  const ok = [...list.data.filter((c) => !c.error)].sort((x, y) => retired(x) - retired(y) || lastRunAt(y).localeCompare(lastRunAt(x)));
+  const panel = <Pool2Panel onChanged={list.reload} />;
+  if (!ok.length) return <div className="page" data-testid="runs-page">{head}<ActiveJobBanner />{broken}{panel}
     <Empty>No frozen campaign in this workspace yet. Freeze one from the command line with the
       <Mono>research campaign-freeze</Mono> command (the strategy manifest and research protocol must exist first).</Empty></div>;
   const cur = ok.find((c) => c.campaign_id === route.query.get("campaign")) ?? ok[0];
   const switcher = ok.length > 1 ? (
     <select className="input" aria-label="research campaign" data-testid="campaign-switch" value={cur.campaign_id}
       onChange={(e: { target: HTMLSelectElement }) => go(`/runs?campaign=${e.target.value}`)}>
-      {ok.map((c) => <option key={c.campaign_id} value={c.campaign_id}>Research campaign · {fmt(c.manifest.n_strategies)} strategies ·
+      {ok.map((c) => <option key={c.campaign_id} value={c.campaign_id}>{c.label ?? "Research campaign"} · {fmt(c.manifest.n_strategies)} strategies ·
         {" "}{c.latest_run ? `last run ${shortTime(c.latest_run.created_at)}` : "no runs yet"}</option>)}
     </select>) : null;
-  return <CampaignPage key={cur.campaign_id} cid={cur.campaign_id} home={{ switcher, extra: broken }} />;
+  return <CampaignPage key={cur.campaign_id} cid={cur.campaign_id} home={{ switcher, extra: <>{broken}{panel}</> }} />;
 }
 
 function ActiveJobBanner({ except }: { except?: string } = {}) {
@@ -95,6 +98,8 @@ function ActiveJobBanner({ except }: { except?: string } = {}) {
     poll();
     return () => { live = false; window.clearTimeout(t); };
   }, []);
+  if (job && (job.kind as string) === "pool2" && !CAMPAIGN_JOB_FINAL.has(job.state))        // ADR-87
+    return <Banner tone="info" testId="active-job">Strategy pool 2 is being prepared — {plainText((job as unknown as { live: { phase: string } }).live.phase)}.</Banner>;
   if (job && (job.kind as string) === "holdout" && !CAMPAIGN_JOB_FINAL.has(job.state))      // ADR-85: one research job at a time
     return <Banner tone="info" testId="active-job">A holdout backtest is in progress; research runs can start when it is done.{" "}
       <a href={href(`/holdout?job=${job.job_id}`)}>Show progress ›</a></Banner>;

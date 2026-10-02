@@ -110,7 +110,12 @@ ADR-86: display round: amber survivors and size-capped grouping of overlapping s
 (`ui.theme` dark|light|system, `:root[data-theme="light"]` tokens), Home "Backtested trades" (`facts.trades_total`), top
 bar chips removed, Start paper trading default "Passed the holdout" (`paper_candidates(view=)`), HistData removed from the
 app and the default configs (a workspace's own configs are untouched).
-ADR-87: flip scan (Run backtest → Flip scan, `research/flips.py`, `strategy/mirror.py`): the parent protocol's discovery results
+ADR-87: strategy pool 2 (`strategy/factory_space_p2.py`: 25 new families + new variables for the 30 old ones, 6,000/4,000, risk sizing only,
+pool-1 logic excluded; `factory.generate(S=)` keeps pool 1 = FM_3B0B01CFC81AB15E byte-identical); 9 new indicators (`features/library/trend_extra.py`);
+`research/pool2.py` (Research runs: "Create strategy pool 2", then "Switch" typed SWITCH -> `create_protocol(replaces=)` 20,000 budget,
+holdout looks carried over, both pools frozen as sibling campaigns `protocol_siblings`).
+
+ADR-88: flip scan (Run backtest → Flip scan, `research/flips.py`, `strategy/mirror.py`): the parent protocol's discovery results
 that lose clearly BEFORE costs (30+ trades, 95% upper bound of gross R/trade < 0), fully mirrored (target <-> stop, stop <-> limit
 entries; trailing / no-progress / no-target refused by name), registered in ONE companion flip protocol per parent (role
 `flip_companion`, scope `...#flip`, own budget = the flips, own holdout looks, Bonferroni family = parent budget + flips);
@@ -158,7 +163,7 @@ remains. Do not rely on this file alone.
   - Home: system facts (strategies, stored runs, backtested trades, AI generations, datasets, version), latest results.
   - Strategies: Library, Families, Builder, Variations
   - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ranked best → worst
-    for prop trading on 8 discovery criteria with drawdown and negative months ×2), Flip scan (ADR-87). `/research` →
+    for prop trading on 8 discovery criteria with drawdown and negative months ×2), Flip scan (ADR-88). `/research` →
     `/runs`; job and result deep links still work.
   - Backtest results: Overview, Strategies explorer, Holdout results, All runs, Compare, Random controls, Candidate
     pipeline
@@ -313,11 +318,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..87.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..88.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..87, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..88, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -386,4 +391,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-87). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-88). Update `README.md` status for phases.

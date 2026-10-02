@@ -604,7 +604,7 @@ export interface HoldoutJob {
     outcome?: string | null; error?: string; code?: string | null }[];
 }
 
-/** ADR-87 flip scan (Run backtest → Flip scan). */
+/** ADR-88 flip scan (Run backtest → Flip scan). */
 export interface FlipSelectionRow {
   strategy_id: string; run_id: string; display_name: string | null; family_id: string | null; family_name: string | null;
   timeframe?: string | null; trades: number; gross_r_per_trade: number | null; gross_upper_bound: number | null;

@@ -2182,7 +2182,70 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   `histdata_4year_sets.patch` stays untouched by rule.
 - **Unchanged:** the engine, results, survivor rule, prop rules, trial counting and the holdout gate.
 
-### ADR-87 Flip scan: full mirrors of the worst discovery results under a companion flip protocol
+### ADR-87 Strategy pool 2 (second 10,000) and one 20,000-trial protocol for both pools
+- **Why.** The user asked for a second pool of 10,000 strategies, a mix of new families and new variables, with the existing
+  10,000 unchanged and the new ones imported into the app. Choices made by the user before any code (none from results):
+  - split 6,000 new families / 4,000 existing families with new variables, equal shares per family;
+  - risk-based sizing only;
+  - the same five timeframes;
+  - new indicators allowed;
+  - one protocol whose declared budget is 20,000 for both pools (pool 1 is re-run under it);
+  - same dataset, dates, costs and holdout-look budget, with looks already used carried over;
+  - two steps in the app (create, then a typed-confirmation switch).
+- **Pool 1 is untouched.** `factory.py` takes the variation space as a parameter (`S=`, default `factory_space`). The pool-1
+  call shape is unchanged (`kw = {}` for pool 1), and every new branch reads a hook that only the pool-2 space defines
+  (`EXTRA_ORDER_TYPES`, `choice_refs`, `regime_cond_for`, `stop_level_ext`, `target_level_ext`, `extra_checks`,
+  `capability_matrix`, `POOL`, `FACTORY_VERSION`, `REGENERATE`). `factory.generate()` still gives FM_3B0B01CFC81AB15E, and
+  a byte comparison of header, strategies, rejections and duplicates against the previous code is identical
+  (`tests/test_strategy_pool2.py::TestPool1Unchanged`).
+- **Pool 2 space (`strategy/factory_space_p2.py`, `edgelab-dt-space-pool2/1`, seed 20261002).**
+  - 25 new families (31-55). From existing indicators: pivot points (classic/Camarilla, trading day or RTH), Larry Williams
+    / Dual Thrust (the max of two levels expressed exactly as a cross of both), opening gap fade/go, inside bar / hikkake,
+    candlestick reversals, IBS, Double Sevens, Turtle Soup (the "old extreme at least 4 bars ago" rule exactly via two
+    Donchian windows), Keltner breakout, Bollinger-inside-Keltner squeeze, MA ribbon, MACD histogram turn, Fibonacci
+    pullback, Elder Ray, intraday momentum (Gao et al. 2018), ICT time models (silver bullet, Judas swing / midnight open,
+    London-close reversal), consecutive closes. From new indicators: Supertrend, Parabolic SAR, Ichimoku, CCI, RSI
+    divergence, previous-week high/low, Hull/KAMA, Heikin-Ashi.
+  - The 30 existing families get the new values, and each pool-2 variant of them must use at least one
+    (`POOL2_NO_NEW_VARIABLE`). New values:
+    - sessions: 10-11 NY, NY lunch, last 30 min, London close, NY evening;
+    - references: Asian range in NY time, first hour;
+    - filters: 200 SMA, above prior close, open inside/outside the prior RTH range, large/small RTH gap, wide/narrow first
+      hour vs 60-minute ATR;
+    - stops: percent of price, standard deviations, ORB range midpoint;
+    - targets: prior RTH close, classic pivot R1/S1, Fibonacci extension, midnight open, ORB range extension;
+    - entries: resting stop beyond the signal bar, limit at 50 % of it, 2-bar delay;
+    - time exits 15 / 90 min, and a 240m higher-timeframe filter.
+  - Filters and targets that read a session only exist inside it, so they are refused outside their window
+    (`FILTER_NEEDS_RTH_ENTRY`, `FILTER_NEEDS_COMPLETED_FIRST_HOUR`, `TARGET_NEEDS_MIDNIGHT_SESSION`). Order types that
+    contradict a variant (a buy stop for a fade) are refused.
+  - Every pool-1 logic hash is excluded and recorded as a duplicate of the earlier pool. The manifest identity records
+    `pool` and `excluded_pool` (the pool-1 manifest id plus a hash of its logic set).
+- **New indicators (`features/library/trend_extra.py`).** `supertrend`, `psar`, `ichimoku`, `cci`, `divergence`,
+  `weekly_levels`, `hma`, `kama`, `heikin_ashi`. They are causal: the registry-wide truncation test covers them, plus
+  `tests/test_features_pool2.py` (non-default parameters and known answers against direct implementations). Existing
+  features are unchanged.
+- **Workspace flow (`research/pool2.py`, `PoolJob`, `/api/pool2*`, Research runs panel).**
+  - `generate` reads the pool-1 manifest of the campaign under the active protocol, generates pool 2, writes it and
+    checks it. No data, no protocol access.
+  - `switch` (word SWITCH) first checks the config, both manifests and that every row resolves on the old campaign's
+    datasets. Then `create_protocol(..., replaces=old)` retires the old protocol (never edited) and activates one with
+    the same material except: trial budget 20,000, holdout looks = old budget minus looks used, and an exposure
+    statement plus prior exposure listing the old holdout runs. The material is built exactly as without `replaces`.
+  - It then freezes both pools with `protocol_siblings`. Each sibling's trials are accounted (not foreign) in
+    `campaign.ledger` and the preflight, and the budget must cover all siblings.
+  - A half-finished switch completes on the next click.
+  - `holdout_exposed(protocol)`: strategies already looked at under the old protocol are refused by the gate
+    (`HOLDOUT_ALREADY_EVALUATED`) and shown as not eligible.
+  - The campaign switcher shows "Strategy pool 1/2" (and "(retired protocol)").
+- **Known limitations.** The real pool 2 can only be generated in the user's workspace (it excludes their pool-1
+  manifest), so its manifest id is known only there. The preflight still refuses a campaign run once its protocol has a
+  holdout access, so both pools must finish discovery before the first holdout backtest under the new protocol.
+  Synthetic data cannot show how often the new filters trigger on real NQ (e.g. "wide first hour" never fired there).
+- **Unchanged:** the engine, fills, costs, sizing, compiler, DSL, prop rules, protocol criteria and the trial key; pool 1's
+  manifest, campaign and results.
+
+### ADR-88 Flip scan: full mirrors of the worst discovery results under a companion flip protocol
 - **Question (user):** can the worst strategies be flipped (buy ↔ sell) and checked for passing an evaluation with a
   payout? Decisions the user made: a *full mirror*, only strategies that lose *clearly before costs*, a *companion flip
   protocol*, at most 200 flips per scan.
@@ -2211,8 +2274,10 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   registered flip (any status; the gate refuses a retired one) and the parent otherwise, so a flip is governed by the
   flip protocol wherever it is evaluated (single backtest, search cell, holdout, random control) and never by the parent.
   `plan_search` passes the plan's logic hashes; flips and other strategies never share one search (`PROTOCOL_MISMATCH`).
-  Campaigns and Mode B attempts ignore flip protocols; retiring a parent retires its flip protocol. Searches without
-  flips keep their protocol id and search id (identities unchanged).
+  Campaigns, Mode B attempts and strategy pool 2 (ADR-87) ignore flip protocols; retiring a parent, or replacing it
+  through the pool-2 switch (`create_protocol(replaces=)`), retires its flip protocol, and the scan also skips
+  strategies holdout-tested under an earlier protocol (`holdout_exposed`). Searches without flips keep their protocol
+  id and search id (identities unchanged).
 - **Run:** the registered flips go through the normal `batch.run_search` → `Services._run_cell` path (engine, costs,
   fills, prop audit, trial ledger), one trial each, Settings CPU cores, resumable, as a `FlipJob` in the
   one-research-job-at-a-time JobManager. Flipped strategies are saved with lineage `generation_method: mirror`

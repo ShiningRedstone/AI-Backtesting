@@ -85,13 +85,13 @@ def protocol_summary(p: Mapping | None, used: int) -> dict | None:
     h = mat["windows"]["holdout"]
     from edgelab.research.protocol import is_flip
     return {"protocol_id": p["protocol_id"], "name": mat.get("name"), "looks_used": used, "looks_budget": budget,
-            "role": "flip" if is_flip(p) else "research",                                      # ADR-87
+            "role": "flip" if is_flip(p) else "research",                                      # ADR-88
             "looks_left": max(0, budget - used), "holdout_trading_dates": h["trading_dates"],
             "holdout_first_bar": h["first_bar"], "holdout_last_bar": h["last_bar"]}
 
 
 def _protocol_of(svc, ref: Mapping, logic_hash: str | None = None) -> dict | None:
-    """The protocol that governs this strategy on the run's data (ADR-87: a registered flip -> its flip protocol)."""
+    """The protocol that governs this strategy on the run's data (ADR-88: a registered flip -> its flip protocol)."""
     try:
         return svc._governing_protocol(ref.get("instrument"), ref.get("provider"), logic_hash=logic_hash)
     except Exception:                                        # noqa: BLE001 - a store without protocol tables
@@ -139,8 +139,10 @@ def candidates(svc) -> dict:
 
 
 def _ledger(svc, pid: str) -> dict:
+    from edgelab.research.protocol import holdout_exposed
     return {"access": svc.store.list_holdout_access(pid), "trials": svc.store.list_trial_events(pid),
-            "batches": {b["search_id"]: b for b in svc.store.list_search_batches()}}
+            "batches": {b["search_id"]: b for b in svc.store.list_search_batches()},
+            "exposed": holdout_exposed(svc.store.get_protocol(pid))}
 
 
 def _logic_hash(svc, sid: str) -> str | None:
@@ -162,6 +164,9 @@ def _eligibility(svc, row: Mapping, facets: Mapping, led: Mapping | None) -> dic
         return {"eligible": False, "reason": "already holdout-tested (one test per strategy)", "search_id": a["search_id"],
                 "tested": {"access_id": a["access_id"], "status": a["status"], "run_id": a.get("run_id"),
                            "outcome": res.get("outcome"), "created_at": a.get("created_at")}}
+    if row["strategy_id"] in led.get("exposed", ()):
+        return {"eligible": False, "search_id": None, "tested": None,
+                "reason": "already holdout-tested under an earlier protocol (one test per strategy)"}
     searches = [e["search_id"] for e in led["trials"] if e["counted"] and e["logic_hash"] == lh and e.get("search_id")
                 and (led["batches"].get(e["search_id"]) or {}).get("protocol_id") == row["protocol_id"]]
     if not searches:

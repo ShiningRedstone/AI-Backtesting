@@ -17,14 +17,21 @@ Conventions for every feature:
 | `atr_regime` | 1 | volatility | - | bar_close | yes | Volatility regime: trailing percentile rank of ATR. |
 | `bollinger` | 1 | volatility | - | bar_close | yes | Bollinger bands, rolling z-score and bandwidth rank (squeeze). |
 | `candle` | 1 | price_action | - | bar_close | yes | Single-bar anatomy: body, range, wicks, gap. |
+| `cci` | 1 | momentum | - | bar_close | yes | Lambert's Commodity Channel Index. |
 | `daily_levels` | 1 | session | - | bar_close | yes | Trading-date levels from the dataset's exchange calendar. |
 | `daily_nr` | 1 | structure | - | bar_close | yes | Session-level NR7: was the previous trading date the narrowest of the last n? |
+| `divergence` | 1 | momentum | - | bar_close | yes | Regular RSI divergence between the last two confirmed price pivots. |
 | `donchian` | 1 | structure | - | bar_close | yes | Donchian channel of the n bars BEFORE t (a close beyond it is a breakout). |
 | `ema` | 1 | trend | - | bar_close | yes | Exponential moving average of close, SMA-seeded. |
 | `fvg` | 1 | structure | - | bar_close | yes | Three-candle fair value gaps with partial/full fill tracking. |
+| `heikin_ashi` | 1 | trend | - | bar_close | yes | Heikin-Ashi candles, their direction and run length. |
+| `hma` | 1 | trend | - | bar_close | yes | Hull moving average (low-lag weighted average). |
+| `ichimoku` | 1 | trend | - | bar_close | yes | Ichimoku Kinko Hyo: conversion/base lines and the cloud at the current bar. |
+| `kama` | 1 | trend | - | bar_close | yes | Kaufman adaptive moving average and efficiency ratio. |
 | `macd` | 1 | momentum | - | bar_close | yes | MACD line, signal line and histogram (SMA-seeded EMAs). |
 | `narrow_range` | 1 | volatility | - | bar_close | yes | Narrow-range bar (NR4 / NR7 ...). |
 | `order_block` | 1 | structure | - | bar_close | yes | Order blocks (last opposite candle before a displacement that breaks structure) and breaker blocks (failed order blocks that flip polarity). |
+| `psar` | 1 | trend | - | bar_close | yes | Wilder Parabolic SAR (stop-and-reverse). |
 | `range_stats` | 1 | structure | - | bar_close | yes | Displacement, range expansion and consolidation, normalised by ATR. |
 | `roc` | 1 | momentum | - | bar_close | yes | Rate of change and raw momentum over n bars. |
 | `rsi` | 1 | momentum | - | bar_close | yes | Relative Strength Index, Wilder smoothing. |
@@ -32,10 +39,12 @@ Conventions for every feature:
 | `session` | 1 | session | - | bar_close | yes | Session window membership, running session levels, previous session levels. |
 | `sma` | 1 | trend | - | bar_close | yes | Simple moving average of close. |
 | `stoch` | 1 | momentum | - | bar_close | yes | Stochastic oscillator %K / %D. |
+| `supertrend` | 1 | trend | - | bar_close | yes | Supertrend: ATR bands around the bar midpoint that ratchet with the trend and flip on a close through. |
 | `swings` | 1 | structure | - | bar_close | yes | Fractal swings (confirmed only), break of structure, liquidity sweeps, structure trend. |
 | `time_of_day` | 1 | session | - | bar_open | yes | Local clock and weekday of each bar (for trading windows and weekday filters). |
 | `volume_stats` | 1 | volume | volume | bar_close | yes | Relative volume, z-score and percentile rank versus recent bars. |
 | `vwap` | 1 | volume | volume | bar_close | yes | Anchored volume-weighted average price with standard deviation. |
+| `weekly_levels` | 1 | session | - | bar_close | yes | Trading-week levels (weeks of calendar trading dates, Monday-based). |
 
 ## `adx` (version 1)
 
@@ -171,6 +180,29 @@ Single-bar anatomy: body, range, wicks, gap.
 | `direction` | sign(C - O): +1 / 0 / -1 |
 | `gap` | O_t - C_{t-1} (previous bar in the dataset, including across sessions) |
 
+## `cci` (version 1)
+
+Lambert's Commodity Channel Index.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n - 1 bars
+- **Depends on:** -
+- **Implementation hash:** `2b2546a4cc4110ac`
+
+**Calculation.** TP = (H+L+C)/3; CCI = (TP - SMA_n(TP)) / (0.015 * mean absolute deviation of the last n TP from their SMA), window incl. bar t.
+
+**Edge cases.** NaN before bar n-1; 0 when the deviation is 0 (flat window).
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `20` | >= 1 | window n |
+
+| output | meaning |
+|---|---|
+| `cci` | Commodity Channel Index (typically -300..300) |
+
 ## `daily_levels` (version 1)
 
 Trading-date levels from the dataset's exchange calendar.
@@ -221,6 +253,34 @@ Session-level NR7: was the previous trading date the narrowest of the last n?
 |---|---|
 | `prev_is_nr` | 1 if the last COMPLETED trading date's range is strictly below the ranges of the n-1 completed dates before it, else 0 |
 | `prev_range` | high - low of the last completed trading date |
+
+## `divergence` (version 1)
+
+Regular RSI divergence between the last two confirmed price pivots.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** rsi_period + left + right bars
+- **Depends on:** -
+- **Implementation hash:** `18fb11ded7347591`
+
+**Calculation.** A pivot low at q: L_q below the `left` previous lows and <= the `right` following lows; it is known only at bar q + right. When a new pivot low is confirmed and the previous pivot low is at most max_gap bars earlier, a lower price low with a higher RSI is a bullish divergence (event at the confirmation bar). Pivot highs mirrored for bearish divergence.
+
+**Edge cases.** Only confirmed pivots are used; the event is late by `right` bars by design (no lookahead).
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `rsi_period` | int | `14` | >= 1 | RSI length |
+| `left` | int | `3` | >= 1 | bars left of a pivot |
+| `right` | int | `2` | >= 1 | bars right of a pivot (confirmation delay) |
+| `max_gap` | int | `50` | >= 1 | most bars between the two pivots |
+
+| output | meaning |
+|---|---|
+| `bull` | 1 on the bar a regular bullish divergence is CONFIRMED (price lower low, RSI higher low) |
+| `bear` | 1 on the bar a regular bearish divergence is confirmed (price higher high, RSI lower high) |
+| `rsi` | the RSI used |
 
 ## `donchian` (version 1)
 
@@ -320,6 +380,116 @@ Three-candle fair value gaps with partial/full fill tracking.
 | `bear_fill` | deepest penetration so far / size, 0..1 (1 = reached the far edge) |
 | `bear_dist` | bull: C - top; bear: bottom - C (>0: price outside the gap on the side it was left; <=0: inside/through) |
 
+## `heikin_ashi` (version 1)
+
+Heikin-Ashi candles, their direction and run length.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** 0 bars (a few bars until the recursion forgets the seed)
+- **Depends on:** -
+- **Implementation hash:** `b7784eb5011f2c71`
+
+**Calculation.** ha_close = (O+H+L+C)/4; ha_open_0 = (O_0+C_0)/2, ha_open_t = (ha_open_{t-1} + ha_close_{t-1})/2; ha_high/low = extremes of H/L and the HA open/close.
+
+**Edge cases.** Starts at the first bar of the data given (recursive like an EMA).
+
+| output | meaning |
+|---|---|
+| `ha_open` | Heikin-Ashi open |
+| `ha_close` | Heikin-Ashi close = (O+H+L+C)/4 |
+| `ha_high` | max(H, ha_open, ha_close) |
+| `ha_low` | min(L, ha_open, ha_close) |
+| `direction` | +1 bullish / -1 bearish / 0 HA candle |
+| `streak` | signed count of consecutive same-direction HA candles (0 on a doji) |
+| `no_lower_wick` | 1 on a bullish HA candle without a lower wick |
+| `no_upper_wick` | 1 on a bearish HA candle without an upper wick |
+
+## `hma` (version 1)
+
+Hull moving average (low-lag weighted average).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n + floor(sqrt(n)) - 2 bars
+- **Depends on:** -
+- **Implementation hash:** `2c0a3d51d754e042`
+
+**Calculation.** HMA = WMA_{floor(sqrt n)}( 2*WMA_{floor(n/2)}(C) - WMA_n(C) ); WMA weights 1..k (newest heaviest).
+
+**Edge cases.** NaN before bar n + floor(sqrt n) - 2.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `20` | >= 2 | length n |
+
+| output | meaning |
+|---|---|
+| `hma` | Hull moving average of close |
+| `slope` | hma_t - hma_{t-1} |
+
+## `ichimoku` (version 1)
+
+Ichimoku Kinko Hyo: conversion/base lines and the cloud at the current bar.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** senkou_b + displacement - 1 bars
+- **Depends on:** -
+- **Implementation hash:** `fe31f743cd074df6`
+
+**Calculation.** Tenkan/Kijun/Span B = midpoint of the high-low range over their lengths, INCLUDING bar t. Span A = (Tenkan + Kijun)/2. The cloud under bar t = spans computed `displacement` bars earlier (the cloud plotted ahead is only ever read at the bar it is plotted under). The lagging span is the close compared with the close `kijun` bars ago (use a lagged close; no extra output).
+
+**Edge cases.** NaN until each window is full; the cloud needs senkou_b + displacement - 1 bars.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `tenkan` | int | `9` | >= 1 | conversion line length |
+| `kijun` | int | `26` | >= 1 | base line length |
+| `senkou_b` | int | `52` | >= 1 | leading span B length |
+| `displacement` | int | `26` | >= 0 | bars the cloud is plotted ahead |
+
+| output | meaning |
+|---|---|
+| `tenkan` | (highest high + lowest low) / 2 over the last `tenkan` bars incl. t |
+| `kijun` | the same over the last `kijun` bars |
+| `cloud_a` | leading span A as it stands UNDER bar t (computed `displacement` bars ago) |
+| `cloud_b` | leading span B as it stands under bar t |
+| `cloud_top` | max(cloud_a, cloud_b) |
+| `cloud_bottom` | min(cloud_a, cloud_b) |
+| `span_a_lead` | span A computed now (plotted `displacement` bars ahead) |
+| `span_b_lead` | span B computed now (plotted `displacement` bars ahead) |
+
+## `kama` (version 1)
+
+Kaufman adaptive moving average and efficiency ratio.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** n bars
+- **Depends on:** -
+- **Implementation hash:** `c2d37f4a98e57a57`
+
+**Calculation.** ER = |C_t - C_{t-n}| / sum of |C_i - C_{i-1}| over the last n bars; SC = (ER*(2/(fast+1) - 2/(slow+1)) + 2/(slow+1))^2; KAMA seeded with C_{n-1}, then KAMA_t = KAMA_{t-1} + SC*(C_t - KAMA_{t-1}).
+
+**Edge cases.** NaN before bar n-1 (KAMA) / n (ER, slope). ER = 0 for a flat window.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `10` | >= 1 | efficiency-ratio length n |
+| `fast` | int | `2` | >= 1 | fast length |
+| `slow` | int | `30` | >= 1 | slow length |
+
+| output | meaning |
+|---|---|
+| `kama` | Kaufman adaptive moving average of close |
+| `slope` | kama_t - kama_{t-1} |
+| `er` | efficiency ratio 0..1 (1 = straight-line move) |
+
 ## `macd` (version 1)
 
 MACD line, signal line and histogram (SMA-seeded EMAs).
@@ -416,6 +586,32 @@ Order blocks (last opposite candle before a displacement that breaks structure) 
 | `brk_bear_bottom` | bottom of that bear breaker block zone |
 | `brk_bear_age` | bars since that bear breaker block formed |
 | `brk_bear_new` | 1 on the bar a bear breaker block forms (known at its close) |
+
+## `psar` (version 1)
+
+Wilder Parabolic SAR (stop-and-reverse).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** 2 bars
+- **Depends on:** -
+- **Implementation hash:** `4e65143453ec80de`
+
+**Calculation.** Initial phase from close_1 vs close_0, SAR = extreme of the first two bars. Each bar: if its range touches the SAR the phase reverses (SAR = previous extreme point, AF = step); otherwise a new extreme raises AF by step up to max_step. Next SAR = SAR + AF*(EP - SAR), never inside the last two bars' range.
+
+**Edge cases.** NaN for bar 0. Starts at the first bar of the data given.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `step` | float | `0.02` | >= 0 | acceleration step |
+| `max_step` | float | `0.2` | >= 0 | maximum acceleration |
+
+| output | meaning |
+|---|---|
+| `sar` | the SAR level that applies to the NEXT bar, computed at the close of bar t |
+| `direction` | +1 long phase / -1 short phase after bar t |
+| `flip` | +1 on the bar the phase turns long, -1 when it turns short, else 0 |
 
 ## `range_stats` (version 1)
 
@@ -596,6 +792,32 @@ Stochastic oscillator %K / %D.
 | `k` | %K = 100 (C - LL_k) / (HH_k - LL_k) |
 | `d` | SMA_d of %K |
 
+## `supertrend` (version 1)
+
+Supertrend: ATR bands around the bar midpoint that ratchet with the trend and flip on a close through.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** period - 1 bars (plus a few bars until the first flip is meaningful)
+- **Depends on:** -
+- **Implementation hash:** `0c658a2c06eca253`
+
+**Calculation.** hl2 = (H+L)/2; basic bands hl2 -/+ multiplier*ATR. Final lower band = max(basic, previous final) while the previous close stayed above the previous final lower band (else reset to basic); the upper band mirrored. Direction turns down when the close is below the final lower band and up when it is above the final upper band. The first defined bar starts in the up direction.
+
+**Edge cases.** NaN before bar period-1 (ATR warm-up). Starts with direction +1 at the first defined bar.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `period` | int | `10` | >= 1 | ATR length (Wilder) |
+| `multiplier` | float | `3.0` | >= 0 | band distance in ATRs |
+
+| output | meaning |
+|---|---|
+| `supertrend` | the active band: lower band in an up direction, upper band in a down direction |
+| `direction` | +1 up / -1 down after the close of bar t |
+| `flip` | +1 on the bar the direction turns up, -1 when it turns down, else 0 |
+
 ## `swings` (version 1)
 
 Fractal swings (confirmed only), break of structure, liquidity sweeps, structure trend.
@@ -704,3 +926,28 @@ Anchored volume-weighted average price with standard deviation.
 | `vwap_std` | volume-weighted std of TP since anchor |
 | `dist` | C_t - VWAP_t |
 | `dist_std` | (C_t - VWAP_t) / vwap_std |
+
+## `weekly_levels` (version 1)
+
+Trading-week levels (weeks of calendar trading dates, Monday-based).
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** one completed week for prev_*
+- **Depends on:** -
+- **Implementation hash:** `c3a75af59eaf0cb6`
+
+**Calculation.** Week = the Monday-based calendar week of each bar's TRADING DATE (dataset calendar). A week is complete at the scheduled session close of its last scheduled trading weekday; previous = latest completed week at the bar's close.
+
+**Edge cases.** A holiday on the last weekday does not end the week early: its levels appear only after that weekday's scheduled close (conservative, never early).
+
+| output | meaning |
+|---|---|
+| `week_open` | open of the current trading week |
+| `week_high` | running high of the week incl. bar t |
+| `week_low` | running low of the week incl. bar t |
+| `prev_week_open` | previous completed trading week: open |
+| `prev_week_high` | previous completed trading week: high |
+| `prev_week_low` | previous completed trading week: low |
+| `prev_week_close` | previous completed trading week: close |

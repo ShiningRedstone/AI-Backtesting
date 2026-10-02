@@ -721,7 +721,11 @@ class Services:
 
     def factory_verify(self, manifest_id: str) -> dict:
         from edgelab.strategy import factory
-        return _jsonable(factory.verify(self._factory_manifest_dir(manifest_id)))
+        d = self._factory_manifest_dir(manifest_id)
+        if (factory.read_header(d)["identity"].get("pool") or {}).get("pool") == 2:      # ADR-87: pool 2 excludes pool 1
+            from edgelab.research import pool2
+            return _jsonable(pool2.verify(self, manifest_id))
+        return _jsonable(factory.verify(d))
 
     def generate_variations(self, base: Any, spec: Any, save: bool = True) -> dict:
         from edgelab.strategy.variations import generate_variations
@@ -925,8 +929,10 @@ class Services:
     # ------------------------------------------------------------ desktop research runs (ADR-69): control layer only
     def campaigns(self) -> list[dict]:
         """Frozen campaigns of this workspace with durable progress and latest run (read-only)."""
-        from edgelab.research import campaign
-        return _jsonable(campaign.list_campaigns(self))
+        from edgelab.research import campaign, pool2
+        rows = campaign.list_campaigns(self)
+        labels = pool2.run_names(self)                   # ADR-87: "Strategy pool 1/2" (+ retired protocol); display only
+        return _jsonable([{**r, "label": labels.get(r["campaign_id"])} for r in rows])
 
     def campaign_detail(self, campaign_id: str) -> dict:
         from edgelab.research import campaign
@@ -1770,7 +1776,7 @@ class Services:
     def _governing_protocol(self, instrument: str, provider: str, logic_hash: str | None = None) -> dict | None:
         """The ACTIVE protocol of an instrument/provider (verified against its identity), or None.
         Protocol storage is SQLite-only like search storage; other backends have no protocols.
-        ADR-87: with ``logic_hash``, a strategy registered in the flip companion of that protocol is governed by the
+        ADR-88: with ``logic_hash``, a strategy registered in the flip companion of that protocol is governed by the
         companion (whatever its status; the gate refuses a retired one), never by the parent."""
         if getattr(self.store, "backend", None) != "sqlite":
             return None
@@ -1786,7 +1792,7 @@ class Services:
         return act[0]
 
     def _flip_protocols(self, parent: Mapping) -> list[dict]:
-        """Flip companion protocols of a parent (ADR-87), any status, oldest first."""
+        """Flip companion protocols of a parent (ADR-88), any status, oldest first."""
         from edgelab.research.protocol import FLIP_SCOPE_SUFFIX
         sc = parent["material"]["scope"]
         key = self._scope_key(sc["instrument"], sc["provider"]) + FLIP_SCOPE_SUFFIX
@@ -1804,13 +1810,16 @@ class Services:
     def create_protocol(self, dataset_id: str, discovery: tuple, holdout: tuple, *, name: str = "",
                         pre_protocol_exposure: list | tuple = (), exposure_statement: str = "",
                         trial_budget: int | None = None, holdout_looks: int | None = None,
-                        supersedes: str | None = None) -> dict:
+                        supersedes: str | None = None, replaces: str | None = None) -> dict:
         """Create and ACTIVATE a research protocol (immutable; see research/protocol.py). Windows are
         trading dates on the dataset's calendar. `pre_protocol_exposure` lists run ids made before
         activation (recorded by identity only - never metrics, never re-attributed as trials).
         `supersedes` (ADR-67): the ACTIVE protocol of the same scope is replaced by this new one - allowed ONLY
         while it is unused (zero trial events, zero holdout accesses); it is retired (never edited) and the new
-        material records its id. The new record is fully built and validated before anything is retired."""
+        material records its id. The new record is fully built and validated before anything is retired.
+        `replaces` (ADR-87): the ACTIVE protocol of the same scope is retired (never edited) and this one activated even
+        though it HAS been used; the history must be documented in `exposure_statement` / `pre_protocol_exposure` (the
+        material itself is built exactly as without this argument). Used by the strategy-pool-2 switch."""
         from edgelab.core.identity import code_version, hash_obj
         from edgelab.engine.costs import cost_model_from_config
         from edgelab.research import protocol as rp
@@ -1854,6 +1863,20 @@ class Services:
             if rec["protocol_id"] == supersedes:
                 raise rp.ProtocolRefusal("PROTOCOL_SUPERSEDE_INVALID", "the new material equals the old one")
             active = []                                  # retired below, only after every check has passed
+        if replaces is not None:
+            if supersedes is not None:
+                raise rp.ProtocolRefusal("PROTOCOL_SUPERSEDE_INVALID", "use either supersedes or replaces")
+            old = self.store.get_protocol(replaces)                       # KeyError: unknown protocol
+            rp.verify_record(old)
+            if not active or active[0]["protocol_id"] != replaces:
+                raise rp.ProtocolRefusal("PROTOCOL_REPLACE_INVALID", "only the ACTIVE protocol of this scope can be "
+                                         "replaced", protocol_id=replaces, scope=key)
+            if rec["protocol_id"] == replaces:
+                raise rp.ProtocolRefusal("PROTOCOL_REPLACE_INVALID", "the new material equals the old one")
+            if not str(exposure_statement).strip():
+                raise rp.ProtocolRefusal("PROTOCOL_REPLACE_INVALID", "replacing a used protocol needs an exposure "
+                                         "statement documenting its history")
+            active = []                                  # retired below, only after every check has passed
         if active and active[0]["protocol_id"] != rec["protocol_id"]:
             raise rp.ProtocolRefusal("PROTOCOL_ALREADY_ACTIVE", f"{active[0]['protocol_id']} is ACTIVE for {key}; "
                                      "retire it explicitly before activating another protocol",
@@ -1866,6 +1889,10 @@ class Services:
             pass
         if supersedes is not None:
             self.store.retire_protocol(supersedes)
+        if replaces is not None:
+            self.store.retire_protocol(replaces)
+            for c in self._flip_protocols(old):              # ADR-88: its flip protocol belongs to the replaced study
+                self.store.retire_protocol(c["protocol_id"])
         created = self.store.save_protocol(rec, key)
         return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
 
@@ -1878,7 +1905,7 @@ class Services:
     def list_protocols(self) -> list[dict]:
         return _jsonable([{k: r[k] for k in ("protocol_id", "status", "created_at")} | {
             "scope": r["material"]["scope"], "name": r["material"]["name"],
-            "role": r["material"].get("role") or "research",                                   # ADR-87
+            "role": r["material"].get("role") or "research",                                   # ADR-88
             "parent_protocol_id": (r["material"].get("parent") or {}).get("protocol_id"),
             "protocol_version": r["material"].get("protocol_version"),
             "source_dataset_id": r["material"]["source_dataset"]["dataset_id"],
@@ -1888,7 +1915,7 @@ class Services:
 
     def retire_protocol(self, protocol_id: str) -> dict:
         """ACTIVE -> RETIRED (the only lifecycle change; material and ledgers are kept unchanged). Retiring a protocol
-        also retires its flip companion (ADR-87), which only exists inside the parent's study."""
+        also retires its flip companion (ADR-88), which only exists inside the parent's study."""
         p = self.store.get_protocol(protocol_id)
         self.store.retire_protocol(protocol_id)
         from edgelab.research.protocol import is_flip
@@ -1947,7 +1974,7 @@ class Services:
                    "counted trials)" if declared else
                    "; alpha shrinks with every counted unique trial (family_size) and is recomputed at evaluation time"))},
             "supersedes": mat.get("supersedes"),
-            "role": mat.get("role") or "research", "parent": mat.get("parent"),                    # ADR-87
+            "role": mat.get("role") or "research", "parent": mat.get("parent"),                    # ADR-88
             "pre_protocol_exposure": mat["pre_protocol_exposure"]})
 
     def _protocol_gate(self, ds, strat, entry_point: str, holdout_access_id: str | None) -> dict | None:
@@ -1962,7 +1989,7 @@ class Services:
                                          dataset_id=m.dataset_id)
             return None
         pid, mat = p["protocol_id"], p["material"]
-        if p["status"] != "ACTIVE":                      # ADR-87: a registered flip of a retired flip protocol
+        if p["status"] != "ACTIVE":                      # ADR-88: a registered flip of a retired flip protocol
             raise rp.ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "this flipped strategy is governed by its flip protocol, "
                                      "which is retired", protocol_id=pid, strategy_id=strat.compiled.identity.strategy_id)
         if self._config_hash() != mat["config_hash"]:
@@ -2085,7 +2112,7 @@ class Services:
 
     def _protocol_plan_check(self, manifests: list, period: Mapping | None,
                              logic_hashes: list[str] | None = None) -> str | None:
-        """plan_search hook: every governed dataset must be searched inside the discovery window. ADR-87: a search of
+        """plan_search hook: every governed dataset must be searched inside the discovery window. ADR-88: a search of
         registered flipped strategies is governed by their flip protocol (same windows); flips and other strategies
         never share one search."""
         pids = set()
@@ -2135,7 +2162,7 @@ class Services:
         now = datetime.now(timezone.utc).isoformat()
         from edgelab.research.protocol import is_flip
         for p in self.store.list_protocols(status="ACTIVE"):
-            if is_flip(p):                               # ADR-87: a flip protocol only holds its registered flips
+            if is_flip(p):                               # ADR-88: a flip protocol only holds its registered flips
                 continue
             for i, a in enumerate(rep.accepted):
                 sid = a.get("strategy_id") if isinstance(a, Mapping) else a
@@ -2167,7 +2194,7 @@ class Services:
     def holdout_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.holdout_status(job_id))
 
-    # ------------------------------------------------------------ flip scan (ADR-87)
+    # ------------------------------------------------------------ flip scan (ADR-88)
     def flip_scan(self, protocol_id: str | None = None, cap: int | None = None) -> dict:
         """The Flip scan page (read-only): the active protocol's flip protocol and its results, or a preview of the
         flips a scan would create (worst clearly-negative-before-costs discovery results that can be mirrored exactly)."""
@@ -2199,6 +2226,22 @@ class Services:
 
     def flip_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.flip_status(job_id))
+
+    # ------------------------------------------------------------ strategy pool 2 (ADR-87)
+    def pool2_status(self) -> dict:
+        """Read-only: pool 1 / pool 2 manifests, the active protocol and what the protocol switch would do."""
+        from edgelab.research import pool2
+        return _jsonable(pool2.status(self))
+
+    def start_pool2_job(self, action: str, confirm: str | None = None) -> dict:
+        """Background job: ``generate`` pool 2 (safe) or ``switch`` to the 20,000-strategy protocol (typed confirmation)."""
+        from edgelab.research import pool2
+        if action == "switch" and confirm != pool2.CONFIRM_WORD:
+            raise ValueError(f"type {pool2.CONFIRM_WORD} to confirm the protocol switch")
+        return _jsonable(self.jobs.start_pool(action, confirm))
+
+    def pool2_job(self, job_id: str) -> dict:
+        return _jsonable(self.jobs.pool_status(job_id))
 
     def _holdout_dataset(self, protocol: Mapping, frozen: Mapping, refuse) -> tuple[str, tuple]:
         """(dataset id, period) for a holdout evaluation, checked without spending a look (ADR-85): the dataset of
@@ -2275,6 +2318,9 @@ class Services:
         prior = self.store.list_holdout_access(protocol_id)
         if any(a["logic_hash"] == doc["logic_hash"] and a["status"] != "refused" for a in prior):
             refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate's logic was already evaluated on the holdout")
+        if strategy_id in rp.holdout_exposed(p):                                  # ADR-87: looked at under an earlier protocol
+            refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate was already evaluated on the holdout under an earlier "
+                   "protocol (listed in this protocol's prior exposure)")
         used = sum(1 for a in prior if a["status"] != "refused")
         if used >= mat["holdout_budget"]["max_unique_candidate_evaluations"]:
             refuse("HOLDOUT_BUDGET_EXHAUSTED", f"all {used} holdout looks are used")

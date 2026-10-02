@@ -1,4 +1,4 @@
-"""ADR-87: the flip scan. SYNTHETIC data only (the Dukascopy-shaped BID/ASK fixture of the holdout tests).
+"""ADR-88: the flip scan. SYNTHETIC data only (the Dukascopy-shaped BID/ASK fixture of the holdout tests).
 
 - the mirror: known-answer geometry on the engine's own signal arrays (same signal bars, opposite direction, the
   original target is the mirror's stop and the original stop its target, stop entries become limit entries, signal
@@ -280,6 +280,18 @@ class TestFlipScan(ScanBase):
         # retiring the parent retires its flip protocol
         s.retire_protocol(pid)
         self.assertEqual(s.get_protocol(fid)["status"], "RETIRED")
+
+    def test_pool2_switch_retires_the_flip_protocol_and_pool2_ignores_it(self):
+        from edgelab.research import pool2
+        s = self.svc()
+        p, sid, per = self.protocol(s, "flip-pool2")
+        pid = p["protocol_id"]
+        fid = s.create_flip_scan(cap=2)["flip_protocol_id"]
+        self.assertEqual(pool2._active_protocol(s)["protocol_id"], pid)                    # the flip protocol is not "active research"
+        new = s.create_protocol(self.src1m, DISC, HOLD, name="flip-pool2 replacement", trial_budget=20_000, replaces=pid,
+                                exposure_statement="test: replaced after a flip scan")
+        self.assertEqual(s.get_protocol(fid)["status"], "RETIRED")                          # belongs to the replaced study
+        self.assertEqual(s.flip_scan(cap=2)["parent"]["protocol_id"], new["protocol_id"])
 
     def test_holdout_tested_and_duplicate_logic_are_skipped(self):
         s = self.svc()

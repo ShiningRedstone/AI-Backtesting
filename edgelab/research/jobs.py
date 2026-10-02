@@ -87,7 +87,7 @@ class HoldoutJob(Job):
 
 
 class FlipJob(Job):
-    """The flip scan's search (ADR-87): the registered flips of one flip protocol through the normal search path."""
+    """The flip scan's search (ADR-88): the registered flips of one flip protocol through the normal search path."""
 
     def __init__(self, job_id: str, protocol_id: str, search_id: str, n: int):
         super().__init__(job_id, search_id, {})
@@ -98,6 +98,20 @@ class FlipJob(Job):
     def snapshot(self) -> dict:
         return {**super().snapshot(), "kind": "flip", "protocol_id": self.protocol_id, "processes": self.processes,
                 "live": dict(self.live)}
+
+
+class PoolJob(Job):
+    """Strategy pool 2 (ADR-87): generate the pool, or switch research to the 20,000-strategy protocol."""
+
+    def __init__(self, job_id: str, action: str):
+        super().__init__(job_id, "", {})
+        self.kind, self.action = "pool2", action
+        self.live: dict = {"phase": "queued"}
+        self.result: dict | None = None
+
+    def snapshot(self) -> dict:
+        return {**super().snapshot(), "kind": "pool2", "action": self.action, "live": dict(self.live),
+                "result": self.result}
 
 
 class JobManager:
@@ -243,7 +257,7 @@ class JobManager:
         job.finished_at = _now()
         job._set(final)
 
-    # ------------------------------------------------------------------ flip scan jobs (ADR-87)
+    # ------------------------------------------------------------------ flip scan jobs (ADR-88)
     def start_flip(self, flip_id: str, processes: int = 1) -> dict:
         """Run (or resume) a flip protocol's search in the background; the same one-research-job-at-a-time rule."""
         from edgelab.research import flips as F
@@ -313,6 +327,47 @@ class JobManager:
             raise KeyError(job_id)
         return job.snapshot()
 
+    # ------------------------------------------------------------------ strategy pool 2 jobs (ADR-87)
+    def start_pool(self, action: str, confirm: str | None = None) -> dict:
+        """Generate pool 2 or switch to the 20,000-strategy protocol; the same one-research-job-at-a-time rule."""
+        if action not in ("generate", "switch"):
+            raise ValueError("action must be generate or switch")
+        with self._mu:
+            if self._active is not None and self._active.state in ACTIVE:
+                raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
+            job = PoolJob("JOB_" + uuid.uuid4().hex[:12].upper(), action)
+            self._jobs[job.job_id] = job
+            self._active = job
+            self._thread = threading.Thread(target=self._work_pool, args=(job, confirm), name=f"edgelab-{job.job_id}",
+                                            daemon=True)
+            self._thread.start()
+        return job.snapshot()
+
+    def _work_pool(self, job: PoolJob, confirm: str | None) -> None:
+        from edgelab.research import pool2
+        job.started_at = _now()
+        job._set("running")
+
+        def say(msg: str) -> None:
+            job.live = {"phase": msg, "at": _now()}
+
+        try:
+            with self.lock:                      # store reads / protocol + campaign writes; pages keep reading (ADR-78)
+                job.result = pool2.generate(self.services, say) if job.action == "generate" else \
+                    pool2.switch(self.services, confirm or "", say)
+            final = "completed"
+        except BaseException as exc:                         # recorded, never swallowed silently
+            job.error = f"{type(exc).__name__}: {exc}"
+            final = "failed"
+        job.finished_at = _now()
+        job._set(final)
+
+    def pool_status(self, job_id: str) -> dict:
+        job = self._get(job_id)
+        if not isinstance(job, PoolJob):
+            raise KeyError(job_id)
+        return job.snapshot()
+
     def holdout_status(self, job_id: str) -> dict:
         job = self._get(job_id)
         if not isinstance(job, HoldoutJob):
@@ -334,11 +389,11 @@ class JobManager:
         job = self._get(job_id)
         if job.state in ACTIVE:
             job.cancel_requested.set()
-        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob, FlipJob)) else self.status(job_id)
+        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob, FlipJob, PoolJob)) else self.status(job_id)
 
     def status(self, job_id: str) -> dict:
         job = self._get(job_id)
-        if isinstance(job, (CampaignJob, HoldoutJob, FlipJob)):
+        if isinstance(job, (CampaignJob, HoldoutJob, FlipJob, PoolJob)):
             return job.snapshot()
         return {**job.snapshot(), "progress": self.progress(job.search_id)}
 

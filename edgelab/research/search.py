@@ -234,7 +234,7 @@ class SearchPlan:
 def _resolve_strategies(canon: Mapping, library, logic_hashes: dict | None = None
                         ) -> tuple[dict[str, dict], list[dict], dict, list[Issue]]:
     """strategy_id -> {sources, timeframe}; archived batch/family members are excluded and reported. ``logic_hashes``
-    (optional) is filled with strategy_id -> logic_hash of every resolved strategy (ADR-87 protocol routing)."""
+    (optional) is filled with strategy_id -> logic_hash of every resolved strategy (ADR-88 protocol routing)."""
     found: dict[str, dict] = {}
     excluded: dict[str, dict] = {}
     n = {"references": 0, "collapsed": 0}

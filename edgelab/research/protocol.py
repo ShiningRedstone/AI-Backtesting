@@ -39,7 +39,7 @@ late one. The bootstrap-t replicate count is derived from that family (>= 25 rep
 keep their counted-family rule. A protocol that has not been used (zero counted trials, zero holdout looks) can be SUPERSEDED
 by a new protocol (new identity, ``supersedes`` recorded; the old record is retired, never edited).
 
-Flip companion (ADR-87). One ACTIVE research protocol may get ONE flip companion (role ``flip_companion``, stored under
+Flip companion (ADR-88). One ACTIVE research protocol may get ONE flip companion (role ``flip_companion``, stored under
 the scope key ``<instrument>@<provider>#flip``, so the one-ACTIVE-per-scope rule above is unchanged): the parent's windows,
 data, execution and config, a pre-registered ``mirror_set`` of fully mirrored strategies (its trial budget), its own
 holdout looks, and a Bonferroni family of the parent's declared budget plus the flips. A registered flip is governed by
@@ -131,7 +131,7 @@ def bootstrap_replicates_for(trial_budget: int, familywise_alpha: float = FAMILY
 
 def family_size(material: Mapping, counted_trials: int) -> int:
     """The Bonferroni family of a protocol: the declared budget (version 3) or the counted trials (version <= 2). A flip
-    protocol (ADR-87) declares its parent's budget PLUS its own: its strategies were chosen from the parent's results."""
+    protocol (ADR-88) declares its parent's budget PLUS its own: its strategies were chosen from the parent's results."""
     mt = material["multiple_testing"]
     if mt.get("family_size_rule") == "declared_max_unique_trials":
         return max(int(material["trial_budget"]["max_unique_trials"]), int(counted_trials), 1)
@@ -141,7 +141,7 @@ def family_size(material: Mapping, counted_trials: int) -> int:
     return max(1, int(counted_trials))
 
 
-# ============================================================ flip (mirror) companion protocol (ADR-87)
+# ============================================================ flip (mirror) companion protocol (ADR-88)
 FLIP_ROLE = "flip_companion"
 FLIP_SCOPE_SUFFIX = "#flip"
 FLIP_FAMILY_RULE = "declared_parent_plus_own"
@@ -360,6 +360,13 @@ def verify_record(rec: Mapping) -> None:
     if protocol_id(rec["material"]) != rec["protocol_id"] or hash_obj(rec["material"]) != rec["material_hash"]:
         raise ProtocolRefusal("PROTOCOL_TAMPERED", "stored protocol material does not match its identity",
                               protocol_id=rec.get("protocol_id"))
+
+
+def holdout_exposed(rec: Mapping) -> set[str]:
+    """Strategy ids whose holdout was already looked at under an EARLIER protocol (ADR-87: listed in this protocol's
+    pre-protocol exposure by the strategy-pool switch); they are never tested on the holdout again."""
+    runs = ((rec.get("material") or {}).get("pre_protocol_exposure") or {}).get("runs") or []
+    return {r["strategy_id"] for r in runs if r.get("strategy_id") and str(r.get("note", "")).startswith("holdout look under")}
 
 
 # ============================================================ trials

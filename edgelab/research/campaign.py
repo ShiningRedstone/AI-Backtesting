@@ -286,7 +286,7 @@ def check_capacity(n_strategies: int, max_cells: int, trial_budget: int, workers
 # ======================================================================================== protocol / datasets
 def governing_protocol(svc, protocol_id: str | None = None) -> dict:
     from edgelab.research.protocol import is_flip, verify_record
-    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not is_flip(p)]     # ADR-87: never a flip protocol
+    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not is_flip(p)]     # ADR-88: never a flip protocol
     if protocol_id:
         act = [p for p in act if p["protocol_id"] == protocol_id]
     if len(act) != 1:
@@ -385,8 +385,12 @@ def _profiles(svc) -> list[dict]:
 
 
 def build_spec(svc, manifest_id: str, *, protocol_id: str | None = None, datasets: Mapping[str, str] | None = None,
-               workers: int = REQUIRED_WORKERS, max_cells: int | None = None) -> tuple[dict, dict]:
-    """(spec, context). Refuses (CampaignError) anything that would make a partial or multi-trial campaign."""
+               workers: int = REQUIRED_WORKERS, max_cells: int | None = None,
+               siblings: list[Mapping] | None = None) -> tuple[dict, dict]:
+    """(spec, context). Refuses (CampaignError) anything that would make a partial or multi-trial campaign.
+    ``siblings`` (ADR-87): the other campaigns frozen under the SAME protocol (strategy pools sharing one declared trial
+    budget): [{manifest_id, search_id, n_strategies}]. Their trials are accounted, not foreign, and the budget must
+    cover all of them. Absent = a single-campaign protocol (the spec is exactly as before)."""
     from edgelab.engine.sizing import DEFAULT_RESEARCH_ACCOUNT
     from edgelab.research.search import search_hash
     from edgelab.strategy import factory_space as S
@@ -397,7 +401,10 @@ def build_spec(svc, manifest_id: str, *, protocol_id: str | None = None, dataset
     p = governing_protocol(svc, protocol_id)
     mat = p["material"]
     n = len(rows)
-    cap = check_capacity(n, n if max_cells is None else int(max_cells), mat["trial_budget"]["max_unique_trials"], workers)
+    sib = sorted(({"manifest_id": s["manifest_id"], "search_id": s["search_id"], "n_strategies": int(s["n_strategies"])}
+                  for s in siblings or ()), key=lambda s: s["search_id"])
+    cap = check_capacity(n, n if max_cells is None else int(max_cells),
+                         mat["trial_budget"]["max_unique_trials"] - sum(s["n_strategies"] for s in sib), workers)
     if cap:
         raise CampaignError("CAMPAIGN_CAPACITY", "the campaign does not fit one-trial-per-strategy", problems=cap)
     tfs = {str(r["definition"]["timeframe"]) for r in rows}
@@ -442,6 +449,8 @@ def build_spec(svc, manifest_id: str, *, protocol_id: str | None = None, dataset
         "config_hash": cfg_hash,
         "search": {"spec": search_spec, "search_id": "SRCH_" + s_hash[:12].upper(), "search_hash": s_hash},
     }
+    if sib:
+        spec["protocol_siblings"] = sib
     return spec, {"rows": rows, "header": header, "protocol": p, "dir": d}
 
 
@@ -538,6 +547,7 @@ def load(svc, cid: str) -> dict:
 def ledger(svc, spec: Mapping) -> dict:
     """Trials, failures and holdout accesses of the campaign's protocol, attributed to this campaign or not."""
     pid, sid = spec["protocol"]["protocol_id"], spec["search"]["search_id"]
+    sibs = {s["search_id"] for s in spec.get("protocol_siblings") or ()}
     ev = svc.store.list_trial_events(pid)
     mine = [e for e in ev if e.get("search_id") == sid]
     counted = [e for e in mine if e["counted"]]
@@ -549,7 +559,10 @@ def ledger(svc, spec: Mapping) -> dict:
     for c in cells:
         by_status[c["status"]] = by_status.get(c["status"], 0) + 1
     return {"search_id": sid, "protocol_trials_total": sum(1 for e in ev if e["counted"]),
-            "campaign_trials": len(counted), "foreign_trials": sum(1 for e in ev if e["counted"] and e.get("search_id") != sid),
+            "campaign_trials": len(counted),
+            "sibling_trials": sum(1 for e in ev if e["counted"] and e.get("search_id") in sibs),
+            "foreign_trials": sum(1 for e in ev if e["counted"] and e.get("search_id") != sid
+                                  and e.get("search_id") not in sibs),
             "campaign_failed_events": sum(1 for e in mine if e["status"] == "failed"),
             "campaign_duplicate_events": sum(1 for e in mine if e["status"] == "completed" and not e["counted"]),
             "strategies_with_trial": len(keys), "strategies_with_multiple_trial_keys": sorted(s for s, k in keys.items() if len(k) > 1),
@@ -605,8 +618,9 @@ def check(svc, cid: str) -> dict:
         ok("active protocol is the frozen one (id, version 3, material unchanged)",
            p["material_hash"] == pr["material_hash"] and mat["protocol_version"] == pr["protocol_version"] == 3,
            {"protocol_id": p["protocol_id"], "protocol_version": mat["protocol_version"]})
-        ok("protocol capacity covers the campaign", mat["trial_budget"]["max_unique_trials"] >= n,
-           mat["trial_budget"]["max_unique_trials"])
+        n_sib = sum(int(s["n_strategies"]) for s in spec.get("protocol_siblings") or ())
+        ok("protocol capacity covers the campaign" + (" and its sibling campaigns" if n_sib else ""),
+           mat["trial_budget"]["max_unique_trials"] >= n + n_sib, mat["trial_budget"]["max_unique_trials"])
         ok("multiplicity family = declared trial budget",
            mat["multiple_testing"].get("family_size_rule") == "declared_max_unique_trials")
         ok("discovery window = protocol discovery", spec["discovery"]["first_bar"] == mat["windows"]["discovery"]["first_bar"]
@@ -617,10 +631,10 @@ def check(svc, cid: str) -> dict:
         led = ledger(svc, spec)
         done = led["cells_by_status"].get("completed", 0)
         ok("no foreign trials on the protocol", led["foreign_trials"] == 0, led["foreign_trials"])
-        ok("protocol trials = completed campaign cells (0 before launch)",
-           led["protocol_trials_total"] == led["campaign_trials"] == done,
+        ok("protocol trials = completed campaign cells (0 before launch)" + (" + sibling campaign trials" if n_sib else ""),
+           led["protocol_trials_total"] - led["sibling_trials"] == led["campaign_trials"] == done,
            {"protocol_trials": led["protocol_trials_total"], "campaign_trials": led["campaign_trials"], "completed": done,
-            "state": "fresh" if done == 0 else "resume"})
+            "sibling_trials": led["sibling_trials"], "state": "fresh" if done == 0 else "resume"})
         ok("one trial key per strategy", not led["strategies_with_multiple_trial_keys"],
            led["strategies_with_multiple_trial_keys"][:20])
         ok("no holdout access", led["holdout_accesses"] == 0, led["holdout_accesses"])

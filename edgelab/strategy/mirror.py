@@ -1,4 +1,4 @@
-"""Full mirror ("flip") of a strategy definition (ADR-87): take the OTHER side of every trade the strategy would take.
+"""Full mirror ("flip") of a strategy definition (ADR-88): take the OTHER side of every trade the strategy would take.
 
 A long trade entered at reference E with stop S below and target T above becomes a short trade entered on the same signal
 at E with its stop at T and its target at S (and vice versa for shorts). The mirror is written as an ordinary DSL document,

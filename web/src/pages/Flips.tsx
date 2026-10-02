@@ -8,7 +8,7 @@ import { useCriteriaName } from "../components/results";
 import { OUTCOME_LABEL } from "./Holdout";
 import { Badge, Banner, Button, Card, Confirm, Empty, ErrorPanel, Field, Kpi, Loading, Mono, NumberInput, TableWrap, TechDetails, n, signCls } from "../components/ui";
 
-/** ADR-87 Run backtest → Flip scan: the worst discovery results that lose clearly BEFORE costs are fully mirrored (every
+/** ADR-88 Run backtest → Flip scan: the worst discovery results that lose clearly BEFORE costs are fully mirrored (every
  *  trade on the other side, stop and target swapped) and backtested again as new strategies under their own flip protocol.
  *  Nothing here negates a stored result: every flipped number is a new backtest through the same engine. */
 const FINAL = new Set(["completed", "failed", "cancelled"]);
