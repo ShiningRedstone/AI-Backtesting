@@ -286,13 +286,14 @@ class TestServiceAndApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from edgelab.services import Services
-        from tests.phase2_helpers import synthetic_canonical, write_generic_utc
+        from tests.phase2_helpers import TEST_FEED, TEST_PROXY, add_test_proxy_feed, synthetic_canonical, write_generic_utc
         cls.root = Path(tempfile.mkdtemp())
         shutil.copytree(REPO / "configs", cls.root / "configs")
+        add_test_proxy_feed(cls.root / "configs")
         write_generic_utc(synthetic_canonical("2024-01-02", "2024-03-28", tf=5, seed=5), cls.root / "h.csv")
         cls.svc = Services(root=cls.root)
-        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument="NAS100_HISTDATA",
-                                           provider="HISTDATA", asset_type="CFD", timeframe="5m",
+        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument=TEST_PROXY,
+                                           provider=TEST_FEED, asset_type="CFD", timeframe="5m",
                                            source_timezone="UTC", calendar="CME_EQUITY", price_basis="bid",
                                            build_features=False))["dataset_id"]
         cls.run_id = cls.svc.backtest_strategy(EMA, cls.did, True)["run_id"]
@@ -316,7 +317,8 @@ class TestServiceAndApi(unittest.TestCase):
         self.assertEqual((L["source_run_id"], L["strategy_id"], L["dataset_id"]),
                          (self.run_id, rec["strategy"]["strategy_id"], self.did))
         self.assertEqual(L["definition_hash"], rec["strategy"]["dsl"]["definition_hash"])
-        self.assertEqual((L["cost_profile"], L["cost_status"]), ("NAS100_HISTDATA@HISTDATA", "assumed"))
+        from tests.phase2_helpers import TEST_PROXY_PROFILE
+        self.assertEqual((L["cost_profile"], L["cost_status"]), (TEST_PROXY_PROFILE, "assumed"))
         self.assertEqual(L["trades_hash"], rec["trades_hash"])
         self.assertTrue(L["trades_hash_verified"])
         self.assertIn("exit_ts", L["ordering"])

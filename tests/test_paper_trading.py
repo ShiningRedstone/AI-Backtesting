@@ -290,9 +290,12 @@ class TestPaperHttp(PaperBase):
             self.assertEqual(r.status_code, 200)
             got = {x["strategy_id"]: x for x in r.get_json()["strategies"]}
             self.assertIn(lib, got)
-            only = c.get(f"/api/paper/candidates?profile_id={PROFILE}&show_all=0").get_json()["strategies"]
+            only = c.get(f"/api/paper/candidates?profile_id={PROFILE}&view=survivors").get_json()["strategies"]
             self.assertTrue(all(x["survivor"] for x in only))                            # survivors only by default
             self.assertEqual({x["strategy_id"] for x in only}, {k for k, v in got.items() if v["survivor"]})
+            ho = c.get(f"/api/paper/candidates?profile_id={PROFILE}").get_json()          # ADR-86 default: holdout passed
+            self.assertEqual((ho["view"], ho["strategies"]), ("holdout", []))                # no holdout test in this workspace
+            self.assertEqual(c.get(f"/api/paper/candidates?profile_id={PROFILE}&view=x").status_code, 400)
             self.assertEqual(c.get("/api/paper/candidates?profile_id=bad id").status_code, 400)
             r = c.post("/api/paper/batches", json={"strategy_ids": [self.sid], "profile_id": PROFILE})
             self.assertEqual(r.status_code, 201, r.get_json())

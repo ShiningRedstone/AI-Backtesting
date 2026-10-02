@@ -44,8 +44,8 @@ current official documentation.
 | `payout_eligibility.min_trading_days`, `.min_profit` | reports eligibility only; no payouts are simulated |
 | `session.timezone`, `entry_start`/`entry_end`, `flat_by`, `action` | entry window and a must-be-flat time, checked against trade timestamps |
 
-Units: trade sizes are compared exactly as recorded. For `NAS100_HISTDATA`, 1 MNQ = 2 research
-units, so a limit of "5 MNQ" is `max_units: 10`. EdgeLab never converts units implicitly.
+Units: trade sizes are compared exactly as recorded, in the instrument units of the trade's
+`contracts` column. EdgeLab never converts units implicitly.
 
 ### Refused by name (the trade records cannot support them)
 
@@ -178,7 +178,6 @@ python -m edgelab.cli prop configs
 python -m edgelab.cli prop validate configs/prop/synthetic_static_eval.yaml
 python -m edgelab.cli prop simulate RUN_2026_00001 --config SYNTH_STATIC_EVAL --config SYNTH_TRAILING_EVAL --accounts 2 [--record]
 python -m edgelab.cli prop list | show PROP_...
-python prop_smoke_real.py [--run-id RUN_...]   # local read-only smoke test on a stored real run
 ```
 
 ## Limitations

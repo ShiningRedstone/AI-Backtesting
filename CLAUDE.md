@@ -105,6 +105,11 @@ ADR-85: Run backtest → Holdout backtest (`/holdout`, `research/holdout.py`: su
 negative months ×2; `HoldoutJob` in the one-at-a-time JobManager; auto-shortlist; `evaluate_holdout` per strategy) and Backtest
 results → Holdout results (`/holdout-results` = explorer `scope=holdout`); holdout gate made timeframe-aware (`stage_of(tf_ns)`,
 `Services._holdout_dataset` checks everything BEFORE a look is spent).
+ADR-86: display round: amber survivors and size-capped grouping of overlapping strategy dots on the Overview field chart
+(`ScatterGroup.cluster`, `clusterMarks`; a group click lists its strategies), axis titles outside the plot, light theme
+(`ui.theme` dark|light|system, `:root[data-theme="light"]` tokens), Home "Backtested trades" (`facts.trades_total`), top
+bar chips removed, Start paper trading default "Passed the holdout" (`paper_candidates(view=)`), HistData removed from the
+app and the default configs (a workspace's own configs are untouched).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -124,27 +129,49 @@ remains. Do not rely on this file alone.
   - A relaunch while the old instance is closing waits for it. The packaged app shows a splash
     (`EdgeLab.exe --splash`).
 - **CI:** `.github/workflows/windows-build.yml` runs on every push.
-  1. Builds `EdgeLab.exe`.
-  2. Runs the packaged smoke test, the splash self-close check and the packaged updater smoke (app started from its
-     own folder).
+  1. Builds `EdgeLab.exe` (the build refuses if pywebview or dukascopy-python is missing).
+  2. Runs the packaged smoke test (also checks the Dukascopy downloader is bundled), the splash self-close check and
+     the packaged updater smoke (app started from its own folder).
   3. Builds the installer and smoke-tests it: silent install, smoke, silent uninstall.
   4. Publishes the pre-release `build-<branch>-<n>`; on `main` it also updates `installer-main`.
+- **Data:** Dukascopy only (USATECH.IDX/USD, feed E_NQ-100, 1-minute BID + ASK; the index-CFD stand-in for NQ;
+  strategies trade MNQ contracts). HistData support was removed (ADR-86).
+  - A workspace keeps its OWN copy of `configs/`, made when the workspace was created; app updates never change it.
+    The ACTIVE research protocol is bound to that config's hash, so never change a user's workspace configs
+    (research and holdout tests would be refused with PROTOCOL_CONFIG_CHANGED).
+- **Research flow the user follows:** discovery (Research runs; the protocol's discovery window only) → survivors
+  (net > 0 AND the trades pass a prop evaluation with a payout under the Settings account) → Holdout backtest (the
+  locked final period, protocol gate, 10 tests in total by default, once per strategy, "criteria met / not met")
+  → Prop & paper (paper accounts on new days; default list = strategies that passed the holdout).
+- **Paper trading (ADR-81/83):** daily forward Dukascopy days (downloaded by dukascopy-python at start, every 30 min,
+  "Update now"); accounts start the next trading day; failed eval → new attempt (reset fee, else eval price);
+  pass → activation fee, funded, every payout; funded loss / live point / payout limit → new eval; net = payouts
+  (trader share) − fees. Fees per account type in Settings (nothing starts without an evaluation price). The feed is
+  checked once per research dataset against the research data (last 3 complete days inside it, bar by bar);
+  a mismatch pauses accounts until a match or "Continue anyway". Paper results are never runs or trials.
 - **Tabs (UI, plain English):**
-  - Home
+  - Home: system facts (strategies, stored runs, backtested trades, AI generations, datasets, version), latest results.
   - Strategies: Library, Families, Builder, Variations
-  - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ADR-85). The Experiments tab was removed; `/research` →
-    `/runs`, and job/result deep links still work.
-  - Backtest results: Overview, Strategies explorer, Holdout results, All runs, Compare, Random controls, Candidate pipeline
-  - Prop & paper: Paper accounts, Start paper trading (batch), Backtest prop check (the old simulator)
-  - Settings, including CPU cores for research runs, the pass-criteria prop account, prop account fees, display
-    switches and delete-all.
+  - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ranked best → worst
+    for prop trading on 8 discovery criteria with drawdown and negative months ×2). `/research` → `/runs`; job and
+    result deep links still work.
+  - Backtest results: Overview, Strategies explorer, Holdout results, All runs, Compare, Random controls, Candidate
+    pipeline
+  - Prop & paper: Paper accounts, Start paper trading (batch; Passed the holdout | Survivors | All tested), Backtest
+    prop check (the old simulator)
+  - Settings: theme (Dark / Light / Same as Windows), CPU cores for research runs, the pass-criteria prop account,
+    prop account fees, Show IDs / read-only switches, updates, workspace, delete-all.
+  - The top bar shows only the brand, the DEMO badge (demo workspace) and the version chip (Backend OK, protocol and
+    workspace chips were removed at the user's request).
 - **Design decisions the user made:**
-  - Dark UI. Decorative surfaces use a deep-rose → plum gradient (`--warm-gradient`); red is ONLY for losses,
-    negative values and errors.
-  - Scatter dots have no outlines.
+  - Dark UI by default, plus a light theme (ADR-86). Decorative surfaces use a deep-rose → plum gradient
+    (`--warm-gradient`); red is ONLY for losses, negative values and errors.
+  - Field chart (Overview): strategies blue; survivors amber (`--c-survivor`); overlapping blue dots group into bigger
+    circles (size capped, no number; survivors and random controls never group); clicking a group lists its
+    strategies in the side panel, click one to open it. Scatter dots have no outlines; axis titles sit outside the plot.
   - "By session" is grouped by market hours (Asia, London, London–NY overlap, NY AM, NY PM, NY full day, Any time),
     with "Show all windows".
-  - IDs are hidden unless "Show IDs" is on.
+  - IDs are hidden unless "Show IDs" is on. Holdout runs are always labelled Holdout, never out-of-sample.
   - The user rejected GPU acceleration: pages were lock-bound, and GPU math could change result hashes.
 - **Performance architecture:**
   - ADR-75: read caches.
@@ -154,6 +181,7 @@ remains. Do not rely on this file alone.
   - ADR-78: page GETs on read-only SQLite connections outside the service lock; page numbers may lag up to 5 s
     during a run.
   - None of these change any result: every cache is content-keyed and tested against the fresh path.
+- **One research job at a time:** research runs and holdout backtests share the JobManager (a second start → 409).
 
 ## Non-negotiable research principles
 
@@ -275,23 +303,27 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - No browser file upload (imports come from `web.import_dirs`); no auth (local, loopback only).
 - Windows-only behaviour (WebView2 window, splash, installer, updater swap) is verified by the Windows CI smoke tests;
   the splash and window are not visually checked in CI.
+- The live Dukascopy download (paper feed, research-data check) cannot be reached from the build/CI environment; it is
+  tested with a synthetic stand-in downloader (`tests/paper_fixture.py`). Real holdout tests run on the user's PC.
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..85.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..86.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..85, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..86, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
   `PROP_SIMULATION.md`, `FACTORY_CAPABILITIES.md`.
-- Code: `edgelab/{core,data,engine,features,strategy,research,analytics,prop,ai,updater,web}`; `services.py` (the one
+- Code: `edgelab/{core,data,engine,features,strategy,research,analytics,prop,paper,ai,updater,web}`; `services.py` (the one
   service layer; `read_context`, background backtest jobs, campaigns), `cli.py`, `desktop.py` / `desktop_window.py` /
   `desktop_splash.py` / `workspace_host.py` / `runtime.py` (desktop app). Research runs: `research/campaign.py`,
-  `research/batch.py` (sequential + process-parallel runner), `research/jobs.py`. Read models: `research/overview.py`,
-  `research/results_view.py`. Packaging: `packaging/` (`edgelab.spec`, `build.py`, `release.py`, `installer.iss`,
+  `research/batch.py` (sequential + process-parallel runner), `research/jobs.py` (one research job at a time: campaign
+  and holdout jobs), `research/holdout.py` (holdout candidates/ranking/job). Paper trading: `paper/{feed,engine,store,
+  manager}.py`. Read models: `research/overview.py` (explorer incl. `scope=holdout`), `research/results_view.py`.
+  Small files written while pages read them use `core/fsutil.atomic_write_text` (Windows sharing violations). Packaging: `packaging/` (`edgelab.spec`, `build.py`, `release.py`, `installer.iss`,
   `build_installer.py`, `icon.py`, smoke tests). Empty placeholders for later phases: `reports/`, `journal/`,
   `notifications/`, `execution/`.
 - Config: `configs/*.yaml` (research config is hashed; `web.yaml` and the example search spec
@@ -323,7 +355,10 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
 - Git: remote `origin` = `https://github.com/ShiningRedstone/AI-Backtesting.git`, default branch `main`.
   Do not commit or push unless the user asks for it in that task. ("push it once the tests pass" counts.)
 - Delivery flow used in this project:
-  1. Develop on branch `claude/zealous-heisenberg-7xwqax` (or the session's designated branch).
+  1. Develop on branch `claude/zealous-heisenberg-7xwqax` (or the session's designated branch; if a designated remote
+     branch holds unrelated old history, deliver through `claude/zealous-heisenberg-7xwqax` instead of force-pushing).
+     Other Claude sessions also push to `main`: fetch and build on the latest `origin/main`, and take the next free
+     ADR number from it.
   2. Commit only explicit paths (`git add -u` plus named new files; **never `git add .`**).
   3. Push the branch and wait for the Windows CI build to go green.
   4. Fast-forward `main` to it: `git push origin HEAD:main`, no force. Then wait for main's build, which is the
@@ -346,4 +381,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-85). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-86). Update `README.md` status for phases.

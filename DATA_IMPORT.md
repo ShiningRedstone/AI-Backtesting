@@ -140,37 +140,13 @@ ds = svc.load_dataset(res["dataset_id"])       # a ValidatedDataset, re-validate
 - Changing a calendar after import makes `load_validated` refuse until you re-import (or pass
   `allow_calendar_change=True` deliberately).
 
-## HistData NSXUSD (research proxy; evidence and open questions)
-
-Files: `YYYYMMDD HHMMSS;open;high;low;close;volume`, no header (import a copy with the header
-`ts;open;high;low;close;volume` prepended; never edit the raw file), bar OPEN, BID prices, volume 0
-(`--volume-type none`). Instrument `NAS100_HISTDATA` (tick 0.001: raw prices are on a 0.001 grid);
-it is a research proxy, not a tradable contract. Only the HISTDATA feed has costs: assumed
-MNQ-equivalent research values (`CONFIG.md`), not broker-verified.
-
-- **Timezone, evidence vs documentation:** HistData documents fixed EST without DST
-  (`Etc/GMT+5`). Measured: summer FOMC 14:00 ET releases (2019-07-31, 2020-07-29, 2021-06-16,
-  2022-07-27, 2024-07-31) land at 14:00 in the file, i.e. New York wall-clock time. The calendars
-  therefore use `America/New_York` and imports should state `--source-timezone America/New_York`.
-  The conflict is unresolved; this is an empirical reading, not a vendor statement.
-- **Schedules:** R1 2017-2018 (`--calendar HISTDATA_NSX_R1`; a 16:16-16:29 pause is not modelled);
-  R2 2019-2024 (`HISTDATA_NSX_R2`, default).
-- **Known source anomaly:** on Sun-Thu evenings of the weeks when US and EU DST differ (2019:
-  03-10..03-28 and 10-27..10-31) the file carries extra 17:00-17:59 NY bars. They fail
-  `bars_outside_session` (about 600-1,200 bars a year), so 2019-2024 are refused unless an audited
-  exclusion set is named. 2019, 2020, 2021, 2022 and 2024 have year-specific audited sets
-  (`--source-exclusions HISTDATA_NSXUSD_<YEAR>`), one 17:00-18:00 NY window per evening on which
-  the local trace of the real file found such bars (measured evidence, not a vendor statement).
-  2023 has no set and remains coverage-rejected. Thresholds are not relaxed.
-- **Coverage:** 2017 (7.6% missing under R1) and 2023 (13.6% under R2) are rejected as full-year
-  datasets. 2018 is expected to import with WARNs (2.9% missing, measured locally with an
-  equivalent in-memory calendar). No holidays are listed; they count as missing days.
+HistData support was removed (ADR-86); only Dukascopy is used.
 
 ## Dukascopy USATECH.IDX/USD (primary research source; Phase 9)
 
 The file goes through the same pipeline as every other source (inspect, normalize, validate,
 manifest and hashes, immutable store, derived timeframes). There is no separate importer. It is
-stored as its own source identity and is never merged with or compared into HistData.
+stored as its own source identity and is never merged with or compared into another source.
 
 **Canonical research execution model (ADR-55): directional BID/ASK.**
 - The `NQ_DUKASCOPY@DUKASCOPY` cost profile uses scenario `dukascopy_directional_cost_assumption_v1`
@@ -257,7 +233,7 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
    - `calendar_status: verified` requires the Trading Breaks evidence described above.
 2. **Costs are unconfigured.** This is the only remaining refusal.
    - The Dukascopy profile is separate: `costs.symbols.NQ_DUKASCOPY` / `providers.DUKASCOPY`.
-     HistData's `NAS100_HISTDATA@HISTDATA` never applies.
+     No other feed's profile ever applies.
    - Backtests are refused (`409 cost_unconfigured`) until you enter commission/fees, spread,
      slippage (points) and financing, with `status: assumed` or `broker_verified` and a
      rationale in `notes`.
@@ -265,7 +241,7 @@ Two gates apply. Their state is shown on the dataset row and returned by the API
      figures: not for USATECH.IDX/USD spread, commission, slippage or financing. The file is
      BID-only, with no spread column.
    - A research assumption is allowed (`status: assumed`), but the numbers are yours to state, with
-     their basis in `notes`. They are never HistData's.
+     their basis in `notes`. They are never another feed's.
    - The profile already has Dukascopy's cost shape, with every number left empty:
      - **Commission:** `commission_mode: notional`. The rate is `commission_per_million`, in USD per
        USD 1M traded, from your account tier.
@@ -472,11 +448,11 @@ source_exclusions:
   MY_SET:
     description: "what the anomaly is and how it was located"
     windows:     # half-open [start, end) bar-open times; quoted; explicit UTC offset; a reason each
-      - {start: "2019-03-10T17:00:00-04:00", end: "2019-03-10T18:00:00-04:00", reason: "..."}
+      - {start: "2024-03-10T17:00:00-04:00", end: "2024-03-10T18:00:00-04:00", reason: "..."}
 ```
 
 ```bash
-python -m edgelab.cli import FILE ... --calendar HISTDATA_NSX_R2 --source-exclusions HISTDATA_NSXUSD_2019
+python -m edgelab.cli import FILE ... --calendar MY_CALENDAR --source-exclusions MY_SET
 ```
 
 - Refused (nothing stored): unknown set, naive or unquoted timestamps, start >= end, overlapping

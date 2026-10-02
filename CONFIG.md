@@ -79,13 +79,6 @@ a CFD backtest raises `CostConfigError` naming the missing fields until you ente
 real numbers, per provider if two feeds differ. `allow_unconfigured=True` exists for plumbing
 tests only and yields an all-zero model labelled `zero_for_testing`.
 
-Exception, research proxy only: `NAS100_HISTDATA@HISTDATA` (HistData NSXUSD BID prices) carries
-approved MNQ-equivalent research **assumptions** (`status: assumed`, never `broker_verified`):
-commission $0.50 per research unit per side (1 MNQ = 2 units, so $1.00 per MNQ per side), market
-and stop slippage 0.25 points (1 MNQ tick), limit slippage 0, fixed spread 0.50 points (2 MNQ
-ticks), financing `none` (futures concept). They are not any broker's actual costs. The
-`NAS100_HISTDATA` symbol level and every other feed stay `unconfigured`.
-
 ## `backtest.yaml`
 
 | Key | Default | Meaning |

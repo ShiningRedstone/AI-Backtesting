@@ -26,11 +26,12 @@ EMA = yaml.safe_load((REPO / "strategies" / "fixtures" / "ema_crossover.yaml").r
 def make_workspace(root: Path, *, runs: bool = True, seed: int = 5) -> dict:
     """A real research workspace: configs/, one imported synthetic dataset, one saved strategy, one run."""
     from edgelab.services import Services
-    from tests.phase2_helpers import synthetic_canonical, write_generic_utc
+    from tests.phase2_helpers import TEST_FEED, TEST_PROXY, add_test_proxy_feed, synthetic_canonical, write_generic_utc
     shutil.copytree(REPO / "configs", root / "configs")
+    add_test_proxy_feed(root / "configs")                 # test-local runnable BID proxy with assumed costs
     write_generic_utc(synthetic_canonical("2024-01-02", "2024-02-28", tf=5, seed=seed), root / "h.csv")
     svc = Services(root=root)
-    did = svc.import_file(dict(file=str(root / "h.csv"), instrument="NAS100_HISTDATA", provider="HISTDATA",
+    did = svc.import_file(dict(file=str(root / "h.csv"), instrument=TEST_PROXY, provider=TEST_FEED,
                                asset_type="CFD", timeframe="5m", source_timezone="UTC", calendar="CME_EQUITY",
                                price_basis="bid", build_features=False))["dataset_id"]
     sid = svc.save_strategy(EMA)["strategy_id"]
@@ -315,7 +316,6 @@ class TestWorkspaceBrowserFlow(Base):
                 table = t("datasets-table")
                 table.wait_for()
                 self.assertIn(self.a["dataset_id"], table.inner_html())            # id in the row's attributes (ids hidden by default)
-                self.assertIn("AI-Backtesting", t("ws-chip").inner_text())
                 pg.locator("[data-testid='nav-strategies']").click()
                 t(f"row-{self.a['strategy_id']}").wait_for()
                 pg.goto(info["url"] + "/#/prop")

@@ -245,7 +245,7 @@ def run_curve(svc, run_id: str) -> dict:
 def oos_control(svc, src: Any, dataset_id: str, split_at: Any, n_controls: int = 20, seed: int = 0) -> dict:
     """The unchanged random-entry control restricted to the OOS window of an evaluate_oos split:
     period = research.validation.oos_windows(dataset start, dataset end, split)[1], labelled
-    OUT_OF_SAMPLE (the convention of run_oos_random_controls_5y.py)."""
+    OUT_OF_SAMPLE (the established out-of-sample control convention)."""
     from edgelab.research.validation import oos_windows
     m = svc.store.get_manifest(dataset_id)
     _, oos = oos_windows(m.start, m.end, split_at)

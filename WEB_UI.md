@@ -415,3 +415,11 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
 - **Backtest results → Holdout results (`#/holdout-results`).**
   - The Strategies explorer over each strategy's holdout run.
   - Adds the verdict, random comparison, cost stress and discovery net R per trade.
+
+## Display options (ADR-86)
+
+- **Theme:** Settings → Display → Theme (Dark / Light / Same as Windows).
+- **Overview field chart:**
+  - Survivors are amber.
+  - Overlapping strategy dots group into bigger circles (capped size); a click lists the strategies inside.
+- **Top bar:** brand, DEMO badge, version.

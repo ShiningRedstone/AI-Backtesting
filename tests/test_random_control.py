@@ -22,7 +22,7 @@ from edgelab.research.controls import RandomEntryControl, realization_seeds, sum
 from edgelab.research.validation import freeze_definition
 from edgelab.services import Services
 from edgelab.strategy.compiler import compile_strategy
-from tests.phase2_helpers import synthetic_canonical, write_generic_utc
+from tests.phase2_helpers import TEST_FEED, TEST_PROXY, TEST_PROXY_PROFILE, add_test_proxy_feed, synthetic_canonical, write_generic_utc
 
 REPO = Path(__file__).resolve().parents[1]
 EMA = yaml.safe_load((REPO / "strategies" / "fixtures" / "ema_crossover.yaml").read_text())
@@ -33,10 +33,11 @@ class TestRandomEntryControl(unittest.TestCase):
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
         shutil.copytree(REPO / "configs", cls.root / "configs")
+        add_test_proxy_feed(cls.root / "configs")
         write_generic_utc(synthetic_canonical("2024-01-02", "2024-03-29", tf=5, seed=5), cls.root / "h.csv")
         cls.svc = Services(root=cls.root)
-        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument="NAS100_HISTDATA",
-                                           provider="HISTDATA", asset_type="CFD", timeframe="5m",
+        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument=TEST_PROXY,
+                                           provider=TEST_FEED, asset_type="CFD", timeframe="5m",
                                            source_timezone="UTC", calendar="CME_EQUITY", price_basis="bid",
                                            build_features=False))["dataset_id"]
         cls.ema_before = copy.deepcopy(EMA)
@@ -121,12 +122,12 @@ class TestRandomEntryControl(unittest.TestCase):
         self.assertEqual(self.r1["candidate"]["definition_hash"], freeze_definition(EMA)[1])
         self.assertEqual(self.r1["candidate"]["strategy_id"], compile_strategy(EMA, self.svc.sessions).strategy_id)
         d = self.r1["dataset"]
-        self.assertEqual((d["dataset_id"], d["provider"], d["instrument"]), (self.did, "HISTDATA", "NAS100_HISTDATA"))
-        self.assertEqual((self.r1["cost_profile"], self.r1["cost_status"]), ("NAS100_HISTDATA@HISTDATA", "assumed"))
+        self.assertEqual((d["dataset_id"], d["provider"], d["instrument"]), (self.did, TEST_FEED, TEST_PROXY))
+        self.assertEqual((self.r1["cost_profile"], self.r1["cost_status"]), (TEST_PROXY_PROFILE, "assumed"))
         cfg = self.r1["control_config"]
         self.assertEqual((cfg["method"], cfg["n_controls"], cfg["base_seed"]), ("random_entry_conditional_v2", 6, 1))
         text = " | ".join(self.r1["labels"])
-        for phrase in ("HistData NSXUSD CFD BID research proxy", "MNQ-equivalent assumed costs",
+        for phrase in (f"{TEST_PROXY} is a research proxy, not a tradable contract", "BID-only prices",
                        "not broker-verified", "Random-entry control: a conditional null"):
             self.assertIn(phrase, text)
         self.assertNotIn("p_value", json.dumps(self.r1))
@@ -184,10 +185,11 @@ class TestCooldownCalibration(unittest.TestCase):
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
         shutil.copytree(REPO / "configs", cls.root / "configs")
+        add_test_proxy_feed(cls.root / "configs")
         write_generic_utc(synthetic_canonical("2024-01-02", "2024-03-29", tf=5, seed=5), cls.root / "h.csv")
         cls.svc = Services(root=cls.root)
-        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument="NAS100_HISTDATA",
-                                           provider="HISTDATA", asset_type="CFD", timeframe="5m",
+        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument=TEST_PROXY,
+                                           provider=TEST_FEED, asset_type="CFD", timeframe="5m",
                                            source_timezone="UTC", calendar="CME_EQUITY", price_basis="bid",
                                            build_features=False))["dataset_id"]
         cls.ds = cls.svc.load_dataset(cls.did)

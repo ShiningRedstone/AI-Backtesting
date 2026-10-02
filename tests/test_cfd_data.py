@@ -381,7 +381,7 @@ class TestStoreAndLoad(Base):
         self.assertEqual(ds.manifest.content_hash, self.store.get_manifest(r.dataset_id).content_hash)
 
     def test_reload_reproduces_manifest_of_source_that_needed_cleaning(self):
-        """ADR-45 regression: a source with a repeated exact-copy block (HistData's October rollback)
+        """ADR-45 regression: a source with a repeated exact-copy block (e.g. a vendor rollback)
         is sorted and de-duplicated at import. Reloading the clean stored bars must reproduce the
         stored manifest (and its hash), not overwrite the import-time cleaning facts with zeros."""
         df = pd.concat([self.df, self.df.iloc[100:160]], ignore_index=True)      # 60 rows repeated, out of order
