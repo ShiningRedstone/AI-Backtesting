@@ -1,9 +1,9 @@
 import { useState } from "react";
-import type { GroupRow, ResearchDashboard } from "../api/types";
+import type { FieldPoint, GroupRow, ResearchDashboard } from "../api/types";
 import { href } from "../app/router";
 import { useApi } from "../app/context";
 import { BarChart, HBars, Histogram } from "../components/charts";
-import { ControlPanelView, ResultsOverviewSection, StrategyPanel } from "../components/results";
+import { ClusterList, ControlPanelView, ResultsOverviewSection, StrategyPanel } from "../components/results";
 import { Banner, Button, Card, Drawer, Empty, ErrorPanel, Kpi, Loading, Scope, TableWrap, n, pct } from "../components/ui";
 import { go } from "../app/router";
 import { datasetLabel, facetLabel } from "../app/labels";
@@ -20,6 +20,7 @@ export function DashboardPage() {
   const [synth, setSynth] = useState(false);
   const [table, setTable] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState<{ kind: "strategy" | "control"; id: string } | null>(null);
+  const [cluster, setCluster] = useState<FieldPoint[] | null>(null);          // ADR-86: a grouped circle's strategies
   const qs = new URLSearchParams({ scope, ...(inst ? { instrument: inst } : {}), ...(ds ? { dataset_id: ds } : {}),
     ...(fam ? { family_id: fam } : {}), ...(synth ? { include_synthetic: "1" } : {}) }).toString();
   const { data: d, error, loading } = useApi<ResearchDashboard>(`/api/research/dashboard?${qs}`, [qs]);
@@ -49,11 +50,14 @@ export function DashboardPage() {
       <header className="page-head">
         <div><h1>Overview</h1></div>
       </header>
-      <ResultsOverviewSection onOpen={(id) => setOpen({ kind: "strategy", id })} onOpenControl={(id) => setOpen({ kind: "control", id })} />
-      <Drawer open={!!open} onClose={() => setOpen(null)} testId="results-drawer"
-        title={open?.kind === "control" ? "Random control" : "Strategy"}
-        actions={open?.kind === "strategy" ? <Button small onClick={() => go(`/strategies/${open.id}`)}>Open strategy page</Button> : null}>
-        {open && (open.kind === "control" ? <ControlPanelView key={open.id} id={open.id} /> : <StrategyPanel key={open.id} id={open.id} />)}
+      <ResultsOverviewSection onOpen={(id) => { setCluster(null); setOpen({ kind: "strategy", id }); }}
+        onOpenControl={(id) => { setCluster(null); setOpen({ kind: "control", id }); }} onOpenMany={(pts) => { setOpen(null); setCluster(pts); }} />
+      <Drawer open={!!open || !!cluster} onClose={() => { setOpen(null); setCluster(null); }} testId="results-drawer"
+        title={open?.kind === "control" ? "Random control" : open ? "Strategy" : `${cluster?.length ?? 0} strategies`}
+        actions={<>{open && cluster && <Button small kind="ghost" onClick={() => setOpen(null)} testId="cluster-back">‹ Back to the list</Button>}
+          {open?.kind === "strategy" ? <Button small onClick={() => go(`/strategies/${open.id}`)}>Open strategy page</Button> : null}</>}>
+        {open ? (open.kind === "control" ? <ControlPanelView key={open.id} id={open.id} /> : <StrategyPanel key={open.id} id={open.id} />)
+          : cluster && <ClusterList points={cluster} onOpen={(id) => setOpen({ kind: "strategy", id })} />}
       </Drawer>
       <header className="page-head" style={{ marginTop: 18 }}>
         <div><h2 style={{ margin: 0 }}>All stored backtests</h2></div>

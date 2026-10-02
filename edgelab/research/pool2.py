@@ -1,4 +1,4 @@
-"""Strategy pool 2 in the workspace (ADR-86): generate the second 10,000 and move research to a 20,000-trial protocol.
+"""Strategy pool 2 in the workspace (ADR-87): generate the second 10,000 and move research to a 20,000-trial protocol.
 
 Two steps, both started from Run backtest -> Research runs:
 

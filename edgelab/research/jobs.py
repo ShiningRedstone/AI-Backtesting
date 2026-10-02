@@ -87,7 +87,7 @@ class HoldoutJob(Job):
 
 
 class PoolJob(Job):
-    """Strategy pool 2 (ADR-86): generate the pool, or switch research to the 20,000-strategy protocol."""
+    """Strategy pool 2 (ADR-87): generate the pool, or switch research to the 20,000-strategy protocol."""
 
     def __init__(self, job_id: str, action: str):
         super().__init__(job_id, "", {})
@@ -243,7 +243,7 @@ class JobManager:
         job.finished_at = _now()
         job._set(final)
 
-    # ------------------------------------------------------------------ strategy pool 2 jobs (ADR-86)
+    # ------------------------------------------------------------------ strategy pool 2 jobs (ADR-87)
     def start_pool(self, action: str, confirm: str | None = None) -> dict:
         """Generate pool 2 or switch to the 20,000-strategy protocol; the same one-research-job-at-a-time rule."""
         if action not in ("generate", "switch"):

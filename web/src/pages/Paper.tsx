@@ -250,18 +250,20 @@ function AccountState({ st }: { st: PaperState }) {
   );
 }
 
+const VIEW_LABEL = { holdout: "Passed the holdout", survivors: "Survivors", all: "All tested" } as const;
+const VIEW_TITLE = { holdout: "Strategies that passed the holdout", survivors: "Survivors", all: "Tested strategies" } as const;
 /** Batch start: one paper account per chosen strategy, all with the same prop account and fees. */
 function StartPaper() {
   const { prefs, toast } = useApp();
   const [profile, setProfile] = useState(prefs.prop_criteria_profile);
-  const [showAll, setShowAll] = useState(false);
+  const [view, setView] = useState<"holdout" | "survivors" | "all">("holdout");
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
-  const cands = useApi<PaperCandidates>(`/api/paper/candidates?profile_id=${encodeURIComponent(profile)}&show_all=${showAll ? 1 : 0}`, [profile, showAll]);
+  const cands = useApi<PaperCandidates>(`/api/paper/candidates?profile_id=${encodeURIComponent(profile)}&view=${view}`, [profile, view]);
   const feed = useApi<PaperFeedStatus>("/api/paper/feed");
-  useEffect(() => { setSel(new Set()); }, [profile, showAll]);
+  useEffect(() => { setSel(new Set()); }, [profile, view]);
   const fees = (prefs.prop_fees ?? {})[profile];
   const rows = (cands.data?.strategies ?? []).filter((s) => !q || (s.display_name ?? "").toLowerCase().includes(q.toLowerCase()));
   const selectable = rows.filter((s) => !s.already_running);
@@ -292,15 +294,19 @@ function StartPaper() {
           account trades funded and records every payout; when a funded account is lost, or reaches the live-account point or the payout limit, a new
           evaluation starts. Strategies must be sized in MNQ contracts.</p>
       </Card>
-      <Card title={showAll ? "Tested strategies" : "Survivors"} testId="paper-candidates"
-        actions={<Checkbox checked={showAll} onChange={setShowAll} label="Show all tested strategies" testId="paper-show-all" />}>
+      <Card title={VIEW_TITLE[view]} testId="paper-candidates"
+        actions={<div className="segmented small" role="group" aria-label="which strategies">
+          {(["holdout", "survivors", "all"] as const).map((v) => <button key={v} className={view === v ? "on" : ""} onClick={() => setView(v)}
+            data-testid={`paper-view-${v}`}>{VIEW_LABEL[v]}</button>)}</div>}>
         <div className="inline">
           <input className="input" style={{ width: 260 }} placeholder="Search…" value={q} aria-label="search strategies"
             onChange={(e: { target: HTMLInputElement }) => setQ(e.target.value)} />
           <span className="muted small">{sel.size} selected</span>
         </div>
         {cands.error ? <ErrorPanel error={cands.error} /> : !cands.data ? <Loading label="Loading strategies…" kind="table" /> : !rows.length ? (
-          <Empty>{showAll ? "No tested strategies yet." : "No survivors under this prop account. Turn on “Show all tested strategies” to pick others."}</Empty>) : (
+          <Empty>{view === "all" ? "No tested strategies yet." : view === "survivors" ? "No survivors under this prop account."
+            : <>No strategy has passed its holdout test yet. Run one under Run backtest → <a href={href("/holdout")}>Holdout backtest</a>, or choose
+              “Survivors” or “All tested” above.</>}</Empty>) : (
           <TableWrap><table className="dense">
             <thead><tr><th><Checkbox checked={allOn} onChange={(v) => setSel(v ? new Set(selectable.map((s) => s.strategy_id)) : new Set())} label="" testId="paper-select-all" /></th>
               <th>Strategy</th><th>Survivor</th><th>Timeframe</th><th className="right">Expectancy (R)</th><th className="right">Backtest trades</th></tr></thead>
@@ -308,7 +314,8 @@ function StartPaper() {
               <tr key={s.strategy_id}>
                 <td><Checkbox checked={sel.has(s.strategy_id)} disabled={s.already_running} onChange={(v) => toggle(s.strategy_id, v)} label=""
                   testId={`paper-pick-${s.strategy_id}`} /></td>
-                <td>{s.display_name ?? "Unnamed strategy"}{s.already_running && <> <Badge tone="info">already paper trading</Badge></>}</td>
+                <td>{s.display_name ?? "Unnamed strategy"}{s.holdout_passed && <> <Badge tone="ok">passed holdout</Badge></>}
+                  {s.already_running && <> <Badge tone="info">already paper trading</Badge></>}</td>
                 <td>{s.survivor ? <Badge tone="ok">survivor</Badge> : <span className="muted">no</span>}</td>
                 <td>{s.timeframe ? facetLabel("timeframe", s.timeframe) : "—"}</td>
                 <td className={`right ${signCls(s.expectancy_r)}`}>{fmt(s.expectancy_r)}</td><td className="right">{s.trades}</td></tr>))}

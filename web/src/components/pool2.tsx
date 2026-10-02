@@ -7,7 +7,7 @@ import { Banner, Button, Card, ErrorPanel, KeyValues, Mono, Spinner, TechDetails
 
 const FINAL = new Set(["completed", "failed", "cancelled"]);
 
-/** Strategy pool 2 (ADR-86) on Run backtest → Research runs. Step 1 creates the second 10,000 strategies (safe: nothing
+/** Strategy pool 2 (ADR-87) on Run backtest → Research runs. Step 1 creates the second 10,000 strategies (safe: nothing
  *  is run and nothing else changes). Step 2 moves research to one protocol for 20,000 strategies (irreversible: the
  *  current protocol is retired, unchanged, and both pools become research campaigns); it needs a typed confirmation. */
 export function Pool2Panel({ onChanged }: { onChanged?: () => void }) {

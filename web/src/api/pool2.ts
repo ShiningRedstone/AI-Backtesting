@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-/** Strategy pool 2 (ADR-86): generate the second 10,000 strategies, then move research to the 20,000-strategy protocol. */
+/** Strategy pool 2 (ADR-87): generate the second 10,000 strategies, then move research to the 20,000-strategy protocol. */
 export interface Pool2Status {
   pool1: { manifest_id: string; n_strategies: number } | null;
   pool2: { manifest_id: string; n_strategies: number; n_families: number; seed: number; candidates_generated: number } | null;

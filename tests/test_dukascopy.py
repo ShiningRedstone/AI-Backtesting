@@ -353,15 +353,16 @@ class TestResearchRefusals(DukascopyBase):
         self.assertEqual(cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY").profile,
                          "NQ_DUKASCOPY@DUKASCOPY")
 
-    def test_histdata_costs_never_apply_to_dukascopy(self):
-        cfg = self.svc.cfg
-        hist = cost_model_from_config(cfg, "NAS100_HISTDATA", provider="HISTDATA")           # unchanged: assumed
-        self.assertEqual((hist.status, hist.profile), ("assumed", "NAS100_HISTDATA@HISTDATA"))
+    def test_other_feed_costs_never_apply_to_dukascopy(self):
+        from tests.phase2_helpers import TEST_FEED, TEST_PROXY, TEST_PROXY_PROFILE, with_test_proxy
+        cfg = with_test_proxy(self.svc.cfg)                                        # + a test-local assumed feed
+        other = cost_model_from_config(cfg, TEST_PROXY, provider=TEST_FEED)        # unchanged: assumed
+        self.assertEqual((other.status, other.profile), ("assumed", TEST_PROXY_PROFILE))
         duka = cost_model_from_config(cfg, "NQ_DUKASCOPY", provider="DUKASCOPY")                # its OWN profile
         self.assertEqual((duka.profile, duka.commission_mode, duka.commission_per_million),
                          ("NQ_DUKASCOPY@DUKASCOPY", "notional", 30.15))
-        self.assertNotEqual(duka.commission_per_side, hist.commission_per_side)
-        for prov in ("HISTDATA", None):                                             # never HistData's, never a default
+        self.assertNotEqual(duka.commission_per_side, other.commission_per_side)
+        for prov in (TEST_FEED, None):                                             # never another feed's, never a default
             with self.assertRaises(CostConfigError):
                 cost_model_from_config(cfg, "NQ_DUKASCOPY", provider=prov)
 

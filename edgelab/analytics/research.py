@@ -35,16 +35,9 @@ BUCKET_METRICS = ("trade_count", "sample_label", "gross_r", "net_r", "cost_r", "
                   "expectancy_ci95", "profit_factor", "win_rate", "win_rate_ci95")
 
 # Standing research caveats attached to every report that touches these data / cost profiles.
-DATASET_NOTES = {
-    ("HISTDATA", "NAS100_HISTDATA"): (
-        "HistData NSXUSD CFD BID research proxy - not CME NQ/MNQ prices",
-        "2023 excluded for coverage (rejected: missing bars > 5%)",
-    ),
-}
-PROFILE_NOTES = {
-    "NAS100_HISTDATA@HISTDATA": "MNQ-equivalent assumed costs (1 MNQ = 2 research units); "
-                                "not broker-verified",
-}
+# Keys: (provider, symbol) -> notes; "SYMBOL@PROVIDER" -> note. Currently none are defined.
+DATASET_NOTES: dict[tuple[str, str], tuple[str, ...]] = {}
+PROFILE_NOTES: dict[str, str] = {}
 
 
 def _pick(metrics: Mapping, keys: Sequence[str]) -> dict:

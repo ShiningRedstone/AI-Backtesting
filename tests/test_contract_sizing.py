@@ -80,7 +80,9 @@ class TestSpecification(unittest.TestCase):
             self.assertEqual({"point_value", "tick_size", "tick_value"} & set(blk), set())
 
     def test_execution_view_keeps_the_data_series_and_takes_contract_economics(self):
-        for data in (DUK, CFD, INSTRUMENTS["NAS100_HISTDATA"]):
+        from edgelab.instruments import load_instruments
+        from tests.phase2_helpers import TEST_PROXY, with_test_proxy
+        for data in (DUK, CFD, load_instruments(with_test_proxy(CFG))[TEST_PROXY]):    # + a test-local 0.001-tick proxy
             v = execution_view(data, MNQ)
             self.assertEqual(v.point_value, 2.0, data.symbol)             # exact
             self.assertEqual((v.min_size, v.size_step, v.symbol), (1.0, 1.0, "MNQ"))

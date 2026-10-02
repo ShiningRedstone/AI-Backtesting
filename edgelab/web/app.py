@@ -442,7 +442,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.get("/api/paper/candidates")
     def paper_candidates():
         pid = _id(request.args.get("profile_id") or "", PROFILE_ID, "prop rule profile id")
-        return jsonify(call(svc.paper_candidates, pid, request.args.get("show_all") in ("1", "true")))
+        view = request.args.get("view") or None
+        if view is not None and view not in ("holdout", "survivors", "all"):
+            raise _bad("view must be holdout, survivors or all")
+        return jsonify(call(svc.paper_candidates, pid, request.args.get("show_all") in ("1", "true"), view))
 
     @app.get("/api/paper/accounts")
     def paper_accounts():
@@ -889,7 +892,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def holdout_cancel(jid):                        # stops BEFORE the next strategy; a granted test always finishes
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
-    # ------------------------------------------------------------------ strategy pool 2 (ADR-86)
+    # ------------------------------------------------------------------ strategy pool 2 (ADR-87)
     @app.get("/api/pool2")
     def pool2_status():
         return jsonify(call(svc.pool2_status))

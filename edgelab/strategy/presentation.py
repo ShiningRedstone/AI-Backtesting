@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from edgelab.strategy import factory_space as S
 from edgelab.strategy import factory_space_p2 as P2
 
-_FAMILIES = {f.fid: f for f in S.FAMILIES} | {f.fid: f for f in P2.NEW_FAMILIES}     # pool 2 (ADR-86): 25 new families
+_FAMILIES = {f.fid: f for f in S.FAMILIES} | {f.fid: f for f in P2.NEW_FAMILIES}     # pool 2 (ADR-87): 25 new families
 
 SESSION_TEXT = {
     "asia": "the Asia session", "london": "the London session", "london_morning": "the London morning",

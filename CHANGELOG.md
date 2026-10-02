@@ -3,7 +3,7 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
-## Strategy pool 2: a second 10,000 strategies and one 20,000-strategy protocol (ADR-86)
+## Strategy pool 2: a second 10,000 strategies and one 20,000-strategy protocol (ADR-87)
 
 | Item | Status |
 |---|---|
@@ -15,6 +15,19 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | `factory generate-pool2` CLI; `factory verify` reproduces a pool-2 manifest | IMPLEMENTED, TESTED |
 | Generating pool 2 and switching in your workspace | REQUIRES REAL DATA (runs on your PC: about 2 minutes to create, about 2 minutes to switch) |
 | Backtest engine, fills, costs, sizing, compiler, prop rules, protocol criteria | UNCHANGED |
+
+## Chart grouping, amber survivors, light mode, Home and top bar, HistData removed (ADR-86)
+
+| Item | Status |
+|---|---|
+| Overview chart: survivors in amber; overlapping blue strategy dots group into bigger circles (size capped, no number; survivors and random controls never group); clicking a group lists its strategies, click one to open it | IMPLEMENTED (browser check) |
+| Chart axis titles no longer overlap the top value or the right-hand points | IMPLEMENTED (browser check) |
+| Light mode: Settings → Display → Theme (Dark / Light / Same as Windows) | IMPLEMENTED, TESTED |
+| Home: research batches, variation batches and prop simulations cards removed; "Backtested trades" added (all stored backtests) | IMPLEMENTED, TESTED |
+| Top bar: Backend OK, research protocol and workspace buttons removed | IMPLEMENTED |
+| Start paper trading: "Passed the holdout" is the default list (Survivors and All tested still available) | IMPLEMENTED, TESTED |
+| HistData removed from the app, the default settings for new workspaces, the docs and the HistData-only scripts and tests; your workspace's own settings are untouched | IMPLEMENTED, TESTED |
+| Backtests, results, survivor rule, prop rules, trial counting, holdout gate | UNCHANGED |
 
 ## Holdout backtest and Holdout results (ADR-85)
 

@@ -349,7 +349,8 @@ export interface OverviewRun { run_id: string; created_at: string; status: strin
   cost_status: string | null }
 export interface Overview {
   facts: { strategies: number; families: number; runs: number; runs_by_status: Record<string, number>; searches: number;
-    variation_batches: number; prop_simulations: number; ai_generations: number; datasets: number; store_backend: string };
+    variation_batches: number; prop_simulations: number; ai_generations: number; datasets: number; store_backend: string;
+    trades_total?: number };
   protocols: ProtocolStatus[]; protocol_records: ProtocolRecordRow[];
   dataset: { manifest: Record<string, any>; manifest_hash: string; identity: Record<string, any>; limitations: string[];
     validation_report: Record<string, any> | null; error?: string; dataset_id?: string } | null;
@@ -534,9 +535,10 @@ export interface PaperSourceCheck {
 }
 export interface PaperCandidate {
   strategy_id: string; display_name: string | null; family_id: string | null; timeframe: string | null; survivor: boolean;
-  expectancy_r: number | null; trades: number; run_id: string | null; already_running: boolean;
+  expectancy_r: number | null; trades: number; run_id: string | null; already_running: boolean; holdout_passed?: boolean;
 }
-export interface PaperCandidates { profile_id: string; show_all: boolean; strategies: PaperCandidate[]; n_survivors: number }
+export interface PaperCandidates { profile_id: string; show_all: boolean; view?: "holdout" | "survivors" | "all"; strategies: PaperCandidate[];
+  n_survivors: number; n_holdout_passed?: number }
 export interface PaperAccountRow {
   account_id: string; batch_id: string; created_at: string; strategy_id: string; display_name: string | null; profile_id: string;
   profile_version: number; start_date: string; status: "running" | "stopped"; stop_reason: string | null;

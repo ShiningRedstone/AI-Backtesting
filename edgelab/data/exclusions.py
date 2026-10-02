@@ -2,7 +2,7 @@
 
 A named set in ``configs/data.yaml`` (``source_exclusions.<NAME>``) lists half-open windows
 ``[start, end)`` of bar-open times that a specific source is known to deliver OUTSIDE its expected
-session (e.g. HistData NSXUSD's extra 17:00-17:59 New York bars in DST-mismatch weeks). An import
+session (e.g. a feed's extra early-reopen bars during a daily break it normally observes). An import
 opts in by naming the set; nothing is ever excluded implicitly.
 
 This is NOT a filter. A set is refused unless every window is well formed (quoted timestamps with

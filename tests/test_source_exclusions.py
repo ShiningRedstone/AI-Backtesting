@@ -1,6 +1,7 @@
-"""Audited source-quality exclusion windows (ADR-44): refusals, provenance, and the HistData case.
+"""Audited source-quality exclusion windows (ADR-44): refusals, provenance, and the anomaly gate.
 
-Synthetic data only; nothing here claims any real HistData year passes validation."""
+Synthetic data only, on a test-local source schedule and a test-local BID proxy instrument (nothing here
+describes a real feed)."""
 from __future__ import annotations
 
 import copy
@@ -12,16 +13,26 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from edgelab.data.calendar import calendar_from_config
 from edgelab.data.exclusions import ExclusionError, apply_exclusions, parse_exclusion_set
 from edgelab.data.importer import ImportFailed, ImportOptions, import_dataset, load_validated
 from edgelab.data.store import SQLiteStore
 from edgelab.data.validation import DataIntegrityError, validate_and_freeze, validate_bars
 from edgelab.engine.costs import CostConfigError, cost_model_from_config
+from edgelab.instruments import load_instruments
 from tests.helpers import CALENDARS, CFG, INSTRUMENTS
+from tests.phase2_helpers import TEST_FEED, TEST_PROXY, with_test_proxy
 
-HD = INSTRUMENTS["NAS100_HISTDATA"]
-R1, R2 = CALENDARS["HISTDATA_NSX_R1"], CALENDARS["HISTDATA_NSX_R2"]
 NY = "America/New_York"
+# Test-local source schedules (a feed's measured hours, NOT exchange hours): one closes 16:15 NY, one 17:00 NY.
+CAL_DEFS = {"TEST_SRC_1615": {"timezone": NY, "session_open": "18:00", "session_close": "16:15",
+                              "trading_weekdays": ["mon", "tue", "wed", "thu", "fri"], "holidays": [],
+                              "early_closes": {}},
+            "TEST_SRC_1700": {"timezone": NY, "session_open": "18:00", "session_close": "17:00",
+                              "trading_weekdays": ["mon", "tue", "wed", "thu", "fri"], "holidays": [],
+                              "early_closes": {}}}
+R2, R1 = (calendar_from_config(n, CAL_DEFS[n]) for n in ("TEST_SRC_1615", "TEST_SRC_1700"))
+HD = load_instruments(with_test_proxy(CFG))[TEST_PROXY]          # test-local BID proxy on a 0.001 grid
 REASON = "test: early 17:00 reopen"
 
 
@@ -34,7 +45,7 @@ def win(start, end, reason=REASON):
 
 
 def week(extra_days=(), start="2022-03-13 18:00", end="2022-03-18 16:14", cal=R2):
-    """One R2 week (spring US DST week) plus 17:00-17:59 NY bars on the given local dates."""
+    """One week of the 16:15-close schedule (spring US DST week) plus 17:00-17:59 NY bars on the given dates."""
     ts = cal.expected_bar_opens(ny(start), ny(end), 1)
     for d in extra_days:
         ts = ts.append(pd.date_range(ny(f"{d} 17:00"), periods=60, freq="1min"))
@@ -90,7 +101,7 @@ class TestApply(unittest.TestCase):
         self.assertEqual([w["rows_excluded"] for w in rec["windows"]], [60, 60])
         self.assertEqual(rec["windows"][0]["start_utc"], "2022-03-14T21:00:00+00:00")
         self.assertEqual({w["reason"] for w in rec["windows"]}, {REASON})
-        self.assertEqual((rec["set"], rec["calendar"]), ("T", "HISTDATA_NSX_R2"))
+        self.assertEqual((rec["set"], rec["calendar"]), ("T", "TEST_SRC_1615"))
         self.assertEqual(len(rec["excluded_rows_sha256"]), 64)
         self.assertTrue(R2.in_session(pd.DatetimeIndex(kept["ts"])).all())
         # identical definition -> identical set hash; a changed reason is a different set
@@ -102,7 +113,7 @@ class TestApply(unittest.TestCase):
     def test_window_touching_in_session_bars_refused(self):
         df = week(["2022-03-14"])
         spec = {"windows": [win("2022-03-14T16:00:00-04:00", "2022-03-14T18:00:00-04:00")]}   # 16:00-16:14 in session
-        with self.assertRaisesRegex(ExclusionError, "15 bar\\(s\\) inside calendar 'HISTDATA_NSX_R2'"):
+        with self.assertRaisesRegex(ExclusionError, "15 bar\\(s\\) inside calendar 'TEST_SRC_1615'"):
             apply_exclusions(df, R2, "T", spec)
         spec = {"windows": [win("2022-03-14T17:00:00-04:00", "2022-03-14T18:01:00-04:00")]}   # 18:00 reopen
         with self.assertRaisesRegex(ExclusionError, "inside calendar"):
@@ -113,21 +124,21 @@ class TestApply(unittest.TestCase):
             apply_exclusions(week(["2022-03-14"]), R2, "T", SPEC)        # 03-15 has no anomaly
 
 
-class TestHistDataAnomalyGate(unittest.TestCase):
+class TestAnomalyGate(unittest.TestCase):
     def test_anomaly_fails_without_and_passes_with_exclusion(self):
         df = week(["2022-03-14", "2022-03-15"])
         with self.assertRaises(DataIntegrityError) as ctx:
-            validate_and_freeze(df, HD, R2, "1m", 1, "HISTDATA", "NOEXCL", CFG["validation"])
+            validate_and_freeze(df, HD, R2, "1m", 1, TEST_FEED, "NOEXCL", CFG["validation"])
         chk = {c.name: c for c in ctx.exception.report.checks}
         self.assertEqual((chk["bars_outside_session"].status, chk["bars_outside_session"].count), ("FAIL", 120))
         kept, _ = apply_exclusions(df, R2, "T", SPEC)
-        ds = validate_and_freeze(kept, HD, R2, "1m", 1, "HISTDATA", "EXCL", CFG["validation"])
+        ds = validate_and_freeze(kept, HD, R2, "1m", 1, TEST_FEED, "EXCL", CFG["validation"])
         chk = {c.name: c for c in ds.report.checks}
         self.assertEqual((chk["bars_outside_session"].count, chk["missing_bars"].count), (0, 0))
         self.assertEqual((chk["grid_alignment"].status, chk["tick_alignment"].status), ("PASS", "PASS"))
 
     def test_sparse_outside_bars_still_warn_without_exclusion(self):
-        """2018-like: a few stray outside bars below the 0.1% threshold stay a WARN, untouched."""
+        """A few stray outside bars below the 0.1% threshold stay a WARN, untouched."""
         df = week(start="2018-03-04 18:00", end="2018-03-09 16:59", cal=R1)
         stray = pd.DataFrame({"ts": [ny("2018-03-05 17:10"), ny("2018-03-06 17:20")], "open": 14000.0,
                               "high": 14000.5, "low": 13999.5, "close": 14000.0, "volume": np.nan})
@@ -141,27 +152,17 @@ class TestHistDataAnomalyGate(unittest.TestCase):
         v = CFG["validation"]                          # thresholds unchanged by ADR-44
         self.assertEqual((v["max_outside_session_ratio_fail"], v["max_missing_bar_ratio_warn"],
                           v["max_missing_bar_ratio_fail"]), (0.001, 0.001, 0.05))
-        expected = {2019: 20, 2020: 20, 2021: 15, 2022: 15, 2024: 17}   # one window per traced evening
-        self.assertEqual(set(CFG["source_exclusions"]), {f"HISTDATA_NSXUSD_{y}" for y in expected})
-        self.assertNotIn("HISTDATA_NSXUSD_2023", CFG["source_exclusions"])     # 2023 stays coverage-rejected
-        for year, n in expected.items():
-            s = parse_exclusion_set(f"HISTDATA_NSXUSD_{year}", CFG["source_exclusions"][f"HISTDATA_NSXUSD_{year}"])
-            self.assertEqual(len(s), n, year)
-            for w in s:                                # one 17:00-18:00 NY window per evening, nothing broader
-                self.assertEqual(w["end_utc"] - w["start_utc"], pd.Timedelta(hours=1))
-                self.assertEqual(w["start_utc"].tz_convert(NY).strftime("%Y %H:%M"), f"{year} 17:00")
-                self.assertTrue(w["start"].endswith("T17:00:00-04:00") and w["end"].endswith("T18:00:00-04:00"))
+        for name, spec in (CFG.get("source_exclusions") or {}).items():   # any shipped set is well formed
+            for w in parse_exclusion_set(name, spec):
                 self.assertTrue(w["reason"])
-                self.assertFalse(R2.in_session(pd.date_range(w["start_utc"], w["end_utc"], freq="1min",
-                                                             inclusive="left")).any())
-        dates_2024 = {w["start"][:10] for w in CFG["source_exclusions"]["HISTDATA_NSXUSD_2024"]["windows"]}
-        self.assertTrue({"2024-10-27", "2024-10-30", "2024-10-31"} <= dates_2024)
-        self.assertFalse({"2024-10-28", "2024-10-29"} & dates_2024)            # traced: no anomaly those evenings
+        for section in (CFG["calendars"], CFG["instruments"], CFG["costs"]["symbols"],
+                        CFG.get("source_exclusions") or {}):              # HistData removed (ADR-86)
+            self.assertFalse([k for k in section if "HISTDATA" in k.upper()])
         self.assertEqual((INSTRUMENTS["NAS100_CFD"].tick_size, INSTRUMENTS["NAS100_CFD"].calendar), (0.01, "CME_EQUITY"))
         c = CALENDARS["CME_EQUITY"]
         self.assertEqual((c.session_open, c.session_close), ("18:00", "17:00"))
-        with self.assertRaises(CostConfigError):
-            cost_model_from_config(CFG, "NAS100_HISTDATA")
+        with self.assertRaises(CostConfigError):       # proxy symbol level stays unconfigured; only its feed is set
+            cost_model_from_config(with_test_proxy(CFG), TEST_PROXY)
 
 
 class TestImportProvenance(unittest.TestCase):
@@ -175,14 +176,16 @@ class TestImportProvenance(unittest.TestCase):
                             "volume": 0})
         self.file = self.tmp / "hd.csv"
         out.to_csv(self.file, sep=";", index=False)
-        self.cfg = copy.deepcopy(CFG)
+        self.cfg = with_test_proxy(CFG)
+        self.cfg["calendars"]["TEST_SRC_1615"] = copy.deepcopy(CAL_DEFS["TEST_SRC_1615"])
         self.cfg["source_exclusions"] = {"TEST_SET": SPEC}
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def opts(self, **kw):
-        return ImportOptions(str(self.file), "NAS100_HISTDATA", "HISTDATA", "CFD", "1m", source_timezone=NY,
+        return ImportOptions(str(self.file), TEST_PROXY, TEST_FEED, "CFD", "1m", source_timezone=NY,
+                             calendar="TEST_SRC_1615",
                              delimiter=";", datetime_format="%Y%m%d %H%M%S", volume_type="none",
                              price_basis="bid", build_features=False, **kw)
 

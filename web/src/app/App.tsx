@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
-import type { ProtocolRecordRow } from "../api/types";
 import { AppProvider, useApp } from "./context";
 import { RouteContext, href, useHashRoute, useRoute } from "./router";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
@@ -69,34 +67,7 @@ function SubNav({ head, sub }: { head: string; sub: string }) {
   );
 }
 
-function StatusDot() {
-  const [ok, setOk] = useState<boolean | null>(null);
-  useEffect(() => {
-    const check = () => api.get("/api/health").then(() => setOk(true)).catch(() => setOk(false));
-    check();
-    const t = window.setInterval(check, 10000);
-    return () => window.clearInterval(t);
-  }, []);
-  return (
-    <span className={`status-dot ${ok === null ? "" : ok ? "ok" : "down"}`} role="status" data-testid="backend-status"
-      title={ok ? "Backend connected" : ok === false ? "Backend unavailable" : "Checking backend…"}>
-      <span className="dot" />{ok ? "Backend OK" : ok === false ? "Backend unavailable" : "…"}
-    </span>
-  );
-}
 
-function ProtocolChip() {
-  const { data } = useApi<ProtocolRecordRow[]>("/api/protocols");
-  const active = (data ?? []).filter((p) => p.status === "ACTIVE");
-  if (!data) return null;
-  if (!active.length) return <a className="chip warn" href={href("/")} title="No ACTIVE research protocol"><span className="dot" />No protocol</a>;
-  const p = active[0];
-  return (
-    <a className="chip ok" href={href("/")} data-testid="protocol-chip"
-      title={`ACTIVE research protocol ${p.protocol_id} (${p.name}), v${p.protocol_version ?? "?"}: locked holdout, trial budget`}>
-      <span className="dot" />Research protocol<span className="muted">version {p.protocol_version ?? "?"}</span></a>
-  );
-}
 
 function Toasts() {
   const { toasts, dismiss } = useApp();
@@ -162,7 +133,6 @@ function ShellBody() {
   const active = route.parts[0] ?? "";
   const ws = useApi<WorkspaceState>("/api/workspace");
   const firstRun = !!ws.data && ws.data.switchable && !ws.data.current && active !== "settings";
-  const wsName = ws.data?.current?.path.split(/[\\/]/).filter(Boolean).pop();
   return (
     <div className={`shell${menu ? " menu-open" : ""}`}>
       <header className="topbar">
@@ -170,12 +140,7 @@ function ShellBody() {
         <a className="brand" href={href("/")}><BrandMark />MUNYUN LAB</a>
         {demo && <Badge tone="demo">DEMO</Badge>}
         <span className="spacer" />
-        {ws.data?.current && <ProtocolChip />}
-        {ws.data && <a className="chip" href={href("/settings")} data-testid="ws-chip"
-          title={ws.data.current ? `Research workspace: ${ws.data.current.path}` : "No research workspace selected"}>
-          {ws.data.current ? <>Workspace <b>{wsName}</b></> : <Badge tone="warn">no workspace</Badge>}</a>}
         <VersionChip />
-        <StatusDot />
       </header>
       {demo && <div className="demo-banner" data-testid="demo-banner"><b>DEMO WORKSPACE</b> — {SYNTHETIC_NOTICE}</div>}
       <UpdateBanner />

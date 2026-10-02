@@ -66,8 +66,9 @@ class TestDukascopyTemplate(unittest.TestCase):
                           0.50, 0.50, "quotes", "not_modeled"))
         self.assertEqual((m.slippage_ticks_limit, m.fees_per_side, m.spread_points), (0.0, 0.0, 0.0))
         self.assertEqual(m.basis, "Central research assumption of USD 30.15 per USD 1,000,000 traded notional per side, equal to the simple arithmetic mean of Dukascopy's currently published Self Trader index/CFD commission tiers ($52.50 to $7.50). This is not a verified historical 2021-2026 applicable rate for a specific Dukascopy account and does not model daily tier changes. Slippage is separately assumed at 0.50 EdgeLab points per market/stop execution based on the previously documented Tradovate proxy. Directional variant: identical commission and slippage; spread_source quotes - buys fill on the dataset's observed ASK OHLC, sells on BID, so the bid/ask spread is embedded in execution prices and the separate spread cost is zero.")
-        # HistData's profile is untouched and never used for Dukascopy
-        h = cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA")
+        # another feed's provider profile (test-local) is untouched by the Dukascopy scenario
+        from tests.phase2_helpers import TEST_FEED, TEST_PROXY, with_test_proxy
+        h = cost_model_from_config(with_test_proxy(self.cfg), TEST_PROXY, provider=TEST_FEED)
         self.assertEqual((h.status, h.scenario, h.commission_mode), ("assumed", "", "per_unit"))
 
     def test_notional_profile_requires_the_per_million_rate(self):
@@ -131,7 +132,8 @@ class TestNamedCostScenario(unittest.TestCase):
             self.model()
 
     def test_profiles_without_scenario_are_unaffected(self):
-        m = cost_model_from_config(self.cfg, "NAS100_HISTDATA", provider="HISTDATA")
+        from tests.phase2_helpers import TEST_FEED, TEST_PROXY, with_test_proxy
+        m = cost_model_from_config(with_test_proxy(self.cfg), TEST_PROXY, provider=TEST_FEED)
         self.assertEqual((m.status, m.scenario, m.basis), ("assumed", "", ""))
 
     def test_scenario_is_surfaced_on_stored_runs(self):
@@ -146,7 +148,8 @@ class TestNamedCostScenario(unittest.TestCase):
         made = make_workspace(root, runs=False)
         svc = Services(root=root)
         self.addCleanup(svc.store.close)
-        svc.cfg["costs"]["symbols"]["NAS100_HISTDATA"]["providers"]["HISTDATA"].update(
+        from tests.phase2_helpers import TEST_FEED, TEST_PROXY
+        svc.cfg["costs"]["symbols"][TEST_PROXY]["providers"][TEST_FEED].update(
             scenario="test_scn", basis="test inputs only", commission_mode="notional", commission_per_million=2.0)
         out = svc.backtest_strategy(EMA, made["dataset_id"], record=True)
         rec, _ = svc.store.load_run(out["run_id"])
@@ -169,7 +172,8 @@ class TestBacktestUsesTradePrices(unittest.TestCase):
         made = make_workspace(root, runs=False)
         svc = Services(root=root)
         self.addCleanup(svc.store.close)
-        prov = svc.cfg["costs"]["symbols"]["NAS100_HISTDATA"]["providers"]["HISTDATA"]
+        from tests.phase2_helpers import TEST_FEED, TEST_PROXY
+        prov = svc.cfg["costs"]["symbols"][TEST_PROXY]["providers"][TEST_FEED]
         prov.update(commission_mode="notional", commission_per_million=20.0)             # test input only
         cell = svc._run_cell(EMA, made["dataset_id"])
         t = cell["result"].trades

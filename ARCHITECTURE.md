@@ -2154,7 +2154,35 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Unchanged:** the engine, fills, costs, sizing, prop rules, trial counting, the protocol's criteria, the look budget,
   and the discovery classification.
 
-### ADR-86 Strategy pool 2 (second 10,000) and one 20,000-trial protocol for both pools
+### ADR-86 Display round: field-chart grouping, amber survivors, light theme, Home and top bar, holdout-passed paper list, HistData removed
+- **Field chart** (`components/charts.tsx` `ScatterChart`, used by Backtest results → Overview):
+  - Survivors are amber (`--c-survivor`), the strongest contrast to the blue strategies; red stays for losses and errors.
+  - Groups with `cluster: true` (the blue strategies only; survivors and random controls never group) merge dots that
+    overlap on screen. `clusterMarks` is a greedy, grid-indexed grouping. A group is drawn at its members' average
+    position, with radius = base + 1.7·sqrt(n − 1), capped at 13 px, and no number.
+  - Hover shows the count and the win-rate / reward-to-risk ranges. A click calls `onPickMany` with every member;
+    the Overview drawer then lists them best first (`ClusterList`), a click opens one strategy's panel, and "Back"
+    returns to the list.
+  - Display only: points are never moved, filtered or recomputed.
+  - Axis titles moved outside the plot (y title above it, x title below the tick labels), so they no longer collide
+    with pinned points or the break-even curve.
+- **Light theme.** Workspace display preference `ui.theme` (dark | light | system; default dark; outside the config
+  hash), set in Settings → Display. `applyTheme` sets `<html data-theme>`, follows Windows when set to "system", and is
+  remembered in localStorage for the first paint. `:root[data-theme="light"]` redefines every colour token and covers
+  the rules that used fixed dark colours.
+- **Home and top bar.** Home drops the Research batches, Variation batches and Prop simulations cards and adds
+  "Backtested trades" (`facts.trades_total` = the sum of `trade_count` over every stored run record). The top bar no
+  longer shows Backend OK, the research protocol chip or the workspace chip; the version chip stays.
+- **Prop & paper.** `paper_candidates(view=holdout|survivors|all)`, default `holdout`: strategies whose holdout test
+  met the protocol's criteria. The other two lists remain one click away; `show_all` is kept for older callers.
+- **HistData removed.** HistData calendars, exclusions, the instrument, costs and labels are gone from the default
+  configs (which new workspaces copy), from the app and from the docs; the four HistData-only root scripts and the
+  HistData config test are deleted. The generic mechanisms (source exclusions, calendars) are unchanged. An existing
+  workspace keeps its own configs, so its research protocol (bound to that config hash) is unaffected.
+  `histdata_4year_sets.patch` stays untouched by rule.
+- **Unchanged:** the engine, results, survivor rule, prop rules, trial counting and the holdout gate.
+
+### ADR-87 Strategy pool 2 (second 10,000) and one 20,000-trial protocol for both pools
 - **Why.** The user asked for a second pool of 10,000 strategies, a mix of new families and new variables, with the existing
   10,000 unchanged and the new ones imported into the app. Choices made by the user before any code (none from results):
   - split 6,000 new families / 4,000 existing families with new variables, equal shares per family;

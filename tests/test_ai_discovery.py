@@ -14,6 +14,7 @@ from edgelab.ai.context import FORBIDDEN_KEYS, _keys
 from edgelab.ai.schema import DiscoveryRequestError
 from edgelab.services import Services
 from edgelab.strategy.compiler import compile_definition
+from tests.phase2_helpers import TEST_FEED
 from tests.test_workspace import make_workspace
 
 REQ = {"mode": "hypothesis", "hypothesis": "After an oversold stretch price tends to revert toward its mean.",
@@ -24,7 +25,7 @@ class AiBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
-        cls.made = make_workspace(cls.root)                   # synthetic runnable dataset (NAS100_HISTDATA@HISTDATA) + a run
+        cls.made = make_workspace(cls.root)                   # synthetic runnable dataset (test-local proxy feed) + a run
         cls.did = cls.made["dataset_id"]
 
     @classmethod
@@ -208,7 +209,7 @@ class TestReviewSaveAndLineage(AiBase):
         self.assertEqual(lin["request"]["request_id"], valid["request_id"])
         self.assertEqual(lin["strategy"]["strategy_id"], sid)
         run = next(r for r in lin["runs"] if r["run_id"] == bt["run_id"])
-        self.assertEqual((run["dataset_id"], run["provider"], run["cost_status"]), (self.did, "HISTDATA", "assumed"))
+        self.assertEqual((run["dataset_id"], run["provider"], run["cost_status"]), (self.did, TEST_FEED, "assumed"))
         self.assertEqual(run["definition_hash"], doc["definition_hash"])
         self.assertEqual(run["status"], "IN_SAMPLE")
         with self.assertRaises(ValueError):

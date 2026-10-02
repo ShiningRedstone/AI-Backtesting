@@ -1,4 +1,4 @@
-"""Additional classic indicators for strategy pool 2 (ADR-86).
+"""Additional classic indicators for strategy pool 2 (ADR-87).
 
 Supertrend, Parabolic SAR, Ichimoku, CCI, RSI divergence, prior-week levels, Hull MA, KAMA and Heikin-Ashi.
 Every output at bar t uses bars <= t only (prefix-invariant; covered by the registry-wide truncation test in

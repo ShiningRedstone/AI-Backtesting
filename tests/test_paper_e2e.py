@@ -103,7 +103,7 @@ class TestPaperBrowserFlow(unittest.TestCase):
         # 2. batch start: the NQ-sized strategy is refused in plain words, the MNQ one starts
         pg.goto(self.base + "/#/paper/new")
         self.tid(pg, "paper-profile").select_option(PROFILE)
-        self.tid(pg, "paper-show-all").check()
+        self.tid(pg, "paper-view-all").click()
         self.tid(pg, f"paper-pick-{self.nq}").check()
         self.tid(pg, "paper-start").click()
         self.wait_text(pg, "paper-start-error", "not sized in MNQ")

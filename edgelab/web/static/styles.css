@@ -2,7 +2,7 @@
    Near-black canvas, flat charcoal panels with hairline borders and soft glows, crisp light text, a silver
    metallic primary action. The warm accent (--warm-*) is decorative only (one featured surface per screen);
    status colours (--ok/--warn/--error/--info/--demo) are kept separate and always paired with a label or icon.
-   One theme (dark) by design. Fonts are self-hosted (fonts/*.txt carry their SIL OFL licences).
+   Dark by default; a light theme (ADR-86) swaps the tokens at the end of this file. Fonts are self-hosted (fonts/*.txt carry their SIL OFL licences).
    Chart series colours (--c1..--c3) keep their earlier CVD-validated values. */
 
 /* ---------------------------------------------------------------- fonts */
@@ -43,6 +43,7 @@
   --demo: #c49bff; --demo-weak: rgba(196, 155, 255, .13); --demo-border: rgba(196, 155, 255, .45);
   /* chart series: values unchanged from the earlier palette (CVD-validated on #0c1320); each keeps >= 3.4:1 on --surface #151516 */
   --c1: #16a877; --c2: #4a8ff0; --c3: #b58a2e; --c-neg: #d8545f; --c-neutral: #6b6b74;
+  --c-survivor: #f5b83d;   /* ADR-86: survivors on the field chart (amber: strongest contrast to the blue strategies, never red) */
   --grid: #222225; --axis: #36363c;
   /* shape */
   --radius: 10px; --radius-lg: 14px; --radius-xl: 20px; --pill: 999px;
@@ -757,3 +758,65 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .badges-inline { display: inline-flex; flex-wrap: nowrap; gap: 4px; align-items: center; white-space: nowrap; }
 .nowrap { white-space: nowrap; }
 .faint-row td { opacity: .6; }
+
+/* ---------------------------------------------------------------- light theme (ADR-86)
+   Settings -> Display -> Theme: Light / Dark / Windows. <html data-theme="light"> swaps the tokens; the rules below cover
+   the few places that use fixed dark-theme colours. Red stays reserved for losses, negative values and errors. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f5f7; --bg-2: #efeff2;
+  --surface: #ffffff; --surface-2: #f4f4f6; --surface-3: #e9e9ed; --surface-inset: #f0f0f3;
+  --border: rgba(0, 0, 0, .09); --border-strong: rgba(0, 0, 0, .17); --border-focus: rgba(0, 0, 0, .32);
+  --text: #18181b; --text-2: #3f3f46; --muted: #575762; --faint: #6e6e78;
+  --accent: #18181b; --accent-hover: #000000; --accent-text: #ffffff;
+  --accent-weak: rgba(0, 0, 0, .05); --accent-line: rgba(0, 0, 0, .32);
+  --glow: 0 0 0 1px rgba(0, 0, 0, .08), 0 6px 20px rgba(0, 0, 0, .06);
+  --warm-gradient: linear-gradient(160deg, #f3cfe0 0%, #f9e6ef 55%, #ffffff 100%);
+  --glow-violet: rgba(140, 100, 230, .12); --glow-rose: rgba(214, 80, 140, .10);
+  --focus: rgba(104, 74, 214, .85);
+  --blue: #2457c5; --blue-weak: rgba(36, 87, 197, .08);
+  --ok: #157a46; --ok-weak: rgba(21, 122, 70, .08); --ok-border: rgba(21, 122, 70, .35);
+  --warn: #946200; --warn-weak: rgba(148, 98, 0, .09); --warn-border: rgba(148, 98, 0, .38);
+  --error: #c0262d; --error-weak: rgba(192, 38, 45, .07); --error-border: rgba(192, 38, 45, .35);
+  --info: #2457c5; --info-weak: rgba(36, 87, 197, .08); --info-border: rgba(36, 87, 197, .32);
+  --demo: #6d3fd1; --demo-weak: rgba(109, 63, 209, .08); --demo-border: rgba(109, 63, 209, .35);
+  --c1: #0e8a5f; --c2: #2f6fd6; --c3: #93691a; --c-neg: #c0392b; --c-neutral: #8a8a94;
+  --c-survivor: #c27c0e;
+  --grid: #e9e9ed; --axis: #c8c8cf;
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, .7);
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, .16), 0 2px 8px rgba(0, 0, 0, .08);
+}
+:root[data-theme="light"] a, :root[data-theme="light"] .linklike { text-decoration-color: rgba(0, 0, 0, .3); }
+:root[data-theme="light"] ::selection { background: rgba(104, 74, 214, .2); }
+:root[data-theme="light"] * { scrollbar-color: rgba(0, 0, 0, .2) transparent; }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, .16); background-clip: padding-box; }
+:root[data-theme="light"] .topbar { background: rgba(255, 255, 255, .85); }
+:root[data-theme="light"] .brand-mark, :root[data-theme="light"] .icon-tile { color: #3f3f46;
+  background: linear-gradient(180deg, #ffffff, #ececf0); border-color: rgba(0, 0, 0, .1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 4px 14px rgba(0, 0, 0, .06); }
+:root[data-theme="light"] .hero::after { background-image: linear-gradient(rgba(0, 0, 0, .05) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(0, 0, 0, .05) 1px, transparent 1px); }
+:root[data-theme="light"] .featured { border-color: rgba(200, 80, 140, .22); --muted: #6a4c5b; --border: rgba(0, 0, 0, .08); }
+:root[data-theme="light"] .featured::before { opacity: .5; }
+:root[data-theme="light"] .featured .kpi { background: rgba(255, 255, 255, .9); --muted: #575762; --border: rgba(0, 0, 0, .08);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .07), inset 0 1px 0 rgba(255, 255, 255, .8); }
+:root[data-theme="light"] .btn:hover:not(:disabled) { border-color: rgba(0, 0, 0, .24); }
+:root[data-theme="light"] .btn-primary { background: linear-gradient(180deg, #2a2a2e 0%, #18181b 100%); color: #ffffff; border-color: #18181b;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .18), inset 0 1px 0 rgba(255, 255, 255, .12); }
+:root[data-theme="light"] .btn-primary:hover:not(:disabled) { background: #000000; }
+:root[data-theme="light"] .input:hover { border-color: rgba(0, 0, 0, .26); }
+:root[data-theme="light"] .input:focus { border-color: rgba(104, 74, 214, .55); box-shadow: 0 0 0 3px rgba(104, 74, 214, .14); }
+:root[data-theme="light"] .empty { background: radial-gradient(60% 90% at 50% 0%, rgba(0, 0, 0, .02), transparent 70%); }
+:root[data-theme="light"] .segmented button.on { background: linear-gradient(180deg, #2a2a2e, #18181b); color: #ffffff; box-shadow: none; }
+:root[data-theme="light"] .scope-net { border-color: rgba(0, 0, 0, .3); }
+:root[data-theme="light"] .filterbar { background: rgba(255, 255, 255, .94); box-shadow: 0 6px 20px rgba(0, 0, 0, .06); }
+:root[data-theme="light"] .filterbar .input.active { background-color: rgba(0, 0, 0, .04); }
+:root[data-theme="light"] .drawer-backdrop { background: rgba(24, 24, 30, .28); }
+:root[data-theme="light"] .modal-backdrop { background: rgba(24, 24, 30, .34); }
+:root[data-theme="light"] .drawer { box-shadow: -18px 0 50px rgba(0, 0, 0, .14); }
+:root[data-theme="light"] .chart-tip { background: rgba(255, 255, 255, .98); box-shadow: 0 10px 24px rgba(0, 0, 0, .12); }
+:root[data-theme="light"] .tree-node.focus { border-color: rgba(0, 0, 0, .4); box-shadow: 0 0 0 3px rgba(0, 0, 0, .05); }
+:root[data-theme="light"] .menu-open .scrim { background: rgba(0, 0, 0, .25); }
+@media (max-width: 900px) { :root[data-theme="light"] .sidebar { box-shadow: 8px 0 30px rgba(0, 0, 0, .12); } }
+:root[data-theme="light"] .btn-primary:active:not(:disabled) { background: #000000; filter: none; }
+:root[data-theme="light"] .hero { background: linear-gradient(180deg, #ffffff, #f4f1f6); }

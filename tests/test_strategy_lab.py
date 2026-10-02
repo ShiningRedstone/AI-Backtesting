@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 from edgelab.web.app import create_app
-from tests.phase2_helpers import synthetic_canonical, write_generic_utc
+from tests.phase2_helpers import TEST_FEED, TEST_PROXY, TEST_PROXY_PROFILE, add_test_proxy_feed, synthetic_canonical, write_generic_utc
 
 REPO = Path(__file__).resolve().parents[1]
 EMA = yaml.safe_load((REPO / "strategies" / "fixtures" / "ema_crossover.yaml").read_text())
@@ -26,13 +26,14 @@ class TestStrategyLabApi(unittest.TestCase):
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
         shutil.copytree(REPO / "configs", cls.root / "configs")
+        add_test_proxy_feed(cls.root / "configs")
         write_generic_utc(synthetic_canonical("2024-01-02", "2024-06-28", tf=5, seed=5), cls.root / "h.csv")
         write_generic_utc(synthetic_canonical("2024-01-02", "2024-02-28", tf=5, seed=6), cls.root / "cfd.csv")
         cls.app = create_app(cls.root)
         cls.c = cls.app.test_client()
         svc = cls.app.config["EDGELAB"]["services"]
         cls.svc = svc
-        cls.did = svc.import_file(dict(file=str(cls.root / "h.csv"), instrument="NAS100_HISTDATA", provider="HISTDATA",
+        cls.did = svc.import_file(dict(file=str(cls.root / "h.csv"), instrument=TEST_PROXY, provider=TEST_FEED,
                                        asset_type="CFD", timeframe="5m", source_timezone="UTC", calendar="CME_EQUITY",
                                        price_basis="bid", build_features=False))["dataset_id"]
         cls.cfd = svc.import_file(dict(file=str(cls.root / "cfd.csv"), instrument="NAS100_CFD", provider="SOMEBROKER",
@@ -180,7 +181,7 @@ class TestStrategyLabApi(unittest.TestCase):
                 self.assertIn(k, row["metrics"])
             self.assertIn("breakeven_cost_multiplier", row)
             self.assertEqual((row["dataset_id"], row["provider"], row["cost_profile"], row["cost_status"]),
-                             (self.did, "HISTDATA", "NAS100_HISTDATA@HISTDATA", "assumed"))
+                             (self.did, TEST_FEED, TEST_PROXY_PROFILE, "assumed"))
             self.assertNotIn("rank", row)
             self.assertNotIn("score", row)
         self.assertTrue(any("not ranked or scored" in x for x in cmp_["labels"]))

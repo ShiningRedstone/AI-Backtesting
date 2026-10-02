@@ -1,4 +1,4 @@
-"""Pool-2 indicators (ADR-86): causality with non-default parameters and known answers against direct reference
+"""Pool-2 indicators (ADR-87): causality with non-default parameters and known answers against direct reference
 implementations (synthetic data, labelled as such)."""
 from __future__ import annotations
 

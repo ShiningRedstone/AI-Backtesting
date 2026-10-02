@@ -1,4 +1,4 @@
-"""Strategy pool 2 (ADR-86): pool 1 stays byte-identical; pool 2's frozen design; the two-step workspace flow (generate,
+"""Strategy pool 2 (ADR-87): pool 1 stays byte-identical; pool 2's frozen design; the two-step workspace flow (generate,
 then switch to one 20,000-trial protocol with both pools as sibling campaigns). SYNTHETIC data only."""
 from __future__ import annotations
 

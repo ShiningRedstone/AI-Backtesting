@@ -284,7 +284,7 @@ def verify_record(rec: Mapping) -> None:
 
 
 def holdout_exposed(rec: Mapping) -> set[str]:
-    """Strategy ids whose holdout was already looked at under an EARLIER protocol (ADR-86: listed in this protocol's
+    """Strategy ids whose holdout was already looked at under an EARLIER protocol (ADR-87: listed in this protocol's
     pre-protocol exposure by the strategy-pool switch); they are never tested on the holdout again."""
     runs = ((rec.get("material") or {}).get("pre_protocol_exposure") or {}).get("runs") or []
     return {r["strategy_id"] for r in runs if r.get("strategy_id") and str(r.get("note", "")).startswith("holdout look under")}

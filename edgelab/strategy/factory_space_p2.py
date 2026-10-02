@@ -1,4 +1,4 @@
-"""Strategy pool 2 variation space (ADR-86): 25 new families + new variables for the 30 pool-1 families.
+"""Strategy pool 2 variation space (ADR-87): 25 new families + new variables for the 30 pool-1 families.
 
 Pool 1 (``factory_space``, manifest FM_3B0B01CFC81AB15E) is NOT modified: this module imports it and builds a
 separate space that the same generator (``factory.generate(..., S=factory_space_p2, exclude=<pool 1>)``) samples.

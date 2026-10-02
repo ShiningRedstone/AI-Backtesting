@@ -12,7 +12,7 @@ import yaml
 from edgelab.analytics.metrics import max_drawdown
 from edgelab.research import validation as v
 from edgelab.services import Services
-from tests.phase2_helpers import synthetic_canonical, write_generic_utc
+from tests.phase2_helpers import TEST_FEED, TEST_PROXY, TEST_PROXY_PROFILE, add_test_proxy_feed, synthetic_canonical, write_generic_utc
 
 REPO = Path(__file__).resolve().parents[1]
 EMA = yaml.safe_load((REPO / "strategies" / "fixtures" / "ema_crossover.yaml").read_text())
@@ -93,17 +93,18 @@ class TestMonteCarlo(unittest.TestCase):
 
 
 class TestServiceValidation(unittest.TestCase):
-    """Fixed ema_crossover on a synthetic 5m NAS100_HISTDATA dataset with provider HISTDATA, so the
-    configured assumed MNQ-equivalent profile applies (CME_EQUITY calendar: the synthetic bars follow it)."""
+    """Fixed ema_crossover on a synthetic 5m dataset of the test-local BID proxy (TEST_PROXY@TEST_FEED), so its
+    test-local assumed cost profile applies (CME_EQUITY calendar: the synthetic bars follow it)."""
 
     @classmethod
     def setUpClass(cls):
         cls.root = Path(tempfile.mkdtemp())
         shutil.copytree(REPO / "configs", cls.root / "configs")
+        add_test_proxy_feed(cls.root / "configs")
         write_generic_utc(synthetic_canonical("2024-01-02", "2024-06-28", tf=5, seed=5), cls.root / "h.csv")
         cls.svc = Services(root=cls.root)
-        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument="NAS100_HISTDATA",
-                                           provider="HISTDATA", asset_type="CFD", timeframe="5m",
+        cls.did = cls.svc.import_file(dict(file=str(cls.root / "h.csv"), instrument=TEST_PROXY,
+                                           provider=TEST_FEED, asset_type="CFD", timeframe="5m",
                                            source_timezone="UTC", calendar="CME_EQUITY", price_basis="bid",
                                            build_features=False))["dataset_id"]
         cls.oos = cls.svc.evaluate_oos(EMA, cls.did, "2024-04-01", record=True, mc_sims=200, mc_seed=1)
@@ -144,10 +145,10 @@ class TestServiceValidation(unittest.TestCase):
     def test_cost_status_and_labels_propagate(self):
         for rep in (self.oos, self.wf):
             self.assertEqual(rep["cost_status"], ["assumed"])
-            self.assertEqual({w["cost_profile"] for w in rep["windows"]}, {"NAS100_HISTDATA@HISTDATA"})
+            self.assertEqual({w["cost_profile"] for w in rep["windows"]}, {TEST_PROXY_PROFILE})
             text = " | ".join(rep["labels"])
-            for phrase in ("MNQ-equivalent assumed costs", "not broker-verified",
-                           "HistData NSXUSD CFD BID research proxy", "Fixed strategy"):
+            for phrase in ("not broker-verified", f"{TEST_PROXY} is a research proxy, not a tradable contract",
+                           "BID-only prices", "Fixed strategy"):
                 self.assertIn(phrase, text)
             self.assertTrue(rep["labels"][0].startswith("Historical, in-sample and out-of-sample,"))   # train + test
 

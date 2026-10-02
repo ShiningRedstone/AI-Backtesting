@@ -4,7 +4,7 @@
    labelled), basis (net / gross), synthetic data and simulated results are labelled where they are shown. */
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { BootstrapResponse, ControlPanelData, HoldoutPeriod, PeriodStats, PropSummaryRow, ResultsOverview, StrategyPanelData, YearRow } from "../api/types";
+import type { BootstrapResponse, ControlPanelData, FieldPoint, HoldoutPeriod, PeriodStats, PropSummaryRow, ResultsOverview, StrategyPanelData, YearRow } from "../api/types";
 import { useApi, useApp } from "../app/context";
 import { facetLabel, humanize, profileLabel, statusLabel } from "../app/labels";
 import { href, useRoute } from "../app/router";
@@ -39,7 +39,8 @@ const BREAKDOWNS: [string, string][] = [["target_type", "By target"], ["entry_ty
   ["stop_type", "By stop"], ["direction", "By direction"], ["session", "By session"]];
 
 /** The top of Backtest results → Overview. */
-export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid: string) => void; onOpenControl: (cid: string) => void }) {
+export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { onOpen: (sid: string) => void; onOpenControl: (cid: string) => void;
+  onOpenMany?: (points: FieldPoint[]) => void }) {
   const [basis, setBasis] = useState<"net" | "gross">("net");
   const [controls, setControls] = useState(true);
   const [allWindows, setAllWindows] = useState(false);
@@ -55,10 +56,10 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
   const f = o.facts;
   const tags = <><Scope kind="is" /><Scope kind={basis} />{f.synthetic_tested > 0 && <Scope kind="synthetic" />}</>;
   const groups: ScatterGroup[] = [
-    { id: "strategies", label: "Strategies", color: "var(--c2)", size: 3.5,
+    { id: "strategies", label: "Strategies", color: "var(--c2)", size: 3.5, cluster: true,      // ADR-86: overlapping dots group
       points: o.points.filter((p) => !p.survivor && p.win_rate != null && p.avg_rr != null).map((p) => ({ id: p.strategy_id, x: p.win_rate!, y: p.avg_rr!,
         label: p.display_name ?? humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
-    { id: "survivors", label: "Survivors", color: "var(--c1)", size: 5, ring: true,
+    { id: "survivors", label: "Survivors", color: "var(--c-survivor)", size: 5, ring: true,
       points: o.points.filter((p) => p.survivor && p.win_rate != null && p.avg_rr != null).map((p) => ({ id: p.strategy_id, x: p.win_rate!, y: p.avg_rr!,
         label: p.display_name ?? humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
     ...(controls ? [{ id: "controls", label: "Random controls", color: "var(--c-neutral)", size: 3.5,
@@ -91,7 +92,8 @@ export function ResultsOverviewSection({ onOpen, onOpenControl }: { onOpen: (sid
             onChange={(e: { target: HTMLInputElement }) => setControls(e.target.checked)} />show random controls</label></div>}>
         {!o.points.length && !o.controls.length ? <Empty>No tested strategies in this scope yet. <a href={href("/run")}>Run a backtest</a>.</Empty> : <>
           <ScatterChart groups={groups} curves={curves} yUnit="avg reward : risk" yMax={8} testId="field-scatter"
-            onPick={(id) => (id.startsWith("CTRL_") ? onOpenControl(id) : onOpen(id))} />
+            onPick={(id) => (id.startsWith("CTRL_") ? onOpenControl(id) : onOpen(id))}
+            onPickMany={onOpenMany ? (ids) => { const set = new Set(ids); onOpenMany(o.points.filter((p) => set.has(p.strategy_id))); } : undefined} />
           <p className="small muted">Each dot is one strategy's latest in-sample backtest ({o.basis_label.toLowerCase()}); click a dot for its panel.
             Points above the dashed line made money on average{basis === "gross" ? " before costs" : ""}. {o.breakeven.note}
             {!o.breakeven.after_cost && basis === "net" && " Switch to Before costs to see the break-even line after a typical cost."}</p>
@@ -276,7 +278,7 @@ const dayMonthYear = (d: string) => `${dayMonth(d)} ${d.slice(0, 4)}`;
 const TECH_LABEL: Record<string, string> = { strategy_id: "Strategy ID", logic_hash: "Logic hash", definition_hash: "Definition hash",
   machine_name: "Machine name", run_id: "Backtest ID", dataset_id: "Dataset ID", trades_hash: "Trades hash", config_hash: "Config hash",
   control_id: "Control ID", candidate_strategy_id: "Matched strategy ID", validation_id: "Control batch ID" };
-const humanProvider = (p: string) => ({ synthetic: "synthetic demo data", dukascopy: "Dukascopy", histdata: "HistData" } as Record<string, string>)[p] ?? facetLabel("provider", p);
+const humanProvider = (p: string) => ({ synthetic: "synthetic demo data", dukascopy: "Dukascopy" } as Record<string, string>)[p] ?? facetLabel("provider", p);
 const humanCost = (s: string) => ({ configured: "configured", unconfigured: "not configured", assumption: "assumed" } as Record<string, string>)[s] ?? facetLabel("cost", s).toLowerCase();
 
 export function PropRows({ rows, runId }: { rows: PropSummaryRow[]; runId: string }) {
@@ -388,6 +390,25 @@ export function ControlPanelView({ id }: { id: string }) {
         ["dataset_id", c.dataset_id]] as [string, string | null][]).filter(([, v]) => v).map(([key, v]) => [TECH_LABEL[key] ?? key, <Mono>{v}</Mono>])}>
         <p className="small muted">Realization {c.realization}, seed {c.seed ?? "—"}.</p>
       </TechDetails>
+    </div>
+  );
+}
+
+
+/** ADR-86: the strategies inside one grouped circle of the field chart, best first; click one to open its panel. */
+export function ClusterList({ points, onOpen }: { points: FieldPoint[]; onOpen: (sid: string) => void }) {
+  const rows = [...points].sort((a, b) => (b.expectancy_r ?? -1e9) - (a.expectancy_r ?? -1e9));
+  return (
+    <div data-testid="cluster-list">
+      <p className="small muted">{rows.length} strategies are drawn as this one circle (their dots overlap on the chart). Click one to open it.</p>
+      <TableWrap><table className="dense hover">
+        <thead><tr><th>Strategy</th><th className="r">Trades</th><th className="r">Win rate</th><th className="r">Reward to risk</th><th className="r">Net R per trade</th></tr></thead>
+        <tbody>{rows.map((p) => (
+          <tr key={p.strategy_id} className="clickable" onClick={() => onOpen(p.strategy_id)} data-testid={`cluster-row-${p.strategy_id}`}>
+            <td>{p.display_name ?? humanize(p.name ?? "Strategy")}{p.synthetic && <> <Scope kind="synthetic" /></>}</td>
+            <td className="r num">{p.trades}</td><td className="r num">{pct(p.win_rate, 1)}</td><td className="r num">{n(p.avg_rr, 2)}</td>
+            <td className={`r num ${signCls(p.expectancy_r)}`}>{r(p.expectancy_r)}</td></tr>))}
+        </tbody></table></TableWrap>
     </div>
   );
 }

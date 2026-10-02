@@ -3,7 +3,7 @@ import { api, ApiError } from "../api/client";
 import type { DatasetRow, GapReport, InstrumentIdentity, PaperFees, PreferredDataset, RiskPreference, WorkspaceState } from "../api/types";
 import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
-import { useApi, useApp } from "../app/context";
+import { useApi, useApp, type Theme } from "../app/context";
 import { datasetLabel, facetLabel, humanize, plainProse, statusLabel, valueLabel } from "../app/labels";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, ObjectView, Select, TableWrap, TechDetails, TextInput, fmt, shortTime, ReadOnly } from "../components/ui";
@@ -422,6 +422,11 @@ function DisplayCard() {
   const set = (k: "show_ids" | "show_readonly") => (v: boolean) => setPref({ [k]: v }).catch((er: Error) => toast("error", er.message));
   return (
     <Card title="Display" testId="settings-display">
+      <label className="switch-row"><span>Theme</span>
+        <select className="input" style={{ width: 200 }} value={prefs.theme ?? "dark"} aria-label="theme" data-testid="theme-select"
+          onChange={(e: { target: HTMLSelectElement }) => setPref({ theme: e.target.value as Theme }).catch((er: Error) => toast("error", er.message))}>
+          <option value="dark">Dark</option><option value="light">Light</option><option value="system">Same as Windows</option>
+        </select></label>
       <Switch on={prefs.show_ids} onChange={set("show_ids")} label="Show IDs (strategy, backtest and dataset IDs, hashes)" testId="switch-show-ids" />
       <Switch on={prefs.show_readonly} onChange={set("show_readonly")} label="Show read-only information (fixed research design, configuration, system status)"
         testId="switch-show-readonly" />

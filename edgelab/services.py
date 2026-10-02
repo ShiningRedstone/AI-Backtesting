@@ -273,7 +273,8 @@ class Services:
     # ------------------------------------------------------------ display preferences (ADR-74; outside the config hash)
     UI_PREF_DEFAULTS = {"favorites": [], "prop_criteria_profile": "LUCID_LUCIDFLEX_50K", "show_ids": False,
                         "show_readonly": False, "research_processes": None,       # None = all cores but one (ADR-77)
-                        "prop_fees": {}}                                          # ADR-81: per rule profile, USD
+                        "prop_fees": {},                                          # ADR-81: per rule profile, USD
+                        "theme": "dark"}                                          # ADR-86: dark | light | system
 
     def ui_preferences(self) -> dict:
         """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
@@ -326,6 +327,9 @@ class Services:
                     raise ValueError(f"{k} must be true or false")
             elif k == "prop_fees":
                 v = self._check_prop_fees(v)
+            elif k == "theme":
+                if v not in ("dark", "light", "system"):
+                    raise ValueError("theme must be dark, light or system")
             elif k == "research_processes":
                 from edgelab.research.campaign import max_processes
                 if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= max_processes()):
@@ -718,7 +722,7 @@ class Services:
     def factory_verify(self, manifest_id: str) -> dict:
         from edgelab.strategy import factory
         d = self._factory_manifest_dir(manifest_id)
-        if (factory.read_header(d)["identity"].get("pool") or {}).get("pool") == 2:      # ADR-86: pool 2 excludes pool 1
+        if (factory.read_header(d)["identity"].get("pool") or {}).get("pool") == 2:      # ADR-87: pool 2 excludes pool 1
             from edgelab.research import pool2
             return _jsonable(pool2.verify(self, manifest_id))
         return _jsonable(factory.verify(d))
@@ -927,7 +931,7 @@ class Services:
         """Frozen campaigns of this workspace with durable progress and latest run (read-only)."""
         from edgelab.research import campaign, pool2
         rows = campaign.list_campaigns(self)
-        labels = pool2.run_names(self)                   # ADR-86: "Strategy pool 1/2" (+ retired protocol); display only
+        labels = pool2.run_names(self)                   # ADR-87: "Strategy pool 1/2" (+ retired protocol); display only
         return _jsonable([{**r, "label": labels.get(r["campaign_id"])} for r in rows])
 
     def campaign_detail(self, campaign_id: str) -> dict:
@@ -1109,13 +1113,20 @@ class Services:
             m = self.__dict__["_paper"] = PaperManager(self)
         return m
 
-    def paper_candidates(self, profile_id: str, show_all: bool = False) -> dict:
-        """Strategies to choose from: survivors under ``profile_id`` (latest in-sample run), or every tested strategy."""
+    def paper_candidates(self, profile_id: str, show_all: bool = False, view: str | None = None) -> dict:
+        """Strategies to choose from (ADR-86 ``view``): ``holdout`` (default) = strategies whose holdout test met the
+        protocol's criteria; ``survivors`` = survivors under ``profile_id`` (latest in-sample run); ``all`` = every
+        tested strategy. ``show_all`` (older callers) means ``all``."""
         from edgelab.prop.service import default_profiles
         from edgelab.research import overview as ov
         from edgelab.research.results_view import _latest_scoped
         if profile_id not in {p["profile_id"] for p in default_profiles(self.root)}:
             raise ValueError(f"unknown prop rule profile {profile_id!r}")
+        view = view or ("all" if show_all else "holdout")
+        if view not in ("holdout", "survivors", "all"):
+            raise ValueError("view must be holdout, survivors or all")
+        passed = {sid for sid, hs in ov.protocol_facts(self)["holdout"].items()
+                  if any(h["status"] == "completed" and h.get("outcome") == "HOLDOUT_CRITERIA_MET" for h in hs)}
         rows, _ = _latest_scoped(self, "in_sample", None)
         running = {a["strategy_id"] for a in self._paper_store().list_accounts(self.data_root) if a.get("status") == "running"
                    and a["profile_id"] == profile_id}
@@ -1125,15 +1136,16 @@ class Services:
             if not ref or not ref.get("trade_count"):
                 continue
             r = ov.apply_criteria(ref, profile_id)
-            if not show_all and not r["survivor"]:
-                continue
             f = x["facets"]
+            if (view == "survivors" and not r["survivor"]) or (view == "holdout" and f["strategy_id"] not in passed):
+                continue
             out.append({"strategy_id": f["strategy_id"], "display_name": f.get("display_name") or f.get("name"),
                         "family_id": f.get("family_id"), "timeframe": f.get("timeframe"), "survivor": r["survivor"],
+                        "holdout_passed": f["strategy_id"] in passed,
                         "expectancy_r": ref.get("expectancy_r"), "trades": ref.get("trade_count"),
                         "run_id": ref.get("run_id"), "already_running": f["strategy_id"] in running})
-        return _jsonable({"profile_id": profile_id, "show_all": bool(show_all), "strategies": out,
-                          "n_survivors": sum(1 for o in out if o["survivor"])})
+        return _jsonable({"profile_id": profile_id, "show_all": view == "all", "view": view, "strategies": out,
+                          "n_survivors": sum(1 for o in out if o["survivor"]), "n_holdout_passed": len(passed)})
 
     @staticmethod
     def _paper_store():
@@ -1783,7 +1795,7 @@ class Services:
         `supersedes` (ADR-67): the ACTIVE protocol of the same scope is replaced by this new one - allowed ONLY
         while it is unused (zero trial events, zero holdout accesses); it is retired (never edited) and the new
         material records its id. The new record is fully built and validated before anything is retired.
-        `replaces` (ADR-86): the ACTIVE protocol of the same scope is retired (never edited) and this one activated even
+        `replaces` (ADR-87): the ACTIVE protocol of the same scope is retired (never edited) and this one activated even
         though it HAS been used; the history must be documented in `exposure_statement` / `pre_protocol_exposure` (the
         material itself is built exactly as without this argument). Used by the strategy-pool-2 switch."""
         from edgelab.core.identity import code_version, hash_obj
@@ -2124,7 +2136,7 @@ class Services:
     def holdout_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.holdout_status(job_id))
 
-    # ------------------------------------------------------------ strategy pool 2 (ADR-86)
+    # ------------------------------------------------------------ strategy pool 2 (ADR-87)
     def pool2_status(self) -> dict:
         """Read-only: pool 1 / pool 2 manifests, the active protocol and what the protocol switch would do."""
         from edgelab.research import pool2
@@ -2215,7 +2227,7 @@ class Services:
         prior = self.store.list_holdout_access(protocol_id)
         if any(a["logic_hash"] == doc["logic_hash"] and a["status"] != "refused" for a in prior):
             refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate's logic was already evaluated on the holdout")
-        if strategy_id in rp.holdout_exposed(p):                                  # ADR-86: looked at under an earlier protocol
+        if strategy_id in rp.holdout_exposed(p):                                  # ADR-87: looked at under an earlier protocol
             refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate was already evaluated on the holdout under an earlier "
                    "protocol (listed in this protocol's prior exposure)")
         used = sum(1 for a in prior if a["status"] != "refused")

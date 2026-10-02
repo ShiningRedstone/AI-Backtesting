@@ -39,10 +39,8 @@ export function HomePage() {
           <Kpi label="Strategies" value={f.strategies.toLocaleString()} sub={`${f.families} families`} />
           <Kpi label="Stored runs" value={f.runs.toLocaleString()}
             sub={`${st.IN_SAMPLE ?? 0} in-sample · ${st.OUT_OF_SAMPLE ?? 0} out-of-sample · ${st.WALK_FORWARD ?? 0} walk-forward`} />
-          <Kpi label="Research batches" value={f.searches.toLocaleString()} sub="search experiments" />
-          <Kpi label="Variation batches" value={f.variation_batches.toLocaleString()} sub="controlled variations" />
+          <Kpi label="Backtested trades" value={(f.trades_total ?? 0).toLocaleString()} sub="across every stored backtest" testId="home-trades" />
           <Kpi label="AI generations" value={f.ai_generations.toLocaleString()} sub="proposal requests" />
-          <Kpi label="Prop simulations" value={f.prop_simulations.toLocaleString()} sub={<Scope kind="sim" />} />
           <Kpi label="Datasets" value={f.datasets.toLocaleString()} sub={`stored in ${storeLabel(f.store_backend)}`} />
           <Kpi label="Version" value={`v${UI_VERSION}`} sub={upd?.available && !upd.skipped ? <span className="pos">update {upd.release?.version} available</span>
             : upd?.check.state === "error" ? `update check failed: ${humanize(upd.check.error?.code).toLowerCase()}` : "up to date or not checked"} />

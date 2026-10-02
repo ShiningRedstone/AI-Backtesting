@@ -45,7 +45,7 @@ TF_WEIGHTS = {"1m": 0.15, "5m": 0.35, "15m": 0.25, "30m": 0.15, "60m": 0.10}
 MTF_PROBABILITY = 0.35
 
 
-_POOL1 = S                    # the pool-1 space (ADR-60); pool 2 passes factory_space_p2 as ``S`` (ADR-86)
+_POOL1 = S                    # the pool-1 space (ADR-60); pool 2 passes factory_space_p2 as ``S`` (ADR-87)
 
 
 class FactoryError(RuntimeError):
@@ -711,7 +711,7 @@ def generate(seed: int = DEFAULT_SEED, quotas: Mapping[str, int] | None = None,
     fams = [f for f in S.FAMILIES if (families is None or f.fid in set(families)) and q.get(f.fid, 0) > 0]
     seen: dict[str, str] = {}                            # logic_hash -> strategy_id
     prior = frozenset((exclude or {}).get("logic_hashes") or ())
-    kw = {} if S is _POOL1 else {"S": S}                 # pool 1: the exact pre-ADR-86 call shape
+    kw = {} if S is _POOL1 else {"S": S}                 # pool 1: the exact pre-ADR-87 call shape
     seen_def: dict[str, str] = {}
     strategies, rejections, duplicates = [], [], []
     attempts = {}

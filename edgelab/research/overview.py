@@ -954,6 +954,7 @@ def overview(svc) -> dict:
                           "search_id": s["search_id"]})
     return {"facts": {"strategies": len(facts), "families": len({f["family_id"] for f in facts if f["family_id"]}),
                       "runs": len(runs), "runs_by_status": dict(status_counts),
+                      "trades_total": int(sum(int(r.get("trade_count") or 0) for r in runs)),   # ADR-86: every stored run
                       "searches": len(searches), "variation_batches": len(svc.library.list_batches()),
                       "prop_simulations": len(props), "ai_generations": len(gens),
                       "datasets": len(svc.store.list_datasets()), "store_backend": svc.store.backend},

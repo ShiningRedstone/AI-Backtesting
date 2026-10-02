@@ -388,7 +388,7 @@ def build_spec(svc, manifest_id: str, *, protocol_id: str | None = None, dataset
                workers: int = REQUIRED_WORKERS, max_cells: int | None = None,
                siblings: list[Mapping] | None = None) -> tuple[dict, dict]:
     """(spec, context). Refuses (CampaignError) anything that would make a partial or multi-trial campaign.
-    ``siblings`` (ADR-86): the other campaigns frozen under the SAME protocol (strategy pools sharing one declared trial
+    ``siblings`` (ADR-87): the other campaigns frozen under the SAME protocol (strategy pools sharing one declared trial
     budget): [{manifest_id, search_id, n_strategies}]. Their trials are accounted, not foreign, and the budget must
     cover all of them. Absent = a single-campaign protocol (the spec is exactly as before)."""
     from edgelab.engine.sizing import DEFAULT_RESEARCH_ACCOUNT

@@ -3,7 +3,6 @@ buckets, exact cost sensitivity, break-even multiple, and the caveat labels repo
 Deterministic synthetic trades only; no real data, no strategy search."""
 from __future__ import annotations
 
-import copy
 import json
 import math
 import shutil
@@ -20,7 +19,8 @@ from edgelab.engine.backtester import BacktestResult
 from edgelab.features.sessions import load_sessions
 from edgelab.research.runs import record_run
 from edgelab.services import Services
-from tests.helpers import CFG, INSTRUMENTS
+from tests.helpers import CFG
+from tests.phase2_helpers import TEST_FEED, TEST_PROXY, TEST_PROXY_PROFILE, add_test_proxy_feed, with_test_proxy
 
 SESSIONS = load_sessions(CFG)
 
@@ -143,10 +143,10 @@ class TestCostSensitivity(unittest.TestCase):
 
 
 def _record(store, cfg, strategy_id, dataset_id, start, end, t, status="assumed",
-            profile="NAS100_HISTDATA@HISTDATA", notes="single backtest (Strategy Lab)"):
+            profile=TEST_PROXY_PROFILE, notes="single backtest (Strategy Lab)"):
     res = BacktestResult(strategy_id, {"dsl": {"name": "fixture"}}, t, {}, len(t),
                          {"cost_status": status, "costs": {"status": status, "profile": profile}},
-                         {"dataset_id": dataset_id, "provider": "HISTDATA", "instrument": "NAS100_HISTDATA",
+                         {"dataset_id": dataset_id, "provider": TEST_FEED, "instrument": TEST_PROXY,
                           "asset_type": "CFD", "price_basis": "bid", "timeframe": "5m", "start": start, "end": end},
                          None)
     return record_run(store, cfg, res, compute_metrics(t), notes=notes)
@@ -155,7 +155,7 @@ def _record(store, cfg, strategy_id, dataset_id, start, end, t, status="assumed"
 class TestResearchReportService(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.svc = Services(cfg=copy.deepcopy(CFG), root=self.tmp)
+        self.svc = Services(cfg=with_test_proxy(CFG), root=self.tmp)          # + test-local BID proxy feed
         self.r19 = _record(self.svc.store, self.svc.cfg, "STR_X", "D2019", "2019-01-01", "2019-12-31", A)
         self.r20 = _record(self.svc.store, self.svc.cfg, "STR_X", "D2020", "2020-01-01", "2020-12-31", B)
 
@@ -177,12 +177,17 @@ class TestResearchReportService(unittest.TestCase):
         json.dumps(rep)                                                   # strict-JSON contract
 
     def test_labels_keep_proxy_and_assumed_cost_caveats(self):
-        text = " | ".join(self.svc.research_report([self.r19, self.r20])["labels"])
-        for phrase in ("HistData NSXUSD CFD BID research proxy", "MNQ-equivalent assumed costs",
-                       "not broker-verified", "2023 excluded for coverage", "research proxy, not a tradable",
+        from unittest import mock
+        # standing dataset / cost-profile notes (none ship; test-local entries exercise the mechanism)
+        with mock.patch.dict(ra.DATASET_NOTES, {(TEST_FEED, TEST_PROXY): ("test dataset note A", "test dataset note B")}), \
+                mock.patch.dict(ra.PROFILE_NOTES, {TEST_PROXY_PROFILE: "test profile note"}):
+            text = " | ".join(self.svc.research_report([self.r19, self.r20])["labels"])
+        for phrase in ("test dataset note A", "test dataset note B", "test profile note",
+                       "not broker-verified", "research proxy, not a tradable", "BID-only prices",
                        "not by itself evidence of a trading edge"):
             self.assertIn(phrase, text)
-        self.assertTrue(INSTRUMENTS["NAS100_HISTDATA"].extra["research_proxy"])
+        from edgelab.instruments import load_instruments
+        self.assertTrue(load_instruments(self.svc.cfg)[TEST_PROXY].extra["research_proxy"])
 
     def test_refusals(self):
         other = _record(self.svc.store, self.svc.cfg, "STR_Y", "D2021", "2021-01-01", "2021-12-31", A)
@@ -198,6 +203,7 @@ class TestResearchReportService(unittest.TestCase):
         from edgelab.cli import main
         from edgelab.web.app import create_app
         shutil.copytree(Path(__file__).resolve().parents[1] / "configs", self.tmp / "configs")
+        add_test_proxy_feed(self.tmp / "configs")
         c = create_app(self.tmp).test_client()
         r = c.get(f"/api/results/report?run_ids={self.r19},{self.r20}")
         self.assertEqual(r.status_code, 200)

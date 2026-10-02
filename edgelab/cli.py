@@ -314,7 +314,7 @@ def _factory(svc, a, ap) -> int:
                   f"{c['valid_unique']}, rejected {c['rejected']}, duplicates {c['duplicates']}\n"
                   "  (generation only: no market data read, no numerical trials, no holdout looks)")
         return 0
-    if a.action == "generate-pool2":              # ADR-86: needs the workspace's pool-1 campaign manifest
+    if a.action == "generate-pool2":              # ADR-87: needs the workspace's pool-1 campaign manifest
         from edgelab.research import pool2
         r = pool2.generate(svc, seed=a.seed)
         _print(r, a.json)
