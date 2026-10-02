@@ -10,8 +10,7 @@ import { go, href, useRoute } from "../app/router";
 import { ConfigMismatchPanel, isConfigMismatch } from "../components/configdiff";
 import { Pool2Panel } from "../components/pool2";
 import { plainText } from "../components/research";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, ReadOnly, TableWrap, TechDetails, fmt, n, r,
-  shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, ReadOnly, TableWrap, TechDetails, fmt, n, r, shortTime, PageSkeleton } from "../components/ui";
 
 /** Research Runs (ADR-69/70): a research browser (All strategies -> families -> strategies) over a FROZEN campaign.
  *  The page is a control and presentation layer: it starts the backend's own campaign runner (the same one as the CLI
@@ -31,7 +30,7 @@ const elapsedS = (from: string | null | undefined, to?: string | null) =>
   from ? Math.max(0, ((to ? Date.parse(to) : Date.now()) - Date.parse(from)) / 1000) : null;
 const statusTone = (s: string): "ok" | "warn" | "error" | "info" | "neutral" =>
   s === "completed" ? "ok" : s === "failed" || s === "stopped_on_failure" ? "error"
-    : s === "running" || s === "preflight" ? "info" : s === "cancelled" || s === "interrupted" || s === "incomplete" ? "warn" : "neutral";
+    : s === "running" || s === "preflight" ? "info" : s === "cancelled" || s === "interrupted" || s === "incomplete" || s === "retrying" ? "warn" : "neutral";
 const SOURCE: Record<string, string> = { cli: "Command line", desktop: "Desktop app" };
 /** A stored value for display: numbers exactly as stored, codes and SHOUTING labels as words. */
 const show = (v: unknown) => (typeof v === "number" ? String(v) : typeof v === "string" && /^[A-Z][A-Z ]+$/.test(v) ? humanize(v) : valueLabel(v));
@@ -69,7 +68,7 @@ function RunsHome() {
   const list = useApi<CampaignListRow[]>(campaigns.listUrl);
   const head = <header className="page-head"><div><h1>Research runs</h1></div></header>;
   if (list.error) return <div className="page" data-testid="runs-page">{head}<ErrorPanel error={list.error} title="Could not load campaigns" /></div>;
-  if (!list.data) return <div className="page" data-testid="runs-page">{head}<Loading label="Loading campaigns…" /></div>;
+  if (!list.data) return <div className="page" data-testid="runs-page">{head}<PageSkeleton layout="runs" label="Loading campaigns…" /></div>;
   const broken = list.data.filter((c) => c.error).map((c) => (
     <Card key={c.campaign_id} title="Research campaign"><Banner tone="error">{c.error!.message}</Banner>
       <TechDetails rows={[["Campaign id", <Mono>{c.campaign_id}</Mono>], ["Error code", <Mono>{c.error!.code}</Mono>]]} /></Card>));
@@ -167,7 +166,7 @@ function CampaignPage({ cid, home }: { cid: string; home?: { switcher: ReactNode
   }, [tree, sel]);
   if (det.error) return <div className="page"><ErrorPanel error={det.error} title="Could not load this campaign" /></div>;
   if (treeQ.error) return <div className="page"><ErrorPanel error={treeQ.error} title="Could not load the research tree of this campaign" /></div>;
-  if (!d || !tree || !sel) return <div className="page"><Loading label="Loading the frozen campaign and its research tree…" /></div>;
+  if (!d || !tree || !sel) return <div className="page"><PageSkeleton layout="runs" label="Loading the frozen campaign and its research tree…" /></div>;
   const allSelected = sel.size === allIds.length;
   const setMany = (ids: string[], on: boolean) => {
     const s = new Set(sel);
@@ -305,9 +304,16 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
     <Card testId="live-run"
       title={<>Research run <Badge tone={statusTone(L.status)}>{statusLabel(L.status)}</Badge></>}
       actions={final ? <Button small onClick={onDismiss}>Close</Button>
-        : <Button small kind="danger" busy={cancelling} busyLabel="Stopping after the strategies being tested…" testId="cancel-run"
+        : <Button small kind="danger" busy={cancelling} busyLabel="Stopping…" testId="cancel-run"
+            title="Stops after the strategies being tested; every completed result is kept"
             onClick={async () => { setCancelling(true); try { setJob(await campaigns.cancel(jobId)); } finally { setCancelling(false); } }}>
-            Cancel (keeps all completed results)</Button>}>
+            Cancel run</Button>}>
+      {!final && (job.restarts ?? 0) > 0 && <Banner tone={job.having_problems ? "error" : "warn"} testId="retry-banner">
+        <b>{job.having_problems ? "This research run is having problems, still retrying." : "This research run stopped because of an error and restarts by itself."}</b>
+        {" "}Restarted {job.restarts} time{job.restarts === 1 ? "" : "s"}; completed strategies are kept and never run again.
+        {job.next_retry_at && <> Next try in {Math.max(0, Math.round((Date.parse(job.next_retry_at) - Date.now()) / 1000))} s.</>}
+        {job.last_error && <div className="small">Last error: {plainText(job.last_error)}</div>}
+        <div className="small muted">Cancel run stops the retries.</div></Banner>}
       <p data-testid="live-phase"><b>{plainText(L.phase)}</b>{job.cancel_requested && !final && " · cancel requested: the strategies being tested finish, then the run stops"}</p>
       <div className="progress" aria-label="research progress"><span style={{ width: `${scopeN ? (100 * done) / scopeN : 0}%` }} /></div>
       <div className="kpis">
@@ -389,7 +395,7 @@ function RunHistory({ cid, runs, onRestoreScope, onRenamed }: { cid: string; run
 function FamilyResultsPage({ cid, fid }: { cid: string; fid: string }) {
   const res = useApi<FamilyResults>(campaigns.familyUrl(cid, fid));
   if (res.error) return <div className="page"><ErrorPanel error={res.error} title="Could not load this family" /></div>;
-  if (!res.data) return <div className="page"><Loading label="Loading stored results…" /></div>;
+  if (!res.data) return <div className="page"><PageSkeleton layout="table" label="Loading stored results…" /></div>;
   const d = res.data;
   return (
     <div className="page" data-testid="family-results">

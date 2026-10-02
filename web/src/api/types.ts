@@ -378,12 +378,13 @@ export interface ExplorerRow {
   sample_label: string | null; synthetic: boolean | null;
   target_multiple?: number | null; trailing?: string | null; signal_exit?: string | null;
   avg_rr?: Num; max_loss_streak?: number | null; avg_hold_minutes?: Num; prop_pass_eval?: boolean | null; prop_pass_payout?: boolean | null;
+  live_ok?: boolean; net_usd?: Num; max_drawdown_usd?: Num;                 // ADR-90
   survivor?: boolean; favorite?: boolean; display_name?: string; short_name?: string;
 }
 export interface ExplorerResponse {
   rows: ExplorerRow[]; total: number; page: number; page_size: number; pages: number; scope: string; scope_label: string;
   sort: string; order: "asc" | "desc"; facets: Record<string, string[]>; states: Record<string, string>;
-  protocols: ProtocolRecordRow[]; library_total: number; basis: string; note: string;
+  protocols: ProtocolRecordRow[]; library_total: number; basis: string; note: string; live_limit_usd?: number;
 }
 export interface GroupRow { group: string; runs: number; trades: number; net_r_per_trade: Num; gross_r_per_trade: Num;
   median_run_expectancy_r: Num; pct_runs_positive_net: Num }
@@ -453,16 +454,17 @@ export interface UpdateStatus {
 
 // ---------------------------------------------------------------- backtest results views (ADR-73, read-only)
 export interface FieldPoint { strategy_id: string; name: string | null; display_name?: string | null; family_id: string | null; run_id: string; trades: number;
-  synthetic: boolean; survivor: boolean; win_rate: Num; avg_rr: Num; expectancy_r: Num }
+  synthetic: boolean; survivor: boolean; live_ok?: boolean; win_rate: Num; avg_rr: Num; expectancy_r: Num }
 export interface ControlPoint { control_id: string; candidate_strategy_id: string | null; validation_id: string | null; realization: number;
   seed: number | null; trades: number; win_rate: Num; avg_rr: Num; expectancy_r: Num; gross_r_per_trade: Num; net_r: Num;
   max_drawdown_r: Num; max_loss_streak: number | null; dataset_id: string | null; synthetic: boolean; sample_status: string | null }
 export interface CurvePoint { win_rate: number; avg_rr: number }
-export interface BreakdownGroup { group: string; strategies: number; median_expectancy_r: Num; survivor_rate: number }
+export interface BreakdownGroup { group: string; strategies: number; median_expectancy_r: Num; survivor_rate: number;
+  positive?: number; negative?: number; zero?: number }                     // ADR-90: by total net R
 export interface ResultsOverview {
   scope: string; scope_label: string; basis: "net" | "gross"; basis_label: string;
   facts: { strategies: number; tested: number; survivors: number; gross_positive: number; net_positive: number; synthetic_tested: number;
-    median_cost_r_per_trade: Num };
+    median_cost_r_per_trade: Num; live_ok?: number; live_limit_usd?: number; drawn: number };
   points: FieldPoint[]; controls: ControlPoint[];
   breakeven: { zero: { label: string; points: CurvePoint[] }; after_cost?: { label: string; cost_r: number; points: CurvePoint[] }; note: string };
   breakdowns: Record<string, BreakdownGroup[]>;
@@ -488,6 +490,9 @@ export interface StrategyPanelData {
   facets: Record<string, unknown>; scope: string; risk_per_trade_usd: number; survivor_rule: string; tested: boolean;
   technical: Record<string, string | null | undefined>; rules: { rule: string; text: string }[];
   run_id?: string; synthetic?: boolean; status?: string; scope_label?: string; survivor?: boolean; cost_status?: string | null;
+  /** ADR-90: would the recorded trades have worked on a live 50K account? */
+  live?: { ok: boolean; net_positive: boolean; drawdown_within_limit: boolean; no_losing_year: boolean; net_usd: Num;
+    max_drawdown_usd: Num; worst_year_usd: Num; limit_usd: number } | null;
   kpis?: { expectancy_r: Num; trades: number; trades_per_week: Num; win_rate: Num; avg_rr: Num; net_r: Num; net_usd_at_risk: Num;
     max_drawdown_r: Num; max_drawdown_usd_at_risk: Num; max_loss_streak: number | null; cost_r_per_trade: Num; pct_weeks_with_trade: Num;
     weeks_in_data: number | null; avg_hold_minutes: Num; gross_r_per_trade: Num; profit_factor: Num; sample_label: string | null;

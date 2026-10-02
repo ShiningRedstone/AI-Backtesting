@@ -1011,11 +1011,15 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             "q", "strategy_id", "family_id", "timeframe", "session", "direction", "entry_type", "stop_type",
             "target_type", "source", "instrument", "state", "protocol", "scope", "min_trades",
             "max_trades_per_week", "tested_only", "sort", "order", "page", "page_size", "survivors_only", "trailing",
-            "signal_exit", "favorites_only", "prop", "campaign_run"))))
+            "signal_exit", "favorites_only", "prop", "campaign_run", "live_only"))))
 
     @app.get("/api/results-view/overview")
     def results_view_overview():
         return jsonify(call(svc.results_overview, _params(("scope", "basis", "controls", "campaign_run"))))
+
+    @app.get("/api/results-view/pools")
+    def results_view_pools():
+        return jsonify(call(svc.strategy_pools))
 
     @app.get("/api/results-view/runs")
     def results_view_runs():

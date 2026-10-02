@@ -77,6 +77,10 @@ def _paper_balance(st: Mapping) -> float | None:
     return att[-1].get("balance") if att else None
 
 
+def _num(x) -> bool:
+    return not isinstance(x, bool) and isinstance(x, (int, float)) and math.isfinite(float(x))
+
+
 class Services:
     # ADR-78: inside `read_context()` (page requests) `store` is a pooled READ-ONLY connection, so reads never wait
     # for the service lock a research run holds; everywhere else it is the one writer connection. The writer lives in
@@ -275,7 +279,12 @@ class Services:
     UI_PREF_DEFAULTS = {"favorites": [], "prop_criteria_profile": "LUCID_LUCIDFLEX_50K", "show_ids": False,
                         "show_readonly": False, "research_processes": None,       # None = all cores but one (ADR-77)
                         "prop_fees": {},                                          # ADR-81: per rule profile, USD
-                        "theme": "dark"}                                          # ADR-86: dark | light | system
+                        "theme": "dark",                                          # ADR-86: dark | light | system
+                        # ADR-90 (display / paper only; no backtest reads them):
+                        "currency": "USD", "chf_per_usd": None,                   # CHF = display conversion, user rate
+                        "chart_cluster": True, "chart_cluster_distance": 1.0,     # field-chart grouping (1 = ADR-86)
+                        "live_dd_limit_usd": 5000.0,                              # "Live 50K OK" drawdown limit
+                        "prop_discount": {"enabled": False, "pct": {}}}           # paper fees: eval + reset, % per account
 
     def ui_preferences(self) -> dict:
         """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
@@ -285,6 +294,41 @@ class Services:
         out = {k: raw.get(k, v) for k, v in self.UI_PREF_DEFAULTS.items()}
         out["favorites"] = [x for x in out["favorites"] if isinstance(x, str)]
         return out
+
+    DISCOUNTED_FEES = ("eval_price", "reset_fee")          # ADR-90: a coupon covers evaluation and reset, not activation
+
+    def discounted_fees(self, profile_id: str, fees: Mapping) -> tuple[dict, dict | None]:
+        """The fees a NEW paper account freezes: with Settings → discounts on, the account type's % off the evaluation
+        price and the reset fee (activation fee unchanged). Returns (fees, discount record or None)."""
+        d = self.ui_preferences().get("prop_discount") or {}
+        pct = float((d.get("pct") or {}).get(profile_id) or 0.0)
+        if not d.get("enabled") or pct <= 0:
+            return dict(fees), None
+        out = dict(fees)
+        for k in self.DISCOUNTED_FEES:
+            if out.get(k) is not None:
+                out[k] = round(float(out[k]) * (1 - pct / 100), 2)
+        return out, {"pct": pct, "applies_to": list(self.DISCOUNTED_FEES), "before": dict(fees)}
+
+    def _check_prop_discount(self, v) -> dict:
+        """{enabled: bool, pct: {profile_id: 0..100}} (ADR-90): one switch for every account type, a % per type."""
+        from edgelab.prop.service import default_profiles
+        if not isinstance(v, Mapping) or set(v) - {"enabled", "pct"} or not isinstance(v.get("enabled", False), bool):
+            raise ValueError("prop_discount must be an object {enabled: true|false, pct: {profile_id: percent}}")
+        pct = v.get("pct") or {}
+        if not isinstance(pct, Mapping):
+            raise ValueError("prop_discount.pct must be an object {profile_id: percent}")
+        known = {p["profile_id"] for p in default_profiles(self.root)}
+        out = {}
+        for pid, x in pct.items():
+            if pid not in known:
+                raise ValueError(f"unknown prop rule profile {pid!r}")
+            if x in (None, ""):
+                continue
+            if not _num(x) or not 0 <= float(x) <= 100:
+                raise ValueError("a discount must be a percentage from 0 to 100")
+            out[pid] = float(x)
+        return {"enabled": bool(v.get("enabled", False)), "pct": out}
 
     def _check_prop_fees(self, v) -> dict:
         """{profile_id: {eval_price, reset_fee, activation_fee}}: non-negative USD amounts or null (ADR-81)."""
@@ -331,6 +375,25 @@ class Services:
             elif k == "theme":
                 if v not in ("dark", "light", "system"):
                     raise ValueError("theme must be dark, light or system")
+            elif k == "currency":
+                if v not in ("USD", "CHF"):
+                    raise ValueError("currency must be USD or CHF")
+            elif k == "chf_per_usd":
+                if v is not None and (not _num(v) or not 0 < float(v) < 100):
+                    raise ValueError("chf_per_usd must be a number above 0 (CHF per 1 USD) or null")
+            elif k == "chart_cluster":
+                if not isinstance(v, bool):
+                    raise ValueError("chart_cluster must be true or false")
+            elif k == "chart_cluster_distance":
+                if not _num(v) or not 0.25 <= float(v) <= 3.0:
+                    raise ValueError("chart_cluster_distance must be between 0.25 and 3")
+                v = float(v)
+            elif k == "live_dd_limit_usd":
+                if not _num(v) or not 0 < float(v) <= 10_000_000:
+                    raise ValueError("live_dd_limit_usd must be a positive amount in USD")
+                v = float(v)
+            elif k == "prop_discount":
+                v = self._check_prop_discount(v)
             elif k == "research_processes":
                 from edgelab.research.campaign import max_processes
                 if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= max_processes()):
@@ -1171,6 +1234,7 @@ class Services:
         fees = (self.ui_preferences().get("prop_fees") or {}).get(profile_id) or {}
         if fees.get("eval_price") is None:
             raise ValueError("enter the evaluation price for this prop account in Settings → Prop account fees first")
+        fees, discount = self.discounted_fees(profile_id, fees)
         docs = [self.library.load(sid) for sid in strategy_ids]          # KeyError for an unknown strategy
         unit = prof["rules"]["account.quantity_unit"]["value"] if "rules" in prof else None
         wrong = [sid for sid, d in zip(strategy_ids, docs)
@@ -1192,14 +1256,15 @@ class Services:
                     "definition": doc["definition"], "logic_hash": doc.get("logic_hash"),
                     "definition_hash": doc.get("definition_hash"),
                     "profile_id": profile_id, "profile_version": prof["version"],
-                    "fees": dict(fees), "start_date": start.isoformat(),
+                    "fees": dict(fees), "fee_discount": discount, "start_date": start.isoformat(),
                     "start_ts": feed.session_open_utc(self.cfg, start).isoformat(), "status": "running",
                     "kind": "paper", "label": "simulated forward trading; never a research result or trial"}
             store.save_account(self.data_root, acct)
             created.append(acct["account_id"])
         store.save_batch(self.data_root, {"batch_id": batch_id, "created_at": store.now_iso(), "profile_id": profile_id,
                                           "profile_version": prof["version"], "strategy_ids": list(strategy_ids),
-                                          "accounts": created, "fees": dict(fees), "start_date": start.isoformat()})
+                                          "accounts": created, "fees": dict(fees), "fee_discount": discount,
+                                          "start_date": start.isoformat()})
         self.paper.wake()
         return _jsonable({"batch_id": batch_id, "accounts": created, "start_date": start.isoformat()})
 
@@ -2471,6 +2536,11 @@ class Services:
         progress (prop/bootstrap.py; simulated, downstream, changes nothing)."""
         from edgelab.prop import bootstrap as bs
         return _jsonable(bs.request(self, run_id, profile_id, params))
+
+    def strategy_pools(self) -> list[dict]:
+        """ADR-90: the pool picker of Backtest results (All | Strategy pool 1 | Strategy pool 2)."""
+        from edgelab.research.pool2 import pools
+        return _jsonable([{k: p[k] for k in ("pool", "ref", "label", "n_strategies")} for p in pools(self)])
 
     def research_runs(self) -> list[dict]:
         from edgelab.research import results_view as rv

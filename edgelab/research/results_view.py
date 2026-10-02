@@ -197,6 +197,9 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
     rows, _ = _latest_scoped(svc, scope, params.get("campaign_run"))
     gs = gross_stats(svc) if basis == "gross" else {}
     tested = [x for x in rows if x["ref"] and x["ref"]["trade_count"] > 0]
+    years, limit = ov.worst_year_usd(svc), ov.live_limit(svc)                   # ADR-90: "Live 50K OK"
+    live = {x["ref"]["run_id"]: bool((lc := ov.live_check(x["ref"], years.get(x["ref"]["run_id"]), limit)) and lc["ok"])
+            for x in tested}
     points = []
     for x in tested:
         f, r = x["facets"], x["ref"]
@@ -204,7 +207,7 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
         points.append({"strategy_id": f["strategy_id"], "name": f["name"], "display_name": f.get("display_name"),
                        "family_id": f["family_id"],
                        "run_id": r["run_id"], "trades": r["trade_count"], "synthetic": r["synthetic"],
-                       "survivor": r["survivor"],
+                       "survivor": r["survivor"], "live_ok": live.get(r["run_id"], False),
                        "win_rate": g.get("win_rate") if basis == "gross" else r["win_rate"],
                        "avg_rr": g.get("avg_rr") if basis == "gross" else r["avg_rr"],
                        "expectancy_r": r["gross_r_per_trade"] if basis == "gross" else r["expectancy_r"]})
@@ -221,8 +224,12 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
         items = sorted(gr.items(), key=(lambda kv: order.index(kv[0])) if order else None)
         for k, xs in items:
             vals = [(x["ref"]["gross_r_per_trade"] if basis == "gross" else x["ref"]["expectancy_r"]) for x in xs]
+            net = [x["ref"]["net_r"] for x in xs]                 # ADR-90: positive vs negative total net R
             out.append({"group": k, "strategies": len(xs), "median_expectancy_r": _median(vals),
-                        "survivor_rate": sum(1 for x in xs if x["ref"]["survivor"]) / len(xs)})
+                        "survivor_rate": sum(1 for x in xs if x["ref"]["survivor"]) / len(xs),
+                        "positive": sum(1 for v in net if v is not None and v > 0),
+                        "negative": sum(1 for v in net if v is not None and v < 0),
+                        "zero": sum(1 for v in net if v is None or v == 0)})
         return out
 
     sig = [x for x in tested if x["facets"].get("signal_exit") == "yes"]
@@ -238,6 +245,8 @@ def results_overview(svc, params: Mapping[str, Any]) -> dict:
                                             "walk_forward": "Walk-forward", "any": "Latest run of any status"}[scope],
             "basis": basis, "basis_label": "Gross (before costs)" if basis == "gross" else "Net of each run's stated costs",
             "facts": {"strategies": len(rows), "tested": len(tested), "survivors": len(survivors),
+                      "live_ok": sum(live.values()), "live_limit_usd": limit,
+                      "drawn": sum(1 for p in points if p["win_rate"] is not None and p["avg_rr"] is not None),
                       "gross_positive": sum(1 for x in tested if (x["ref"]["gross_r_per_trade"] or 0) > 0),
                       "net_positive": sum(1 for x in tested if (x["ref"]["expectancy_r"] or 0) > 0),
                       "synthetic_tested": sum(1 for x in tested if x["ref"]["synthetic"]),
@@ -500,6 +509,7 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
         tested=True, run_id=ref["run_id"], synthetic=ref["synthetic"], status=ref["status"], scope_label=ref["scope"],
         is_holdout=bool(ref.get("holdout")),                  # a holdout-evaluation run is labelled Holdout, never OOS
         survivor=ref["survivor"], cost_status=ref["cost_status"],
+        live=ov.live_check(ref, ov.worst_year_usd(svc).get(ref["run_id"]), ov.live_limit(svc)),
         kpis={"expectancy_r": ref["expectancy_r"], "trades": ref["trade_count"], "trades_per_week": ref["trades_per_week"],
               "win_rate": ref["win_rate"], "avg_rr": ref["avg_rr"], "net_r": ref["net_r"],
               "net_usd_at_risk": ref["net_r"] * risk if ref["net_r"] is not None else None,

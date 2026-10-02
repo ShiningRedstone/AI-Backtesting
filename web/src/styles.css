@@ -43,7 +43,8 @@
   --demo: #c49bff; --demo-weak: rgba(196, 155, 255, .13); --demo-border: rgba(196, 155, 255, .45);
   /* chart series: values unchanged from the earlier palette (CVD-validated on #0c1320); each keeps >= 3.4:1 on --surface #151516 */
   --c1: #16a877; --c2: #4a8ff0; --c3: #b58a2e; --c-neg: #d8545f; --c-neutral: #6b6b74;
-  --c-survivor: #f5b83d;   /* ADR-86: survivors on the field chart (amber: strongest contrast to the blue strategies, never red) */
+  --c-survivor: #f5b83d;
+  --c-strategy: var(--c2);                                 /* field-chart strategy dots (light theme: teal, ADR-90) */   /* ADR-86: survivors on the field chart (amber: strongest contrast to the blue strategies, never red) */
   --grid: #222225; --axis: #36363c;
   /* shape */
   --radius: 10px; --radius-lg: 14px; --radius-xl: 20px; --pill: 999px;
@@ -781,7 +782,8 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
   --info: #2457c5; --info-weak: rgba(36, 87, 197, .08); --info-border: rgba(36, 87, 197, .32);
   --demo: #6d3fd1; --demo-weak: rgba(109, 63, 209, .08); --demo-border: rgba(109, 63, 209, .35);
   --c1: #0e8a5f; --c2: #2f6fd6; --c3: #93691a; --c-neg: #c0392b; --c-neutral: #8a8a94;
-  --c-survivor: #c27c0e;
+  --c-survivor: #e8730c;                                   /* ADR-90: light-mode field chart: orange survivors, teal strategies */
+  --c-strategy: rgba(15, 124, 134, .7);
   --grid: #e9e9ed; --axis: #c8c8cf;
   --highlight: inset 0 1px 0 rgba(255, 255, 255, .7);
   --shadow-pop: 0 18px 48px rgba(0, 0, 0, .16), 0 2px 8px rgba(0, 0, 0, .08);
@@ -826,3 +828,26 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .config-mismatch p { margin: 4px 0; }
 .config-mismatch ul { margin: 4px 0 8px; padding-left: 18px; }
 .config-mismatch .mono { word-break: break-all; }
+
+/* ADR-90: positive vs negative net R split bars, field totals, the Live 50K check */
+.split-rows { display: flex; flex-direction: column; gap: 7px; }
+.split-row { display: grid; grid-template-columns: minmax(90px, 32%) 1fr auto; align-items: center; gap: 10px; font-size: 12.5px; }
+.split-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.split-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--grid); }
+.split-bar .pos-part { background: var(--c1); }
+.split-bar .neg-part { background: var(--c-neg); }
+.split-note { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.split-legend { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.split-legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.split-legend .dot.pos-part { background: var(--c1); }
+.split-legend .dot.neg-part { background: var(--c-neg); margin-left: 8px; }
+.field-totals { margin: 0 0 8px; color: var(--text-2); }
+.live-check { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.live-check ul { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
+.retry-strip { grid-column: 1 / -1; background: var(--error-weak); border-bottom: 1px solid var(--error-border); color: var(--text); padding: 6px 16px; font-size: 12.5px; }
+/* ADR-90: page-shaped skeletons */
+.page-skel { display: flex; flex-direction: column; gap: 16px; }
+.skel-hero { height: 120px; width: 100%; border-radius: 14px; }
+.skel-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.skel-card .card-head { min-height: 44px; }
+.skel-card .card-head .skel-line { height: 12px; }

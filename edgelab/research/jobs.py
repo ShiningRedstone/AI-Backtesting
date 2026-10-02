@@ -16,6 +16,7 @@ spec resumes it explicitly, skipping its completed cells).
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import nullcontext
 import uuid
 from datetime import datetime, timezone
@@ -65,9 +66,14 @@ class CampaignJob(Job):
         self.kind, self.campaign_id, self.families, self.strategy_ids = "campaign", campaign_id, families, strategy_ids
         self.processes = 1                    # ADR-77: CPU cores computing cells at once (execution only)
         self.live: dict = {"status": "queued", "phase": "queued - starting the background worker"}
+        self.restarts, self.last_error, self.next_retry_at = 0, None, None      # ADR-90: automatic restarts
+        self.error_times: list[float] = []
+        self.having_problems = False
 
     def snapshot(self) -> dict:
         return {**super().snapshot(), "kind": "campaign", "campaign_id": self.campaign_id,
+                "restarts": self.restarts, "last_error": self.last_error, "next_retry_at": self.next_retry_at,
+                "having_problems": self.having_problems,
                 "families": self.families, "n_strategy_ids": None if self.strategy_ids is None else len(self.strategy_ids),
                 "processes": self.processes, "live": dict(self.live)}
 
@@ -115,6 +121,9 @@ class PoolJob(Job):
 
 
 class JobManager:
+    RESTART_FIRST, RESTART_MAX = 10.0, 300.0     # ADR-90: seconds before an automatic restart (doubling, capped)
+    PROBLEM_WINDOW, PROBLEM_COUNT = 600.0, 3     # "having problems" after 3 errors within 10 minutes
+
     def __init__(self, services, lock):
         self.services, self.lock = services, lock
         self._jobs: dict[str, Job] = {}
@@ -199,6 +208,10 @@ class JobManager:
         return job.snapshot()
 
     def _work_campaign(self, job: CampaignJob, max_failures: int) -> None:
+        """ADR-90: a run that stops because of an error restarts by itself (resume: completed strategies are kept and
+        never re-run; failed ones are tried again; a refusal by the campaign's checks, e.g. PREFLIGHT_FAILED, ends it), waiting RESTART_FIRST seconds, doubling up to RESTART_MAX, for as
+        long as it takes. ``having_problems`` turns on after PROBLEM_COUNT errors within PROBLEM_WINDOW seconds.
+        Cancel ends it at once. Nothing about how a strategy is evaluated changes."""
         from edgelab.research import campaign as C
         job.started_at = _now()
         job._set("running")
@@ -207,22 +220,54 @@ class JobManager:
         def on_progress(rec: dict) -> None:
             job.live = {**rec, "job_id": job.job_id}
 
-        try:
-            out = C.run_scope(self.services, job.campaign_id, families=job.families, strategy_ids=job.strategy_ids,
-                              max_failures=max_failures,
-                              lock=self.lock, cancel=job.cancel_requested.is_set, on_progress=on_progress,
-                              source="desktop", processes=getattr(job, "processes", 1))
-            final = "cancelled" if out["run_status"] == "cancelled" else "completed"
-        except BaseException as exc:                         # recorded, never swallowed silently
-            job.error = f"{type(exc).__name__}: {exc}"
-            final = "failed"
+        delay, final = self.RESTART_FIRST, "failed"
+        while True:
+            error = None
             try:
-                with self.lock:
-                    b = self.services.store.get_search_batch(job.search_id)
-                    if b is not None and b["status"] == "running":
-                        self.services.store.update_search_batch(job.search_id, status="failed", finished_at=_now())
-            except Exception as exc2:
-                job.error += f" (and the batch could not be marked failed: {type(exc2).__name__}: {exc2})"
+                out = C.run_scope(self.services, job.campaign_id, families=job.families, strategy_ids=job.strategy_ids,
+                                  max_failures=max_failures,
+                                  lock=self.lock, cancel=job.cancel_requested.is_set, on_progress=on_progress,
+                                  source="desktop", processes=getattr(job, "processes", 1))
+                if out["run_status"] == "cancelled" or job.cancel_requested.is_set():
+                    final = "cancelled"
+                    break
+                if out["run_status"] in ("stopped_on_failure", "incomplete") and out.get("n_failed_cells"):
+                    first = (out.get("failed_cells") or [{}])[0]
+                    error = (f"{out['n_failed_cells']} strateg{'y' if out['n_failed_cells'] == 1 else 'ies'} failed"
+                             + (f" (first: {first.get('error')})" if first.get("error") else ""))
+                else:
+                    final = "completed"
+                    break
+            except BaseException as exc:                     # recorded, never swallowed silently
+                error = f"{type(exc).__name__}: {exc}"
+                try:
+                    with self.lock:
+                        b = self.services.store.get_search_batch(job.search_id)
+                        if b is not None and b["status"] == "running":
+                            self.services.store.update_search_batch(job.search_id, status="failed", finished_at=_now())
+                except Exception as exc2:
+                    error += f" (and the batch could not be marked failed: {type(exc2).__name__}: {exc2})"
+                # a refusal by the campaign's own checks (PREFLIGHT_FAILED, tampering, ...) is not an error: restarting
+                # cannot change it and nothing was evaluated, so the job ends and says why (ADR-90)
+                if isinstance(exc, (KeyboardInterrupt, SystemExit, C.CampaignError)) or job.cancel_requested.is_set():
+                    job.error = error
+                    final = "cancelled" if job.cancel_requested.is_set() else "failed"
+                    break
+            # ---- an error: wait, then restart (resume)
+            now = time.monotonic()
+            job.error_times = [t for t in job.error_times if now - t <= self.PROBLEM_WINDOW] + [now]
+            job.restarts += 1
+            job.last_error = error
+            job.having_problems = len(job.error_times) >= self.PROBLEM_COUNT
+            job.next_retry_at = datetime.fromtimestamp(time.time() + delay, timezone.utc).isoformat()
+            job.live = {**job.live, "status": "retrying", "phase": f"stopped by an error; restarting in {int(delay)} s",
+                        "current": None}
+            if job.cancel_requested.wait(delay):
+                final = "cancelled"
+                break
+            job.next_retry_at = None
+            delay = min(delay * 2, self.RESTART_MAX)
+        job.next_retry_at = None
         job.finished_at = _now()
         job._set(final)
 

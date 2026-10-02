@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMoney } from "../app/money";
 import { api, ApiError } from "../api/client";
 import type { ExplorerResponse, ExplorerRow, PropAccountResult, PropConfigRow, PropSimRow, PropSimulation, RunRow, StrategyPanelData } from "../api/types";
 import { href, useRoute } from "../app/router";
@@ -70,7 +71,6 @@ function PropHome() {
 interface AccountDraft { account_id: string; config: string; start: string }
 const tone = (s: string) => s === "TARGET_REACHED" ? "ok" : s === "INCOMPLETE" || s === "ACTIVE" ? "info" : "error";
 const yes = (b: boolean | null | undefined) => b == null ? "—" : b ? "yes" : "no";
-const usd = (v: unknown) => typeof v === "number" ? v.toFixed(2) : fmt(v);
 /** Backend prose that mentions rule / config keys ("min_trading_days", "evaluation.drawdown.mode") with the keys as words. */
 const prose = plainProse;
 const runLabel = (id: string | null | undefined) => (id ? "Open the backtest" : "—");
@@ -78,7 +78,7 @@ const runLabel = (id: string | null | undefined) => (id ? "Open the backtest" : 
 const IdTable = ({ head, rows }: { head: string[]; rows: (string | null | undefined)[][] }) => (
   <TechDetails><TableWrap><table className="dense"><thead><tr>{head.map((h) => <th key={h}>{h}</th>)}</tr></thead>
     <tbody>{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="small"><Mono>{c ?? "—"}</Mono></td>)}</tr>)}</tbody></table></TableWrap></TechDetails>);
-const COL_LABEL: Record<string, string> = { trade_no: "Trade", day: "Day", entry_ts: "Entry time", exit_ts: "Exit time", net_usd: "Net P&L (USD)",
+const COL_LABEL: Record<string, string> = { trade_no: "Trade", day: "Day", entry_ts: "Entry time", exit_ts: "Exit time", net_usd: "Net P&L",
   peak_balance: "Peak balance", intratrade_low_bound: "Worst open balance (bound)", day_pnl: "Day P&L", daily_loss_headroom: "Daily-loss headroom",
   drawdown_floor: "Drawdown floor", drawdown_headroom: "Drawdown headroom", target_progress: "Target progress" };
 
@@ -189,6 +189,7 @@ function SavedSimulation({ id }: { id: string }) {
 }
 
 function SimulationView({ sim }: { sim: PropSimulation }) {
+  const money = useMoney(), usd = (v: unknown) => typeof v === "number" ? money.fmt(v, 2) : fmt(v);    // ADR-90
   const L = sim.lineage as Record<string, any>, S = sim.strategy_result as Record<string, unknown>;
   return (
     <div data-testid="prop-result" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -196,8 +197,8 @@ function SimulationView({ sim }: { sim: PropSimulation }) {
       <PropOverview sim={sim} />
       <Card title="Strategy result (source run, unchanged)" testId="prop-strategy-result">
         <KeyValues rows={[["Run", <a href={href(`/results/${L.source_run_id}`)}>{runLabel(L.source_run_id)}</a>], ["Run status", <Badge>{statusLabel(L.source_run_status)}</Badge>],
-          ["Trades", fmt(S.trade_count)], ["Net R", fmt(S.net_r)], ["Net P&L (USD)", usd(S.net_usd)], ["Expectancy (R)", fmt(S.expectancy_r)],
-          ["Profit factor", fmt(S.profit_factor)], ["Max drawdown (R)", fmt(S.max_drawdown_r)], ["Max drawdown (USD)", usd(S.max_drawdown_usd)],
+          ["Trades", fmt(S.trade_count)], ["Net R", fmt(S.net_r)], ["Net P&L", usd(S.net_usd)], ["Expectancy (R)", fmt(S.expectancy_r)],
+          ["Profit factor", fmt(S.profit_factor)], ["Max drawdown (R)", fmt(S.max_drawdown_r)], ["Max drawdown", usd(S.max_drawdown_usd)],
           ["Sample", valueLabel(S.sample_label)]]} />
         <TechDetails rows={[["Run id", <Mono>{L.source_run_id}</Mono>]]} />
       </Card>
@@ -266,6 +267,7 @@ function PropOverview({ sim }: { sim: PropSimulation }) {
 }
 
 function AccountChart({ acc }: { acc: PropAccountResult }) {
+  const money = useMoney(), c = (v: unknown) => (typeof v === "number" ? money.conv(v) : null);   // ADR-90: USD or CHF
   const p = acc.progression as Record<string, number | string | null>[];
   if (!p.length) return null;
   const a = acc.summary;
@@ -274,19 +276,20 @@ function AccountChart({ acc }: { acc: PropAccountResult }) {
   return (
     <div className="grid2" style={{ marginBottom: 10 }}>
       <div><h4>Simulated balance path <Scope kind="sim" /></h4>
-        <LineChart x={x} unit="USD" height={200} series={[
-          { id: "bal", label: "Balance", values: p.map((r) => (typeof r.balance === "number" ? r.balance : null)) },
-          { id: "floor", label: "Drawdown floor", values: p.map((r) => (typeof r.drawdown_floor === "number" ? r.drawdown_floor : null)), color: "var(--c-neg)", dashed: true },
-          ...(target != null ? [{ id: "tgt", label: "Profit target", values: p.map(() => target), color: "var(--c3)", dashed: true }] : [])]} /></div>
+        <LineChart x={x} unit={money.unit} height={200} series={[
+          { id: "bal", label: "Balance", values: p.map((r) => c(r.balance)) },
+          { id: "floor", label: "Drawdown floor", values: p.map((r) => c(r.drawdown_floor)), color: "var(--c-neg)", dashed: true },
+          ...(target != null ? [{ id: "tgt", label: "Profit target", values: p.map(() => c(target)), color: "var(--c3)", dashed: true }] : [])]} /></div>
       <div><h4>Drawdown trajectory <Scope kind="sim" /></h4>
-        <LineChart x={x} unit="USD" height={200} series={[
-          { id: "dd", label: "Drawdown from peak", values: p.map((r) => (typeof r.drawdown === "number" ? -Math.abs(r.drawdown) : null)), area: true, color: "var(--c-neg)" },
-          { id: "head", label: "Drawdown headroom", values: p.map((r) => (typeof r.drawdown_headroom === "number" ? r.drawdown_headroom : null)), color: "var(--c2)" }]} /></div>
+        <LineChart x={x} unit={money.unit} height={200} series={[
+          { id: "dd", label: "Drawdown from peak", values: p.map((r) => c(typeof r.drawdown === "number" ? -Math.abs(r.drawdown) : null)), area: true, color: "var(--c-neg)" },
+          { id: "head", label: "Drawdown headroom", values: p.map((r) => c(r.drawdown_headroom)), color: "var(--c2)" }]} /></div>
     </div>
   );
 }
 
 function AccountDetail({ acc }: { acc: PropAccountResult }) {
+  const money = useMoney(), usd = (v: unknown) => typeof v === "number" ? money.fmt(v, 2) : fmt(v);
   const [open, setOpen] = useState(false);
   const a = acc.summary;
   const cols = ["trade_no", "day", "entry_ts", "exit_ts", "contracts", "net_usd", "balance", "peak_balance", "drawdown", "intratrade_low_bound",

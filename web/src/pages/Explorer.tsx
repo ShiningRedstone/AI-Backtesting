@@ -3,10 +3,10 @@ import type { ExplorerResponse, ExplorerRow } from "../api/types";
 import { go, href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { StrategyDetail } from "../components/strategy/detail";
-import { RunPicker, useCriteriaName } from "../components/results";
+import { PoolPicker, useCriteriaName } from "../components/results";
 import { facetLabel, humanize } from "../app/labels";
-import { Badge, Button, Card, Drawer, FavStar, Empty, ErrorPanel, Loading, Pager, Scope, SortTh, TableWrap, n, pct, signCls,
-  useDebounced } from "../components/ui";
+import { useMoney } from "../app/money";
+import { Badge, Button, Card, Drawer, FavStar, Empty, ErrorPanel, Pager, Scope, SortTh, TableWrap, n, pct, signCls, useDebounced, Skeleton } from "../components/ui";
 
 const FILTERS: { key: string; label: string }[] = [
   { key: "family_id", label: "Family" }, { key: "instrument", label: "Market" }, { key: "timeframe", label: "Timeframe" },
@@ -14,20 +14,20 @@ const FILTERS: { key: string; label: string }[] = [
   { key: "target_type", label: "Target" }, { key: "trailing", label: "Trailing stop" }, { key: "signal_exit", label: "Signal exit" },
   { key: "direction", label: "Direction" }, { key: "source", label: "Source" }, { key: "state", label: "State" },
 ];
-const KEYS = ["q", "strategy_id", "scope", "protocol", "min_trades", "max_trades_per_week", "tested_only", "survivors_only", "favorites_only",
+const KEYS = ["q", "strategy_id", "scope", "protocol", "min_trades", "max_trades_per_week", "tested_only", "survivors_only", "live_only", "favorites_only",
   "prop", "campaign_run", "sort", "order", "page",
   "page_size", ...FILTERS.map((f) => f.key)];
 const CHIP: Record<string, string> = { q: "Search", strategy_id: "Strategy ID", scope: "Scope", protocol: "Protocol",
   min_trades: "Minimum trades", max_trades_per_week: "Maximum trades per week", tested_only: "Tested only", survivors_only: "Survivors only",
-  favorites_only: "Favorites only", prop: "Prop firm result", campaign_run: "Backtests" };
+  favorites_only: "Favorites only", prop: "Prop firm result", campaign_run: "Strategies", live_only: "Live 50K OK" };
 const PROP_TEXT: Record<string, string> = { eval: "passes evaluation", payout: "passes evaluation and payout" };
 const SCOPE_TEXT: Record<string, string> = { in_sample: "In-sample", oos: "Out-of-sample", walk_forward: "Walk-forward", any: "Any" };
 function optLabel(k: string, v: string, states?: Record<string, string>): string {
   if (k === "state") return states?.[v] ?? humanize(v);
   if (k === "scope") return SCOPE_TEXT[v] ?? humanize(v);
-  if (k === "tested_only" || k === "survivors_only" || k === "favorites_only") return "yes";
+  if (k === "tested_only" || k === "survivors_only" || k === "favorites_only" || k === "live_only") return "yes";
   if (k === "prop") return PROP_TEXT[v] ?? v;
-  if (k === "campaign_run") return "one research run";
+  if (k === "campaign_run") return v.startsWith("pool:") ? `pool ${v.slice(5)}` : "one research run";
   if (["q", "strategy_id", "min_trades", "max_trades_per_week", "protocol"].includes(k)) return v;
   return facetLabel(k, v);
 }
@@ -46,11 +46,11 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
   const route = useRoute();
   const { prefs } = useApp();
   const crit = useCriteriaName();
+  const money = useMoney();
   const defs = holdout ? HOLDOUT_DEFAULTS : DEFAULTS;
   const base = holdout ? "/holdout-results" : "/explorer";
   const [f, setF] = useState<Record<string, string>>(() => readQuery(route.query, defs));
   const [open, setOpen] = useState<string | null>(route.query.get("open"));
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const q = useDebounced(f.q ?? "", 300);
   const params = useMemo(() => {
     const p = new URLSearchParams();
@@ -68,7 +68,6 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
   const reset = () => setF({ ...defs });
   const onSort = (k: string, o: "asc" | "desc") => setF((x) => ({ ...x, sort: k, order: o, page: "1" }));
   const facet = (k: string) => data?.facets[k] ?? [];
-  const toggle = (id: string) => setSelected((s) => { const nx = new Set(s); if (nx.has(id)) nx.delete(id); else nx.add(id); return nx; });
   const sortProps = { sort: f.sort, order: f.order as "asc" | "desc", onSort };
   return (
     <div className="page" data-testid={holdout ? "holdout-results" : "explorer"}>
@@ -79,8 +78,6 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
             {[["in_sample", "In-sample"], ["oos", "Out-of-sample"], ["walk_forward", "Walk-forward"], ["any", "Any"]].map(([k, l]) =>
               <button key={k} className={f.scope === k ? "on" : ""} onClick={() => set("scope", k)} data-testid={`scope-${k}`}>{l}</button>)}
           </div>}
-          {selected.size >= 1 && <Button small onClick={() => go(`/compare?source=runs&id=${[...selected].map((s) => data?.rows.find((x) => x.strategy_id === s)?.ref_run?.run_id).filter(Boolean).join(",")}`)}
-            disabled={![...selected].some((s) => data?.rows.find((x) => x.strategy_id === s)?.ref_run)}>Compare {selected.size} selected</Button>}
         </div>
       </header>
 
@@ -92,7 +89,7 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
           aria-label="search" data-testid="explorer-q" onChange={(e: { target: HTMLInputElement }) => set("q", e.target.value)} />
         {prefs.show_ids && <input className={`input${f.strategy_id ? " active" : ""}`} style={{ width: 150 }} placeholder="Strategy ID" value={f.strategy_id ?? ""}
           aria-label="strategy id" onChange={(e: { target: HTMLInputElement }) => set("strategy_id", e.target.value.toUpperCase())} />}
-        <RunPicker value={f.campaign_run ?? ""} onChange={(v) => set("campaign_run", v)} />
+        <PoolPicker value={f.campaign_run ?? ""} onChange={(v: string) => set("campaign_run", v)} />
         <select className={`input${f.prop ? " active" : ""}`} value={f.prop ?? ""} aria-label="prop firm result" data-testid="filter-prop"
           title={`Prop firm result under ${crit} (change the account in Settings)`} onChange={(e: { target: HTMLSelectElement }) => set("prop", e.target.value)}>
           <option value="">Prop firm: all</option>
@@ -122,6 +119,9 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
           onChange={(e: { target: HTMLInputElement }) => set("favorites_only", e.target.checked ? "1" : "")} />favorites only</label>
         <label className="check small"><input type="checkbox" checked={f.survivors_only === "1"} data-testid="filter-survivors"
           onChange={(e: { target: HTMLInputElement }) => set("survivors_only", e.target.checked ? "1" : "")} />survivors only</label>
+        <label className="check small" title={`net profit, worst drawdown within ${money.fmt(data?.live_limit_usd ?? 5000)} (Settings) and no losing calendar year`}>
+          <input type="checkbox" checked={f.live_only === "1"} data-testid="filter-live"
+          onChange={(e: { target: HTMLInputElement }) => set("live_only", e.target.checked ? "1" : "")} />Live 50K OK only</label>
         <Button small kind="ghost" onClick={reset} disabled={!active.length} testId="explorer-reset">Reset</Button>
       </div>
       {active.length > 0 && <div className="active-filters" data-testid="active-filters">Active:
@@ -129,9 +129,9 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
           <button aria-label={`clear ${k}`} onClick={() => set(k, k === "scope" ? defs.scope : (defs[k] ?? ""))}>×</button></span>)}</div>}
 
       <Card className="flush" title={<>{data ? <><b className="num">{data.total.toLocaleString()}</b> of {data.library_total.toLocaleString()} strategies</> : "Strategies"}
-        {data && <><Scope kind={holdout ? "holdout" : f.scope === "oos" ? "oos" : f.scope === "walk_forward" ? "wf" : "is"}>{data.scope_label}</Scope><Scope kind="net" /></>}
+        {data && holdout && <Scope kind="holdout">{data.scope_label}</Scope>}
         {loading && <span className="spinner" aria-label="loading" />}</>} testId="explorer-results">
-        {error ? <div className="card-body"><ErrorPanel error={error} /></div> : !data ? <div className="card-body"><Loading label="Loading strategies…" /></div>
+        {error ? <div className="card-body"><ErrorPanel error={error} /></div> : !data ? <div className="card-body"><Skeleton kind="table" rows={12} /></div>
           : !data.rows.length && holdout && active.length === 0 ? <div className="card-body"><Empty>No holdout tests yet. Pick survivors under Run backtest →
               {" "}<a href={href("/holdout")}>Holdout backtest</a>.</Empty></div>
           : !data.rows.length ? <div className="card-body"><Empty>{data.library_total ? <>No strategy matches these filters.{" "}
@@ -140,7 +140,7 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
           : <>
             <TableWrap testId="explorer-table" className={holdout ? "" : "fit"}><table className={holdout ? "dense" : "dense fit-table"}>
               <thead><tr>
-                <th style={{ width: 26 }} /><th style={{ width: 30 }} aria-label="favorite" />
+                <th style={{ width: 30 }} aria-label="favorite" />
                 <SortTh k="short_name" label="Strategy" {...sortProps} />
                 <SortTh k="family_id" label="Family" {...sortProps} />
                 {!holdout && <th>Market</th>}<SortTh k="timeframe" label="Time­frame" {...sortProps} />{!holdout && <th>Session</th>}
@@ -155,6 +155,7 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
                 <SortTh k="max_drawdown_r" label="Max draw­down (R)" right {...sortProps} />
                 <th title={`Prop firm evaluation under ${crit} (change the account in Settings)`}>Eval</th>
                 <th title={`First payout under ${crit} (change the account in Settings)`}>Payout</th>
+                {!holdout && <th title="net profit, worst drawdown within your Settings limit and no losing calendar year, on a live 50K account">Live 50K</th>}
                 {holdout && <>
                   <SortTh k="holdout_random_control_p" label="Random comparison" right {...sortProps}
                     title="share of 100 random-entry runs doing at least as well (p-value); lower is better, required ≤ 0.05" />
@@ -163,7 +164,7 @@ export function ExplorerPage({ holdout = false }: { holdout?: boolean } = {}) {
                     title="the same strategy on the discovery period (before the holdout), for comparison" />
                 </>}
               </tr></thead>
-              <tbody>{data.rows.map((x) => <Row key={x.strategy_id} x={x} sel={selected.has(x.strategy_id)} onSel={() => toggle(x.strategy_id)}
+              <tbody>{data.rows.map((x) => <Row key={x.strategy_id} x={x}
                 onOpen={() => setOpen(x.strategy_id)} holdout={holdout} />)}</tbody>
             </table></TableWrap>
             <Pager page={data.page} pages={data.pages} total={data.total} pageSize={data.page_size}
@@ -186,11 +187,9 @@ const PassFail = ({ v }: { v: boolean | null | undefined }) => (v == null ? <spa
   : <span className={`pf ${v ? "pf-pass" : "pf-fail"}`}>{v ? "Passed" : "Failed"}</span>);
 
 
-function Row({ x, sel, onSel, onOpen, holdout }: { x: ExplorerRow; sel: boolean; onSel: () => void; onOpen: () => void; holdout?: boolean }) {
+function Row({ x, onOpen, holdout }: { x: ExplorerRow; onOpen: () => void; holdout?: boolean }) {
   return (
-    <tr className={`clickable${sel ? " selected" : ""}`} onClick={onOpen} data-testid={`xrow-${x.strategy_id}`}>
-      <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><input type="checkbox" checked={sel} onChange={onSel}
-        aria-label={`select ${x.strategy_id}`} /></td>
+    <tr className="clickable" onClick={onOpen} data-testid={`xrow-${x.strategy_id}`}>
       <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}><FavStar id={x.strategy_id} /></td>
       <td className="name-cell"><div className="cell-title">{x.short_name ?? humanize(x.name ?? "—")}</div>
         <div className="cell-badges">{x.survivor && <Badge tone="ok">Survivor</Badge>}{x.synthetic && <Scope kind="synthetic">synthetic</Scope>}</div></td>
@@ -207,6 +206,8 @@ function Row({ x, sel, onSel, onOpen, holdout }: { x: ExplorerRow; sel: boolean;
       <td className="r num">{n(x.max_drawdown_r, 1)}</td>
       <td data-testid={`pass-eval-${x.strategy_id}`}><PassFail v={x.prop_pass_eval} /></td>
       <td data-testid={`pass-payout-${x.strategy_id}`}><PassFail v={x.prop_pass_payout} /></td>
+      {!holdout && <td data-testid={`live-${x.strategy_id}`}>{x.trade_count == null ? <span className="faint">—</span>
+        : <span className={`pf ${x.live_ok ? "pf-pass" : "pf-fail"}`}>{x.live_ok ? "Yes" : "No"}</span>}</td>}
       {holdout && <>
         <td className="r num">{x.holdout_random_control_p == null ? "—" : n(x.holdout_random_control_p, 3)}</td>
         <td><PassFail v={x.holdout_cost_stress_met} /></td>

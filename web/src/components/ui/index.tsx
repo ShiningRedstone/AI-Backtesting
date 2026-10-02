@@ -225,6 +225,45 @@ export function Loading({ label, kind = "page" }: { label: string; kind?: "page"
   );
 }
 
+/** ADR-90: page-shaped loading skeletons: the same boxes in the same places as the page that is loading (shape only). */
+type SkelBlock = { t: "filters" } | { t: "kpis"; n: number } | { t: "card"; body: "chart" | "table" | "lines"; rows?: number; h?: number }
+  | { t: "grid"; n: number; body: "chart" | "table" | "lines"; rows?: number } | { t: "hero" };
+const SKEL_LAYOUTS: Record<string, SkelBlock[]> = {
+  home: [{ t: "hero" }, { t: "kpis", n: 6 }, { t: "card", body: "table", rows: 6 }, { t: "grid", n: 2, body: "table", rows: 4 }],
+  overview: [{ t: "filters" }, { t: "kpis", n: 6 }, { t: "card", body: "chart", h: 340 }, { t: "grid", n: 6, body: "lines", rows: 5 }],
+  stored: [{ t: "kpis", n: 3 }, { t: "grid", n: 5, body: "chart", rows: 1 }],
+  explorer: [{ t: "filters" }, { t: "card", body: "table", rows: 12 }],
+  runs: [{ t: "kpis", n: 5 }, { t: "card", body: "table", rows: 10 }],
+  holdout: [{ t: "kpis", n: 4 }, { t: "card", body: "table", rows: 10 }],
+  paper: [{ t: "card", body: "lines", rows: 4 }, { t: "card", body: "table", rows: 8 }],
+  "paper-new": [{ t: "filters" }, { t: "card", body: "table", rows: 10 }],
+  library: [{ t: "filters" }, { t: "grid", n: 6, body: "lines", rows: 4 }],
+  families: [{ t: "grid", n: 6, body: "lines", rows: 4 }],
+  settings: [{ t: "grid", n: 2, body: "lines", rows: 5 }, { t: "grid", n: 2, body: "lines", rows: 4 }, { t: "grid", n: 2, body: "lines", rows: 4 }],
+  table: [{ t: "card", body: "table", rows: 8 }],
+};
+function SkelBody({ body, rows, h }: { body: "chart" | "table" | "lines"; rows?: number; h?: number }) {
+  return body === "chart" ? <span className="skel skel-chart" style={h ? { height: h } : undefined} /> : <Skeleton kind={body} rows={rows ?? 4} />;
+}
+function SkelCard({ body, rows, h }: { body: "chart" | "table" | "lines"; rows?: number; h?: number }) {
+  return <section className="card skel-card"><header className="card-head"><span className="skel skel-line" style={{ width: "38%" }} /></header>
+    <div className="card-body"><SkelBody body={body} rows={rows} h={h} /></div></section>;
+}
+export function PageSkeleton({ layout, label }: { layout: keyof typeof SKEL_LAYOUTS | string; label: string }) {
+  const blocks = SKEL_LAYOUTS[layout] ?? SKEL_LAYOUTS.table;
+  return (
+    <div className="loading-skel page-skel" role="status" aria-label={label} data-testid={`skeleton-${layout}`}>
+      <span className="sr-only">{label}</span>
+      {blocks.map((b, i) => b.t === "hero" ? <span key={i} className="skel skel-hero" aria-hidden="true" />
+        : b.t === "filters" ? <div key={i} className="skel-filters" aria-hidden="true">{[160, 120, 120, 140, 100].map((w, j) =>
+          <span key={j} className="skel" style={{ width: w, height: 32 }} />)}</div>
+        : b.t === "kpis" ? <Skeleton key={i} kind="kpis" rows={b.n} />
+        : b.t === "card" ? <SkelCard key={i} body={b.body} rows={b.rows} h={b.h} />
+        : <div key={i} className="grid-cards" aria-hidden="true">{Array.from({ length: b.n }, (_, j) => <SkelCard key={j} body={b.body} rows={b.rows} />)}</div>)}
+    </div>
+  );
+}
+
 export function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
   return (
     <dl className="kv">
@@ -351,7 +390,7 @@ const ICONS: Record<string, string> = {
   shuffle: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5", flow: "M5 12h14m-4-4 4 4-4 4M3 5h4m-4 14h4",
   shield: "M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z", wallet: "M3 7h18v12H3zm0 0 2-3h12l2 3M16 13h2",
   file: "M14 3H6v18h12V7zm0 0v4h4", db: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6m-16 6c0 1.7 3.6 3 8 3s8-1.3 8-3",
-  gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8-3 2-1-2-4-2 1-2-1V5l-4-1-1 2h-2L8 4 4 5v2l-2 1 2 4-2 1 2 4 2-1 2 1v2l4 1 1-2h2l1 2 4-1v-2l2-1z",
+  gear: "M9.97 5.19Q10.97 4.77 11.03 4.07L11.11 3.14Q11.17 2.44 11.67 2.44L12.33 2.44Q12.83 2.44 12.89 3.14L12.97 4.07Q13.03 4.77 14.03 5.19L15.38 5.75Q16.38 6.16 16.92 5.71L17.64 5.10Q18.18 4.65 18.53 5.00L19.00 5.47Q19.35 5.82 18.90 6.36L18.29 7.08Q17.84 7.62 18.25 8.62L18.81 9.97Q19.23 10.97 19.93 11.03L20.86 11.11Q21.56 11.17 21.56 11.67L21.56 12.33Q21.56 12.83 20.86 12.89L19.93 12.97Q19.23 13.03 18.81 14.03L18.25 15.38Q17.84 16.38 18.29 16.92L18.90 17.64Q19.35 18.18 19.00 18.53L18.53 19.00Q18.18 19.35 17.64 18.90L16.92 18.29Q16.38 17.84 15.38 18.25L14.03 18.81Q13.03 19.23 12.97 19.93L12.89 20.86Q12.83 21.56 12.33 21.56L11.67 21.56Q11.17 21.56 11.11 20.86L11.03 19.93Q10.97 19.23 9.97 18.81L8.62 18.25Q7.62 17.84 7.08 18.29L6.36 18.90Q5.82 19.35 5.47 19.00L5.00 18.53Q4.65 18.18 5.10 17.64L5.71 16.92Q6.16 16.38 5.75 15.38L5.19 14.03Q4.77 13.03 4.07 12.97L3.14 12.89Q2.44 12.83 2.44 12.33L2.44 11.67Q2.44 11.17 3.14 11.11L4.07 11.03Q4.77 10.97 5.19 9.97L5.75 8.62Q6.16 7.62 5.71 7.08L5.10 6.36Q4.65 5.82 5.00 5.47L5.47 5.00Q5.82 4.65 6.36 5.10L7.08 5.71Q7.62 6.16 8.62 5.75zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",   // rounded 8-tooth cog (ADR-90)
   build: "M14 6l4 4-8 8H6v-4zM3 21h18", sparkle: "M12 3v4m0 10v4M3 12h4m10 0h4M6 6l2.5 2.5m7 7L18 18M6 18l2.5-2.5m7-7L18 6",
   compare: "M8 3v18M16 3v18M3 8h5m8 0h5M3 16h5m8 0h5", pause: "M8 5v14m8-14v14", tree: "M12 3v6m0 0-6 6m6-6 6 6M6 15v6m12-6v6",
 };

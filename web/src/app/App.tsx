@@ -10,12 +10,10 @@ import { DatasetsPage, SettingsPage } from "../pages/Data";
 import { DiscoveryPage } from "../pages/Discovery";
 import { ResearchPage } from "../pages/ResearchEngine";
 import { PropPage } from "../pages/Prop";
-import { ComparePage } from "../pages/Compare";
 import { HomePage } from "../pages/Home";
 import { DashboardPage } from "../pages/Dashboard";
 import { ExplorerPage } from "../pages/Explorer";
 import { ControlsPage } from "../pages/Controls";
-import { PipelinePage } from "../pages/Pipeline";
 import { PaperPage } from "../pages/Paper";
 import { RunsPage } from "../pages/Runs";
 import { HoldoutPage } from "../pages/Holdout";
@@ -25,29 +23,30 @@ import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
 import { useApi } from "./context";
+import { CAMPAIGN_JOB_FINAL, campaigns } from "../api/campaigns";
+import type { CampaignJob } from "../api/campaigns";
 
 /** The seven tabs. `heads` are the first route segments that belong to a tab (old routes stay valid). */
 interface NavItem { path: string; label: string; tid: string; icon: string; heads: string[]; planned?: boolean }
 const NAV: NavItem[] = [
   { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
-  { path: "/strategies", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
+  { path: "/families", label: "Strategies", tid: "strategies", icon: "layers", heads: ["strategies", "families", "builder", "variations"] },
   { path: "/runs", label: "Run backtest", tid: "run", icon: "flask", heads: ["runs", "run", "research", "holdout", "flips"] },
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
-  { path: "/paper", label: "Prop & paper", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
+  { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
 /** Sub-views inside a tab (links, so every view keeps its own address). */
 const SUBTABS: Record<string, { path: string; label: string; head: string }[]> = {
-  strategies: [{ path: "/strategies", label: "Library", head: "strategies" }, { path: "/families", label: "Families", head: "families" },
+  strategies: [{ path: "/families", label: "Families", head: "families" }, { path: "/strategies", label: "Library", head: "strategies" },
     { path: "/builder", label: "Builder", head: "builder" }, { path: "/variations", label: "Variations", head: "variations" }],
   run: [{ path: "/runs", label: "Research runs", head: "runs" }, { path: "/run", label: "Single backtest", head: "run" },
     { path: "/holdout", label: "Holdout backtest", head: "holdout" }, { path: "/flips", label: "Flip scan", head: "flips" }],
   results: [{ path: "/dashboard", label: "Overview", head: "dashboard" }, { path: "/explorer", label: "Strategies", head: "explorer" },
     { path: "/holdout-results", label: "Holdout results", head: "holdout-results" },
-    { path: "/results", label: "All runs", head: "results" }, { path: "/compare", label: "Compare", head: "compare" },
-    { path: "/controls", label: "Random controls", head: "controls" }, { path: "/pipeline", label: "Candidate pipeline", head: "pipeline" }],
+    { path: "/controls", label: "Random controls", head: "controls" }],
   paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
     { path: "/prop", label: "Backtest prop check", head: "prop" }],
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
@@ -97,11 +96,11 @@ function Page() {
       return route.parts[1] || route.query.get("job") || route.query.get("setup") ? <ResearchPage /> : <RedirectTo path="/runs" />;
     case "run": return <RunBacktestPage />;
     case "runs": return <RunsPage />;
-    case "results": return <ResultsPage />;
+    case "results": return route.parts[1] ? <ResultsPage /> : <RedirectTo path="/dashboard" />;   // run detail links only
     case "prop": return <PropPage />;
-    case "compare": return <ComparePage />;
+    case "compare": return <RedirectTo path="/dashboard" />;     // ADR-90: Compare and Candidate pipeline removed
     case "controls": return <ControlsPage />;
-    case "pipeline": return <PipelinePage />;
+    case "pipeline": return <RedirectTo path="/dashboard" />;
     case "paper": return <PaperPage />;
     case "discovery": return <DiscoveryPage />;
     case "settings": return <SettingsPage />;
@@ -126,7 +125,48 @@ const BrandMark = () => (
   </span>
 );
 
+/** ADR-90: F11 toggles fullscreen and Esc leaves it. In the desktop window through the pywebview bridge, in a
+    browser through the Fullscreen API. */
+type PyApi = { toggle_fullscreen?: () => Promise<boolean>; is_fullscreen?: () => Promise<boolean> };
+function useFullscreenKeys() {
+  useEffect(() => {
+    const bridge = () => (window as unknown as { pywebview?: { api?: PyApi } }).pywebview?.api;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "F11" && e.key !== "Escape") return;
+      const api = bridge();
+      if (api?.toggle_fullscreen) {
+        if (e.key === "F11") { e.preventDefault(); void api.toggle_fullscreen(); }
+        else void api.is_fullscreen?.().then((on) => { if (on) void api.toggle_fullscreen!(); });
+        return;
+      }
+      if (e.key === "F11") {
+        e.preventDefault();
+        if (document.fullscreenElement) void document.exitFullscreen();
+        else void document.documentElement.requestFullscreen?.().catch(() => undefined);
+      }                                                  // a browser leaves its own fullscreen on Esc
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
+
+/** ADR-90: a slim strip on every page while a research run keeps failing and restarting. */
+function RetryStrip() {
+  const [job, setJob] = useState<CampaignJob | null>(null);
+  useEffect(() => {
+    let live = true, t = 0;
+    const poll = () => campaigns.active().then((d) => { if (live) setJob(d.job); }).catch(() => undefined)
+      .finally(() => { if (live) t = window.setTimeout(poll, 10000); });
+    poll();
+    return () => { live = false; window.clearTimeout(t); };
+  }, []);
+  if (!job || job.kind !== "campaign" || !job.having_problems || CAMPAIGN_JOB_FINAL.has(job.state)) return null;
+  return <div className="retry-strip" data-testid="retry-strip">The research run is having problems and keeps restarting by itself
+    ({job.restarts} restart{job.restarts === 1 ? "" : "s"}). <a href={href(`/runs/${job.campaign_id}?job=${job.job_id}`)}>Details ›</a></div>;
+}
+
 function ShellBody() {
+  useFullscreenKeys();
   const { demo, refreshPrefs } = useApp();
   const route = useRoute();
   const [menu, setMenu] = useState(false);
@@ -146,6 +186,7 @@ function ShellBody() {
       </header>
       {demo && <div className="demo-banner" data-testid="demo-banner"><b>DEMO WORKSPACE</b> — {SYNTHETIC_NOTICE}</div>}
       <UpdateBanner />
+      <RetryStrip />
       <nav className="sidebar" aria-label="main navigation">
         {NAV.map((n) => {
           const on = n.heads.includes(active);

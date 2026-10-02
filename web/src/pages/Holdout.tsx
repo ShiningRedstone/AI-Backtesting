@@ -5,7 +5,7 @@ import { href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { facetLabel, humanize, plainProse } from "../app/labels";
 import { useCriteriaName } from "../components/results";
-import { Badge, Banner, Button, Card, Confirm, Empty, ErrorPanel, Kpi, Loading, Mono, TableWrap, TechDetails, n, shortTime, signCls } from "../components/ui";
+import { Badge, Banner, Button, Card, Confirm, Empty, ErrorPanel, Kpi, Loading, Mono, TableWrap, TechDetails, n, shortTime, signCls, PageSkeleton } from "../components/ui";
 
 /** ADR-85 Run backtest → Holdout backtest: pick SURVIVORS only and test them once each on the locked holdout through the
  *  protocol gate (random-entry comparison, cost stress, pre-registered criteria). The list order is a display ranking
@@ -75,7 +75,7 @@ export function HoldoutPage() {
         <b> once</b>, within your protocol's limit, and a used test never comes back. A test is a backtest on exactly the holdout dates plus
         100 random-entry comparisons and a cost stress test, judged by the rules your protocol fixed in advance: “criteria met” or “not met”,
         never “approved”. Only survivors can be tested.</Banner>
-      {cands.error ? <ErrorPanel error={cands.error} /> : !cands.data ? <Loading label="Loading survivors…" kind="table" /> : <>
+      {cands.error ? <ErrorPanel error={cands.error} /> : !cands.data ? <PageSkeleton layout="holdout" label="Loading survivors…" /> : <>
         <div className="kpis">
           <Kpi label="Holdout tests left" value={p ? `${p.looks_left} of ${p.looks_budget}` : "—"} accent testId="holdout-left"
             meter={p ? p.looks_used / Math.max(1, p.looks_budget) : null} sub={p ? `${p.looks_used} used` : fp ? "no ordinary survivors yet" : "no active research protocol"} />
@@ -91,7 +91,7 @@ export function HoldoutPage() {
           protocol at a time.</Banner>}
         {jobId && <LiveHoldout jobId={jobId} onFinished={() => { cands.reload(); hist.reload(); }} onClose={() => setJobId(null)} />}
         <Card title="Survivors, best to worst for prop trading" testId="holdout-candidates"
-          actions={<Button kind="primary" onClick={() => setAsk(true)} disabled={!sel.size || running || sel.size > left || mixed} testId="holdout-start">
+          actions={<Button small kind="primary" onClick={() => setAsk(true)} disabled={!sel.size || running || sel.size > left || mixed} testId="holdout-start">
             Start holdout backtest{sel.size ? ` (${sel.size})` : ""}</Button>}>
           <div className="inline">
             <select className="input" value={fam} aria-label="family" onChange={(e: { target: HTMLSelectElement }) => setFam(e.target.value)}>

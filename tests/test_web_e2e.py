@@ -226,8 +226,10 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertIn("not evidence of trading performance", self.tid(pg, "synthetic-banner").inner_text())
         self.assertIn("Trades", self.tid(pg, "metrics").inner_text())          # metric keys in words
         run_id = result.locator("a[href^='#/results/']").first.get_attribute("href").rsplit("/", 1)[-1]
-        pg.goto(f"{self.base}/#/results")
-        self.assertIn(run_id, self.tid(pg, "runs-demo").inner_html())     # kept apart from research runs
+        pg.goto(f"{self.base}/#/results")                                   # ADR-90: the All runs list is gone
+        pg.wait_for_url("**/#/dashboard")
+        pg.goto(f"{self.base}/#/results/{run_id}")                          # run-detail links still open
+        self.tid(pg, "run-analytics").wait_for()
         self.assertEqual(self.errors, [])
 
     def test_13_munyun_lab_preferences_favorites_and_hidden_ids(self):
@@ -342,8 +344,8 @@ class TestBrowserFlow(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def test_12_variations_batch_compare_validate_prop(self):
-        """Phase 8: bounded grid (exact combinations shown) -> batch job on a dataset -> comparison
-        (sortable, scoped) -> OOS + OOS-window control for one selection -> prop on the OOS run."""
+        """Phase 8: bounded grid (exact combinations shown) -> batch job on a dataset -> OOS + OOS-window control ->
+        prop on the OOS run. (The Compare page was removed in ADR-90; the batch's results stay in the run records.)"""
         ema = self._ema_id()
         pg = self.page()
         pg.goto(f"{self.base}/#/strategies/{ema}?tab=variations")
@@ -364,17 +366,8 @@ class TestBrowserFlow(unittest.TestCase):
         self.tid(pg, "lab-batch-start").click()
         pg.wait_for_function("() => { const s = document.querySelector(\"[data-testid='rs-job-state']\"); return s && /completed/.test(s.innerText); }",
                              timeout=180000)
-        self.tid(pg, "rs-open-compare").click()
-        table = self.tid(pg, "compare-table")
-        table.wait_for()
-        rows = table.locator("tbody tr")
-        self.assertGreaterEqual(rows.count(), 3)                                # base + 2 unique variants
-        self.assertIn("In-sample", table.inner_text())
-        self.tid(pg, "cmp-sort-net_r").click()
-        vals = [float(x) for x in table.locator("tbody tr td:nth-child(9)").all_inner_texts() if x.strip() not in ("", "—")]
-        self.tid(pg, "cmp-sort-run_id").click()
-        rows.first.locator("input[type=checkbox]").check()
-        self.tid(pg, "cmp-validate").click()
+        self.assertGreaterEqual(len(_get(f"{self.base}/api/compare?source=lineage&id={ema}")["rows"]), 3)   # base + 2 variants
+        pg.goto(f"{self.base}/#/strategies/{ema}?tab=validate")
         self.tid(pg, "lab-validate").wait_for()
         self.tid(pg, "lab-val-split").fill("2024-03-01")
         pg.locator("[data-testid^='lab-val-ds-NQ_FUTURE'] input").first.check()
@@ -397,7 +390,6 @@ class TestBrowserFlow(unittest.TestCase):
         self.tid(pg, "prop-run-btn").click()
         self.tid(pg, "prop-result").wait_for(timeout=60000)
         self.assertEqual(self.errors, [])
-        self.assertTrue(vals == sorted(vals) or not vals)
 
     def test_9z_preferred_dataset_ai_discovery_to_backtest(self):
         """Phase 9: set the Preferred Research Dataset -> AI Discovery preselects it -> mock proposals through the

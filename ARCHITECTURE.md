@@ -2330,3 +2330,62 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Known limitations:** if a workspace's settings differ in a way no stored run recorded (no run under the protocol's
   hash), the difference cannot be listed or restored. A future change to `configs/` again changes the fingerprint of
   every workspace that is the source clone: `tests/test_config_legacy.py` fails on purpose when that happens.
+
+### ADR-90 Display and app round: pools, Live 50K OK, CHF display, fee discounts, auto-restart, page skeletons, fullscreen
+- **Asked by the user** as one 27-item list (items 16 and 27 shipped first as ADR-89). Nothing here changes how a
+  backtest runs or what it produces; every number is recomputed from stored records.
+- **Backtest results:**
+  - The run picker is replaced by a pool picker (All | Pool 1 | Pool 2): `campaign_run=pool:<n>` →
+    `pool2.pools`/`pool_ids`, the union of every frozen campaign of that pool. Pool 1 under the retired and the new
+    protocol counts once. Each strategy's latest discovery result is shown.
+  - The "The field" title and the scope/basis pills are gone; the Synthetic and Holdout labels stay.
+  - "What the tested strategies have in common" shows positive vs negative total net R per group (`results_view.group`
+    adds positive / negative / zero) as a green/red split bar.
+  - Above the chart: tested / drawn / survivors / not drawn (no losing or no winning trade, so no reward to risk).
+  - All stored backtests: the Gross R / Costs / Net R boxes, the Breakdowns section and the OOS/walk-forward text are
+    removed. The drawdown histogram axis ends at the 99th percentile (`_hist(hi_pct=)`); larger values count in the
+    edge bar; median and mean use every run.
+  - The All runs, Compare and Candidate pipeline tabs, their pages and the buttons to them are removed. `/compare` and
+    `/pipeline` redirect to Overview; run-detail links `/results/<id>` stay. APIs are unchanged.
+- **"Live 50K OK"** (`overview.live_check`): net USD > 0 AND max drawdown USD ≤ `ui.live_dd_limit_usd` (default 5,000)
+  AND no New York calendar year with a net loss, on the recorded trades (the strategy's own MNQ sizing).
+  - The worst year per run comes from one SQL aggregate (`worst_year_usd`, cached per store change). The New York year
+    of an exit is the UTC year of exit − 5 h, because 1 January is always in winter time; this is tested against
+    pandas.
+  - Shown as an Overview count, an explorer filter (`live_only`) and yes/no column, and a per-condition explanation
+    in the strategy panel. Historical, not a forecast.
+- **Display preferences** (workspace `ui`, outside the config hash, tested):
+  - `currency` USD|CHF with a user-typed `chf_per_usd`. CHF is display only (`web/src/app/money.ts`): every
+    calculation, fee, rule and balance stays USD, and inputs stay USD with a CHF hint.
+  - `chart_cluster` on/off and `chart_cluster_distance` 0.25–3 (`clusterMarks(dist)`).
+  - Settings puts every display option first.
+- **Fee discounts** (`ui.prop_discount = {enabled, pct: {profile: %}}`): one switch for all account types, a % per
+  type, applied to the evaluation price and reset fee (not activation) when a paper account STARTS
+  (`Services.discounted_fees`). The account freezes the discounted fees and a `fee_discount` record. The paper engine
+  is unchanged.
+- **Automatic restart of research runs** (`JobManager._work_campaign`):
+  - A run that ends `stopped_on_failure` / `incomplete` with failed strategies, or raises, is restarted through the
+    same `run_scope` resume. Completed strategies are never re-run; failed ones are tried again, forever (the user's
+    choice).
+  - The wait is 10 s, doubling to 5 min. `having_problems` turns on after 3 errors in 10 min: a banner on Research runs
+    and a slim strip on every page. Cancel ends the loop.
+  - A refusal by the campaign's own checks (PREFLIGHT_FAILED, a tampered spec, ...) is not restarted: nothing was
+    evaluated and a restart cannot change it, so the job ends and says why. Holdout jobs are not restarted either (each
+    strategy's look is spent once).
+- **App shell:**
+  - Home heading "Munyun Lab".
+  - Strategies opens Families first.
+  - "Prop & paper" is renamed "Prop Trading".
+  - Rounded 8-tooth gear icon.
+  - F11 / Esc fullscreen: pywebview `js_api=WindowApi` (`toggle_fullscreen`), Fullscreen API in a browser.
+  - The desktop window has `zoomable=False` (no Ctrl+wheel, Ctrl+/− or pinch zoom).
+  - Card-header buttons are uniformly small; Cancel reads "Cancel run".
+  - Page-shaped skeletons (`PageSkeleton` layouts).
+  - Light-theme field chart: teal strategies (`--c-strategy`), orange survivors.
+- **Repository:** CI keeps only the newest build of each existing branch and deletes builds of deleted branches
+  (`packaging/prune_releases.py`, refuses to delete anything without a sane branch list). `installer-main`, versioned
+  releases and the save-point branches' newest builds are kept.
+- **Known limitations:**
+  - The CHF rate is whatever the user typed (no live rate).
+  - Live 50K OK uses the stored trades' USD at the backtest's 50K sizing, not the risk-per-trade display amount.
+  - Branch deletion could not be done from the build environment; merged idle branches are deleted by hand.

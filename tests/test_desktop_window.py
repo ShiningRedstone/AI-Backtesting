@@ -55,6 +55,9 @@ class FakeWindow:
     def show(self):
         pass
 
+    def toggle_fullscreen(self):
+        self.fullscreen_toggles = getattr(self, "fullscreen_toggles", 0) + 1
+
     def destroy(self):
         self.destroyed.set()
 
@@ -140,6 +143,9 @@ class TestNativeWindowLifecycle(unittest.TestCase):
             w = wv.windows[0]
             self.assertEqual((w.title, w.url), ("Munyun Lab", info["url"]))
             self.assertEqual((w.kw["width"], w.kw["height"], w.kw["resizable"]), (dw.SIZE[0], dw.SIZE[1], True))
+            self.assertIs(w.kw["zoomable"], False)                           # ADR-90: no page zoom
+            api = w.kw["js_api"]                                              # F11 bridge: only public methods exposed
+            self.assertEqual(sorted(m for m in dir(api) if not m.startswith("_")), ["is_fullscreen", "toggle_fullscreen"])
             self.assertEqual(wv.starts[0]["debug"], False)                 # no developer tooling
             self.assertEqual(wv.starts[0]["private_mode"], False)
             self.assertEqual(Path(wv.starts[0]["storage_path"]), settings.parent / "webview")   # app-level, not per workspace
@@ -325,6 +331,13 @@ class TestRelaunchWhileClosing(unittest.TestCase):
         w._loaded()
         w._loaded()
         self.assertEqual(calls, [1])                                          # the splash closes once, on first load
+        api = dw.WindowApi(w)                                                 # ADR-90: F11 fullscreen toggle
+        self.assertFalse(api.toggle_fullscreen())                            # no window yet: nothing happens
+        w.window = FakeWindow("t", "http://x")
+        self.assertTrue(api.toggle_fullscreen())
+        self.assertTrue(api.is_fullscreen())
+        self.assertFalse(api.toggle_fullscreen())
+        self.assertEqual(w.window.fullscreen_toggles, 2)
 
 
 class TestControlChannelAndRuntime(unittest.TestCase):

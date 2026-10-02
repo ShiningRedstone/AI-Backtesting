@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useMoney } from "../app/money";
 import { api, ApiError } from "../api/client";
 import type { PaperAccountDetail, PaperAccountRow, PaperAttempt, PaperCandidates, PaperFeedStatus, PaperSourceCheck, PaperState } from "../api/types";
 import { go, href, useRoute } from "../app/router";
 import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, humanize, plainProse, profileLabel } from "../app/labels";
-import { Badge, Banner, Button, Card, Checkbox, Confirm, Drawer, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, TableWrap, TechDetails, fmt,
-  shortTime, signCls } from "../components/ui";
+import { Badge, Banner, Button, Card, Checkbox, Confirm, Drawer, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, TableWrap, TechDetails, fmt, shortTime, signCls, PageSkeleton } from "../components/ui";
 import { LineChart } from "../components/charts";
 
 /** ADR-81 paper trading: strategies trade NEW Dukascopy days (downloaded after each completed trading day) in simulated
@@ -18,7 +18,6 @@ export function PaperPage() {
 
 export const PAPER_LABEL = "Paper trading: simulated forward trading on Dukascopy USA 100 data (an index CFD stand-in for NQ), "
   + "under the prop account's default assumed rules. Not a research result, not a trial, not live trading.";
-const usd = (v: number | null | undefined) => v == null ? "—" : `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 const ATTEMPT_LABEL: Record<PaperAttempt["status"], string> = {
   in_progress: "Evaluation in progress", failed: "Evaluation failed", incompatible: "Cannot trade this account", funded: "Funded, trading",
   funded_lost: "Funded account lost", funded_completed: "Funded cycle completed" };
@@ -111,6 +110,7 @@ function sourceSummary(c: PaperSourceCheck | null, checking: boolean) {
 }
 
 function PaperAccounts() {
+  const money = useMoney(), usd = (v: number | null | undefined) => money.fmt(v, 2);     // ADR-90: USD or CHF
   const { prefs } = useApp();
   const route = useRoute();
   const accounts = useApi<PaperAccountRow[]>("/api/paper/accounts");
@@ -125,7 +125,7 @@ function PaperAccounts() {
         <div className="actions"><Button kind="primary" onClick={() => go("/paper/new")} testId="paper-new">Start paper trading</Button></div></header>
       <Banner tone="info">{PAPER_LABEL}</Banner>
       <FeedBanner onUpdated={accounts.reload} />
-      {accounts.error ? <ErrorPanel error={accounts.error} /> : !accounts.data ? <Loading label="Loading paper accounts…" kind="table" /> : !rows.length ? (
+      {accounts.error ? <ErrorPanel error={accounts.error} /> : !accounts.data ? <PageSkeleton layout="table" label="Loading paper accounts…" /> : !rows.length ? (
         <Card><Empty>No paper accounts yet. <a href={href("/paper/new")}>Start paper trading</a> with your survivors.</Empty></Card>) : <>
         <div className="kpis">
           <Kpi label="Accounts" value={rows.length} sub={`${rows.filter((r) => r.status === "running").length} running`} />
@@ -191,6 +191,7 @@ function AccountDrawer({ id, onClose, onChanged, profileName }: { id: string; on
 }
 
 function AccountState({ st }: { st: PaperState }) {
+  const money = useMoney(), usd = (v: number | null | undefined) => money.fmt(v, 2);
   const curve = useMemo(() => {
     let c = 0;
     return st.trades.map((t) => (c += t.net_usd));
@@ -219,9 +220,9 @@ function AccountState({ st }: { st: PaperState }) {
               <td className="right">{x.payouts ? `${x.payouts} · ${usd(x.trader_payout)}` : "—"}</td></tr>))}
           </tbody></table></TableWrap>
       </Card>
-      {st.trades.length > 0 && <Card title="Cumulative trade P&L across all attempts (USD)">
-        <LineChart x={st.trades.map((t) => t.exit_ts.slice(0, 10))} unit="USD" testId="paper-curve"
-          series={[{ id: "pnl", label: "Cumulative P&L", values: curve, area: true }]} /></Card>}
+      {st.trades.length > 0 && <Card title={`Cumulative trade P&L across all attempts (${money.unit})`}>
+        <LineChart x={st.trades.map((t) => t.exit_ts.slice(0, 10))} unit={money.unit} testId="paper-curve"
+          series={[{ id: "pnl", label: "Cumulative P&L", values: curve.map(money.conv), area: true }]} /></Card>}
       <div className="grid-cards">
         <Card title="Payouts">{!st.payouts.length ? <Empty>No payouts yet.</Empty> : (
           <TableWrap><table className="dense"><thead><tr><th>Attempt</th><th>Date</th><th className="right">Gross</th><th className="right">Your share</th></tr></thead>
@@ -235,7 +236,7 @@ function AccountState({ st }: { st: PaperState }) {
       <Card title={`Trades (${st.n_trades})`}>
         {!st.trades.length ? <Empty>No trades yet.</Empty> : <TableWrap><table className="dense">
           <thead><tr><th>Entry time</th><th>Side</th><th className="right">MNQ</th><th className="right">Entry fill</th><th className="right">Exit fill</th>
-            <th>Exit</th><th className="right">Net (USD)</th></tr></thead>
+            <th>Exit</th><th className="right">Net ({money.unit})</th></tr></thead>
           <tbody>{st.trades.slice(-300).reverse().map((t, i) => (
             <tr key={i}><td className="small" title={`exit ${shortTime(t.exit_ts)}`}>{shortTime(t.entry_ts)}</td><td>{t.direction > 0 ? "Long" : "Short"}</td>
               <td className="right">{t.contracts}</td><td className="right">{price(t.entry_price_eff)}</td><td className="right">{price(t.exit_price_eff)}</td>
@@ -254,6 +255,7 @@ const VIEW_LABEL = { holdout: "Passed the holdout", survivors: "Survivors", all:
 const VIEW_TITLE = { holdout: "Strategies that passed the holdout", survivors: "Survivors", all: "Tested strategies" } as const;
 /** Batch start: one paper account per chosen strategy, all with the same prop account and fees. */
 function StartPaper() {
+  const money = useMoney(), usd = (v: number | null | undefined) => money.fmt(v, 2);
   const { prefs, toast } = useApp();
   const [profile, setProfile] = useState(prefs.prop_criteria_profile);
   const [view, setView] = useState<"holdout" | "survivors" | "all">("holdout");
@@ -303,7 +305,7 @@ function StartPaper() {
             onChange={(e: { target: HTMLInputElement }) => setQ(e.target.value)} />
           <span className="muted small">{sel.size} selected</span>
         </div>
-        {cands.error ? <ErrorPanel error={cands.error} /> : !cands.data ? <Loading label="Loading strategies…" kind="table" /> : !rows.length ? (
+        {cands.error ? <ErrorPanel error={cands.error} /> : !cands.data ? <PageSkeleton layout="table" label="Loading strategies…" /> : !rows.length ? (
           <Empty>{view === "all" ? "No tested strategies yet." : view === "survivors" ? "No survivors under this prop account."
             : <>No strategy has passed its holdout test yet. Run one under Run backtest → <a href={href("/holdout")}>Holdout backtest</a>, or choose
               “Survivors” or “All tested” above.</>}</Empty>) : (

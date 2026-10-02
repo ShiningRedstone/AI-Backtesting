@@ -316,7 +316,8 @@ class TestWorkspaceBrowserFlow(Base):
                 table = t("datasets-table")
                 table.wait_for()
                 self.assertIn(self.a["dataset_id"], table.inner_html())            # id in the row's attributes (ids hidden by default)
-                pg.locator("[data-testid='nav-strategies']").click()
+                pg.locator("[data-testid='nav-strategies']").click()               # ADR-90: opens Families first
+                t("subnav-strategies").click()
                 t(f"row-{self.a['strategy_id']}").wait_for()
                 pg.goto(info["url"] + "/#/prop")
                 pg.locator("[data-testid='prop-advanced'] > summary").click()   # the manual simulator loads when opened

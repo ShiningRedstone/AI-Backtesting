@@ -4,9 +4,10 @@ import type { DatasetRow, GapReport, InstrumentIdentity, PaperFees, PreferredDat
 import { ChooseWorkspaceLink, WorkspacePanel } from "../components/workspace";
 import { href, useRoute } from "../app/router";
 import { useApi, useApp, type Theme } from "../app/context";
+import { useMoney } from "../app/money";
 import { datasetLabel, facetLabel, humanize, plainProse, statusLabel, valueLabel } from "../app/labels";
 import { SYNTHETIC_NOTICE } from "../components/strategy";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, ObjectView, Select, TableWrap, TechDetails, TextInput, fmt, shortTime, ReadOnly } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Field, KeyValues, Loading, Mono, ObjectView, Select, TableWrap, TechDetails, TextInput, fmt, shortTime, ReadOnly, PageSkeleton } from "../components/ui";
 import type { ProtocolRecordRow } from "../api/types";
 import { UI_VERSION, UpdatePanel, useVersion } from "../components/updates";
 import { SystemPanel } from "./Strategies";
@@ -310,6 +311,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 /** Risk per trade ($): the dollar amount one R stands for in the results views (display only; backtests unchanged). */
 function RiskPerTradeCard() {
   const { toast } = useApp();
+  const money = useMoney();
   const { data, error, setData } = useApi<RiskPreference>("/api/preferences/risk-per-trade");
   const [val, setVal] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -330,6 +332,7 @@ function RiskPerTradeCard() {
             data-testid="risk-input" onChange={(e: { target: HTMLInputElement }) => setVal(e.target.value.replace(/[^0-9.]/g, ""))} />
           <Button small kind="primary" onClick={save} busy={busy} disabled={!shown || Number(shown) <= 0 || shown === String(data.risk_per_trade_usd)}
             testId="risk-save">Save</Button>
+          <span className="small muted">USD {money.hint(Number(shown) || null)}</span>
         </div>
         <p className="small muted">Dollar figures in Backtest results are results in R multiplied by this amount (default $250). It only changes
           how results are displayed: backtests, position sizing and stored results stay exactly as they are.</p></>}
@@ -345,13 +348,14 @@ export function SettingsPage() {
   const about = <AboutCard />;
   if (error?.kind === "no_workspace") return <div className="page"><header className="page-head"><h1>Settings</h1></header>{about}<UpdatePanel />{wsCard}</div>;
   if (error) return <div className="page"><header className="page-head"><h1>Settings</h1></header>{about}<UpdatePanel />{wsCard}<ErrorPanel error={error} /></div>;
-  if (!c) return <Loading label="Loading configuration…" />;
+  if (!c) return <div className="page"><header className="page-head"><h1>Settings</h1></header><PageSkeleton layout="settings" label="Loading configuration…" /></div>;
   return (
     <div className="page">
       <header className="page-head"><div><h1>Settings</h1></div></header>
+      {/* ADR-90: every display option first */}
+      <div className="grid-cards"><DisplayCard /><RiskPerTradeCard /></div>
       <div className="grid-cards">{about}<UpdatePanel /></div>
-      <div className="grid-cards">{wsCard}<RiskPerTradeCard /></div>
-      <div className="grid-cards"><PropCriteriaCard /><DisplayCard /></div>
+      <div className="grid-cards">{wsCard}<PropCriteriaCard /></div>
       <div className="grid-cards"><ResearchCoresCard /></div>
       <PropFeesCard />
       <ResetCard />
@@ -405,8 +409,29 @@ function PropCriteriaCard() {
       </div>
       <p className="small muted">This account's rules decide "Pass eval", "Pass payout" and the survivor label across the app. It reads the prop
         check stored with every backtest; backtests are unchanged.</p>
+      <LiveLimit />
     </Card>
   );
+}
+
+/** ADR-90: the drawdown limit of "Live 50K OK" (net profit, worst drawdown within this, no losing calendar year). */
+function LiveLimit() {
+  const { prefs, setPref, toast } = useApp();
+  const money = useMoney();
+  const [val, setVal] = useState<string | null>(null);
+  const saved = String(prefs.live_dd_limit_usd ?? 5000);
+  const shown = val ?? saved;
+  const save = () => setPref({ live_dd_limit_usd: Number(shown) }).then(() => { setVal(null); toast("ok", "Live 50K drawdown limit saved"); })
+    .catch((e: Error) => toast("error", e.message));
+  return <div style={{ marginTop: 12 }}>
+    <label className="switch-row"><span>Live 50K OK: largest allowed drawdown</span>
+      <span className="inline" style={{ gap: 6 }}><span className="muted">$</span>
+        <input className="input" style={{ width: 110 }} inputMode="decimal" value={shown} aria-label="live drawdown limit in dollars" data-testid="live-limit"
+          onChange={(e: { target: HTMLInputElement }) => setVal(e.target.value.replace(/[^0-9.]/g, ""))} />
+        <Button small kind="primary" onClick={save} disabled={!Number(shown) || shown === saved} testId="live-limit-save">Save</Button></span></label>
+    <p className="small muted">USD {money.hint(Number(shown) || null)}. A strategy is "Live 50K OK" when its recorded trades made money, never fell
+      more than this from a peak, and had no calendar year with a loss (real money, no prop-firm rules). Display only.</p>
+  </div>;
 }
 
 function Switch({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId: string }) {
@@ -419,7 +444,14 @@ function Switch({ on, onChange, label, testId }: { on: boolean; onChange: (v: bo
 
 function DisplayCard() {
   const { prefs, setPref, toast } = useApp();
-  const set = (k: "show_ids" | "show_readonly") => (v: boolean) => setPref({ [k]: v }).catch((er: Error) => toast("error", er.message));
+  const set = (k: "show_ids" | "show_readonly" | "chart_cluster") => (v: boolean) => setPref({ [k]: v }).catch((er: Error) => toast("error", er.message));
+  const [rate, setRate] = useState<string | null>(null);
+  const [dist, setDist] = useState<number | null>(null);
+  const shownRate = rate ?? (prefs.chf_per_usd != null ? String(prefs.chf_per_usd) : "");
+  const saveRate = () => setPref({ chf_per_usd: shownRate === "" ? null : Number(shownRate) }).then(() => { setRate(null); toast("ok", "Exchange rate saved"); })
+    .catch((er: Error) => toast("error", er.message));
+  const d = dist ?? prefs.chart_cluster_distance ?? 1;
+  const saveDist = () => { if (dist != null) setPref({ chart_cluster_distance: dist }).then(() => setDist(null)).catch((er: Error) => toast("error", er.message)); };
   return (
     <Card title="Display" testId="settings-display">
       <label className="switch-row"><span>Theme</span>
@@ -427,6 +459,24 @@ function DisplayCard() {
           onChange={(e: { target: HTMLSelectElement }) => setPref({ theme: e.target.value as Theme }).catch((er: Error) => toast("error", er.message))}>
           <option value="dark">Dark</option><option value="light">Light</option><option value="system">Same as Windows</option>
         </select></label>
+      <label className="switch-row"><span>Show money in</span>
+        <span className="segmented small" role="group" aria-label="currency">
+          {(["USD", "CHF"] as const).map((cur) => <button key={cur} type="button" className={(prefs.currency ?? "USD") === cur ? "on" : ""} data-testid={`currency-${cur}`}
+            onClick={() => setPref({ currency: cur }).catch((er: Error) => toast("error", er.message))}>{cur}</button>)}</span></label>
+      {prefs.currency === "CHF" && <label className="switch-row"><span>1 USD =</span>
+        <span className="inline" style={{ gap: 6 }}>
+          <input className="input" style={{ width: 90 }} inputMode="decimal" value={shownRate} placeholder="e.g. 0.88" aria-label="CHF per USD" data-testid="chf-rate"
+            onChange={(e: { target: HTMLInputElement }) => setRate(e.target.value.replace(/[^0-9.]/g, ""))} /><span className="muted">CHF</span>
+          <Button small kind="primary" onClick={saveRate} disabled={rate == null} testId="chf-rate-save">Save</Button></span></label>}
+      {prefs.currency === "CHF" && <p className="small muted" style={{ marginTop: 0 }}>{prefs.chf_per_usd ? "Amounts are shown in CHF at your rate. "
+        : "Enter your rate; until then amounts stay in USD. "}Every calculation, rule, fee and balance stays in USD, and input fields stay in USD.</p>}
+      <Switch on={prefs.chart_cluster ?? true} onChange={set("chart_cluster")} label="Group overlapping strategy dots on the Overview chart" testId="switch-cluster" />
+      {(prefs.chart_cluster ?? true) && <label className="switch-row"><span>Grouping distance</span>
+        <span className="inline" style={{ gap: 8 }}>
+          <span className="small muted">touching</span>
+          <input type="range" min={0.25} max={3} step={0.25} value={d} aria-label="grouping distance" data-testid="cluster-distance"
+            onChange={(e: { target: HTMLInputElement }) => setDist(Number(e.target.value))} onPointerUp={saveDist} onKeyUp={saveDist} onBlur={saveDist} />
+          <span className="small muted">far apart</span></span></label>}
       <Switch on={prefs.show_ids} onChange={set("show_ids")} label="Show IDs (strategy, backtest and dataset IDs, hashes)" testId="switch-show-ids" />
       <Switch on={prefs.show_readonly} onChange={set("show_readonly")} label="Show read-only information (fixed research design, configuration, system status)"
         testId="switch-show-readonly" />
@@ -460,7 +510,11 @@ function PropFeesCard() {
   const { prefs, setPref, toast } = useApp();
   const KEYS = ["eval_price", "reset_fee", "activation_fee"] as const;
   const saved = prefs.prop_fees ?? {};
+  const money = useMoney();
+  const disc = prefs.prop_discount ?? { enabled: false, pct: {} };
   const [draft, setDraft] = useState<Record<string, Record<string, string>>>({});
+  const [pctDraft, setPctDraft] = useState<Record<string, string>>({});
+  const shownPct = (pid: string) => pctDraft[pid] ?? (disc.pct?.[pid] != null ? String(disc.pct[pid]) : "");
   const [busy, setBusy] = useState(false);
   const shown = (pid: string, k: string) => draft[pid]?.[k] ?? (saved[pid]?.[k as keyof PaperFees] != null ? String(saved[pid][k as keyof PaperFees]) : "");
   const set = (pid: string, k: string, v: string) => setDraft((d) => ({ ...d, [pid]: { ...(d[pid] ?? {}), [k]: v.replace(/[^0-9.]/g, "") } }));
@@ -470,24 +524,36 @@ function PropFeesCard() {
       const row = Object.fromEntries(KEYS.map((k) => [k, shown(p.profile_id, k) === "" ? null : Number(shown(p.profile_id, k))])) as unknown as PaperFees;
       if (KEYS.some((k) => row[k] != null)) out[p.profile_id] = row;
     }
+    const pct: Record<string, number> = {};
+    for (const p of prefs.profile_choices ?? []) if (shownPct(p.profile_id) !== "") pct[p.profile_id] = Number(shownPct(p.profile_id));
     setBusy(true);
-    setPref({ prop_fees: out }).then(() => { setDraft({}); toast("ok", "Prop account fees saved"); })
+    setPref({ prop_fees: out, prop_discount: { enabled: disc.enabled, pct } }).then(() => { setDraft({}); setPctDraft({}); toast("ok", "Prop account fees saved"); })
       .catch((e: Error) => toast("error", e.message)).finally(() => setBusy(false));
   };
   return (
     <Card title="Prop account fees" testId="settings-prop-fees">
       <TableWrap><table className="dense">
-        <thead><tr><th>Prop account</th><th>Evaluation price ($)</th><th>Reset fee ($)</th><th>Activation fee ($)</th></tr></thead>
+        <thead><tr><th>Prop account</th><th>Evaluation price ($)</th><th>Reset fee ($)</th><th>Activation fee ($)</th><th>Discount (%)</th></tr></thead>
         <tbody>{(prefs.profile_choices ?? []).map((p) => (
           <tr key={p.profile_id}><td>{p.name}</td>{KEYS.map((k) => (
             <td key={k}><input className="input" style={{ width: 110 }} inputMode="decimal" value={shown(p.profile_id, k)} placeholder="—"
               aria-label={`${p.name} ${k.replace("_", " ")}`} data-testid={`fee-${p.profile_id}-${k}`}
-              onChange={(e: { target: HTMLInputElement }) => set(p.profile_id, k, e.target.value)} /></td>))}</tr>))}
+              onChange={(e: { target: HTMLInputElement }) => set(p.profile_id, k, e.target.value)} />
+              {money.hint(shown(p.profile_id, k) === "" ? null : Number(shown(p.profile_id, k))) && <div className="small muted">
+                {money.hint(Number(shown(p.profile_id, k)))}</div>}</td>))}
+            <td><input className="input" style={{ width: 80 }} inputMode="decimal" value={shownPct(p.profile_id)} placeholder="—"
+              aria-label={`${p.name} discount percent`} data-testid={`discount-${p.profile_id}`}
+              onChange={(e: { target: HTMLInputElement }) => setPctDraft((d) => ({ ...d, [p.profile_id]: e.target.value.replace(/[^0-9.]/g, "") }))} /></td></tr>))}
         </tbody></table></TableWrap>
-      <div className="actions"><Button small kind="primary" onClick={save} busy={busy} disabled={!Object.keys(draft).length} testId="fees-save">Save fees</Button></div>
+      <Switch on={disc.enabled} label="Discounts on (all account types; evaluation price and reset fee, not the activation fee)" testId="switch-discount"
+        onChange={(v) => setPref({ prop_discount: { ...disc, enabled: v } }).then(() => toast("ok", v ? "Discounts on" : "Discounts off"))
+          .catch((e: Error) => toast("error", e.message))} />
+      <div className="actions"><Button small kind="primary" onClick={save} busy={busy} disabled={!Object.keys(draft).length && !Object.keys(pctDraft).length}
+        testId="fees-save">Save fees</Button></div>
       <p className="small muted">Paper trading charges these: the evaluation price for every new evaluation, the reset fee after a failed evaluation (the
         evaluation price again if no reset fee is entered) and the activation fee after a pass. Enter the prices you actually pay; Munyun Lab never
-        guesses them, and paper trading on an account needs at least its evaluation price. Backtests are not affected.</p>
+        guesses them, and paper trading on an account needs at least its evaluation price. With discounts on, a new paper account pays the
+        evaluation price and reset fee minus its account type's discount (fixed when the account starts). Backtests are not affected.</p>
     </Card>
   );
 }

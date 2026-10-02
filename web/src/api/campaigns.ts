@@ -79,6 +79,8 @@ export interface CampaignJob {
   state: CampaignJobState; created_at: string; started_at: string | null; finished_at: string | null; error: string | null;
   cancel_requested: boolean; live: Partial<CampaignRunRecord> & { status: string; phase: string };
   processes?: number;                         // ADR-77: CPU cores computing strategies at once
+  // ADR-90: automatic restarts after an error
+  restarts?: number; last_error?: string | null; next_retry_at?: string | null; having_problems?: boolean;
 }
 export interface CheckReport { campaign_id: string; ready: boolean; note: string; checks: { check: string; ok: boolean; detail: unknown }[] }
 

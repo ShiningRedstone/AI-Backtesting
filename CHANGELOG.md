@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Display and app round: pools, Live 50K OK, CHF, fee discounts, auto-restart (ADR-90)
+
+| Item | Status |
+|---|---|
+| Backtest results: pick All / Pool 1 / Pool 2 instead of individual runs; no "The field" title or scope pills; positive vs negative net R in "What the tested strategies have in common"; tested / drawn / not drawn totals above the chart | IMPLEMENTED, TESTED |
+| All stored backtests: Gross R / Costs / Net R boxes, Breakdowns and the out-of-sample text removed; drawdown chart axis cut at the 99th percentile | IMPLEMENTED, TESTED |
+| All runs, Compare and Candidate pipeline tabs (and their buttons) removed; old links go to Overview | IMPLEMENTED |
+| "Live 50K OK": net profit, worst drawdown within your Settings limit (default $5,000) and no losing calendar year; Overview count, explorer filter and column, strategy panel explanation | IMPLEMENTED, TESTED |
+| Settings: display options first; USD / CHF display with your own rate (all maths stays USD); chart grouping on/off and distance slider; fee discounts (one switch, % per account type, evaluation price and reset fee) | IMPLEMENTED, TESTED |
+| A research run that stops because of an error restarts by itself (10 s → 5 min); after 3 errors in 10 minutes a banner and a top strip say it is having problems; Cancel run stops it | IMPLEMENTED, TESTED |
+| Home heading "Munyun Lab"; Strategies opens Families; "Prop Trading"; rounder gear; F11 fullscreen; no zooming in the desktop window; same-size buttons; page-shaped loading skeletons; teal / orange bubbles in light mode | IMPLEMENTED (screenshots; window zoom/fullscreen verified on Windows only) |
+| CI keeps only the newest build of each branch and deletes builds of deleted branches | IMPLEMENTED, TESTED (pruning rules) |
+| Backtests, fills, costs, sizing, prop rules, protocols | UNCHANGED |
+
 ## Research settings repaired, preflight explains settings changes, trades per week fixed (ADR-89)
 
 | Item | Status |

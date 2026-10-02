@@ -6,7 +6,10 @@ import type { BuilderOptions, PaperFees } from "../api/types";
 interface Toast { id: number; kind: "ok" | "error" | "info"; text: string }
 /** Workspace display preferences (ADR-74): favorites, the prop account for pass criteria, and the two switches. */
 export interface UiPrefs { favorites: string[]; prop_criteria_profile: string; show_ids: boolean; show_readonly: boolean;
-  profile_choices?: { profile_id: string; name: string }[]; prop_fees?: Record<string, PaperFees>; theme?: Theme }
+  profile_choices?: { profile_id: string; name: string }[]; prop_fees?: Record<string, PaperFees>; theme?: Theme;
+  // ADR-90 (display / paper only)
+  currency?: "USD" | "CHF"; chf_per_usd?: number | null; chart_cluster?: boolean; chart_cluster_distance?: number;
+  live_dd_limit_usd?: number; prop_discount?: { enabled: boolean; pct: Record<string, number> } }
 export type Theme = "dark" | "light" | "system";
 const THEME_KEY = "munyun.theme";
 /** ADR-86: apply a theme to <html data-theme>; "system" follows the Windows / browser setting. Remembered locally so the

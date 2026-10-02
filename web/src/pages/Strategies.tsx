@@ -10,7 +10,7 @@ import type { TreeNode } from "../components/strategy";
 import { BatchResearch, ProvenanceCard, RunsTable, ValidationPanel } from "../components/strategy/lab";
 import { ChooseWorkspaceLink } from "../components/workspace";
 import { RulesTable } from "../components/research";
-import { Badge, Banner, Button, Card, Checkbox, FavStar, Pager, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TechDetails, TextInput, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Checkbox, FavStar, Pager, Confirm, Empty, ErrorPanel, KeyValues, Loading, Mono, Select, TableWrap, Tabs, TechDetails, TextInput, fmt, shortTime, PageSkeleton } from "../components/ui";
 import type { StrategyDoc } from "../dsl/types";
 
 // =========================================================================== system panel (Settings & About)
@@ -105,7 +105,7 @@ export function LibraryPage() {
         <Checkbox checked={archived} onChange={setArchived} label="Show archived" testId="show-archived" />
       </div>
       <ErrorPanel error={actErr} />
-      {loading && !data ? <Loading label="Loading strategies…" /> : !rows.length ? (
+      {loading && !data ? <PageSkeleton layout="library" label="Loading strategies…" /> : !rows.length ? (
         <Empty>{data?.length ? "No strategies match the filter." : <span data-testid="library-empty">No saved strategies in this research workspace. <a href={href("/builder?new=1")}>Create one</a> in the
           Strategy Builder, or <ChooseWorkspaceLink /> that holds your strategies.</span>}</Empty>
       ) : (
@@ -205,9 +205,8 @@ function ResearchHub({ s, batch, onTab }: { s: StoredStrategy; batch: string | n
     ["2", "Backtest on a dataset", <Button small onClick={() => onTab("backtest")} testId="lab-goto-backtest">Backtest</Button>],
     ["3", "Generate controlled variations", <Button small onClick={() => onTab("variations")} disabled={s.archived}>Generate variations</Button>],
     ["4", "Run a batch on datasets", <span className="muted small">below</span>],
-    ["5", "Compare results", <Button small onClick={() => go(`/compare?source=lineage&id=${s.strategy_id}`)} disabled={!hasRun} testId="lab-goto-compare">Compare this lineage</Button>],
-    ["6", "Validate (out-of-sample, walk-forward, random control)", <Button small onClick={() => onTab("validate")} testId="lab-goto-validate">Validate</Button>],
-    ["7", "Prop simulation on a stored run", <Button small onClick={() => go("/prop")} disabled={!hasRun}>Prop simulation</Button>],
+    ["5", "Validate (out-of-sample, walk-forward, random control)", <Button small onClick={() => onTab("validate")} testId="lab-goto-validate">Validate</Button>],
+    ["6", "Prop simulation on a stored run", <Button small onClick={() => go("/prop")} disabled={!hasRun}>Prop simulation</Button>],
   ];
   return (
     <div className="grid-cards" data-testid="lab-hub">

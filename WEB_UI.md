@@ -81,11 +81,11 @@ never counted or aggregated as an ordinary OOS test. Win rate is shown but never
 
 ```
 Home               Home (#/)
-Strategies         Library (#/strategies[/id]) · Families (#/families) · Builder (#/builder) · Variations (#/variations)
+Strategies         Families (#/families, default) · Library (#/strategies[/id]) · Builder (#/builder) · Variations (#/variations)
 Run backtest       Single backtest (#/run) · Research runs (#/runs) · Experiments (#/research[/SRCH_..])
-Backtest results   Overview (#/dashboard) · Strategies (#/explorer, drawer ?open=STR_..) · All runs (#/results[/RUN_..])
-                   · Compare · Random controls (#/controls) · Candidate pipeline (#/pipeline)
-Prop & paper: Paper accounts (#/paper) · Start paper trading (#/paper/new) · Backtest prop check (#/prop)
+Backtest results   Overview (#/dashboard) · Strategies (#/explorer, drawer ?open=STR_..) · Holdout results · Random controls
+                   (#/controls); run detail #/results/RUN_.. (links only); #/compare, #/pipeline -> Overview (ADR-90)
+Prop Trading       Paper accounts (#/paper) · Start paper trading (#/paper/new) · Backtest prop check (#/prop)
 Settings           Settings (#/settings, incl. risk per trade and updates) · Data (#/datasets)
 (no menu entry)    AI Discovery (#/discovery)
 ```
@@ -116,7 +116,7 @@ paging; `scope=in_sample|oos|walk_forward|any`), `/api/research/dashboard`, `/ap
 | Explorer | Terminal filter bar (text, id, family, market, TF, session, entry, stop, target, direction, source, state, protocol, min trades, max trades/week), active-filter chips + reset, server-side sort/paging, resizable columns, row selection → Compare; right-side drawer: identity, rules in plain English, performance, equity, trade behaviour, robustness (OOS/WF runs, holdout evaluations with their control), pipeline. Filters persist in the URL | `/api/explorer/strategies`, `/api/results/<id>/analytics`, `/api/strategies/<id>/pipeline` |
 | Controls | What a random-entry control preserves/randomizes; formal controls from holdout evaluations with the exact Monte-Carlo p-value the protocol stored; running an ad-hoc control (a gated discovery evaluation) shown as the candidate on the control distribution with a descriptive percentile (no p-value outside a holdout evaluation) | `/api/pipeline`, `/api/validation/control` |
 | Candidate pipeline | Stage counts (hypothesis → … → human review) and every candidate beyond in-sample testing with its stage states and evidence, all derived by the backend | `/api/pipeline` |
-| Prop & paper | Paper accounts (daily forward trading in simulated prop accounts: attempts, fees, payouts, net; ADR-81), batch start, Backtest prop check | `/api/paper/*`, `/api/prop/*` |
+| Prop Trading | Paper accounts (daily forward trading in simulated prop accounts: attempts, fees, payouts, net; ADR-81), batch start, Backtest prop check | `/api/paper/*`, `/api/prop/*` |
 | Strategy Lab (library) | Library with filters: open, edit, duplicate, explain, variations, lineage, archive/restore (with confirmation) | `StrategyLibrary` |
 | Strategy page (Strategy Lab) | **Research** hub (version + provenance, workflow steps, stored runs with scope badges, run this version + a variation batch on datasets), Overview and backend `explain()`, Backtest, Generate Variations (exact combinations previewed), **Validate** (OOS split, walk-forward, random-entry control on the whole dataset or the OOS window), Lineage | Phase 3/4/5 services, `strategy_research`, validation services |
 | Compare | Stored runs of a lineage, a version, a variation batch or a search side by side: trades, gross/net/cost R, expectancy, profit factor, max drawdown, breakeven cost multiple, parameters, scope, cost status, prop count. Sort and filter (views, not rankings); selected run → validate or prop simulation | `compare_runs` |
@@ -431,3 +431,13 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
   - Survivors are amber.
   - Overlapping strategy dots group into bigger circles (capped size); a click lists the strategies inside.
 - **Top bar:** brand, DEMO badge, version.
+
+## ADR-90 display round
+
+- Backtest results: pool picker (All | Pool 1 | Pool 2), no scope pills, positive/negative net-R split bars, tested / drawn /
+  not drawn totals, "Live 50K OK" count / filter / column / panel check; All stored backtests without the R boxes, Breakdowns
+  and the OOS text; drawdown histogram cut at the 99th percentile.
+- Settings: display options first; USD / CHF display (your rate; calculations stay USD); chart grouping switch and distance
+  slider; Live 50K drawdown limit; fee discounts (one switch, % per account type).
+- Research runs restart themselves after an error; a banner (Research runs) and a top strip (every page) when it keeps failing.
+- F11 / Esc fullscreen; no zooming in the desktop window; rounded gear; page-shaped skeletons; teal/orange light-mode bubbles.

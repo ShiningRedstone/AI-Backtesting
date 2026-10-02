@@ -127,6 +127,12 @@ new workspaces drop them (`runtime.copy_default_configs`), the app never lists t
 lists the differing settings (`research/config_restore.py`, from a run recorded under the protocol's hash) with
 "Restore the protocol's settings" (verified hash, backup). Trades per week = trades / weeks of the tested window
 (`analytics.metrics.trades_per_week`; stored runs corrected at read time).
+ADR-90: Backtest results pool picker (`campaign_run=pool:<n>`, `pool2.pools`), "Live 50K OK" (`overview.live_check`: net USD > 0,
+max DD USD <= `ui.live_dd_limit_usd`, no losing NY calendar year via `worst_year_usd` SQL), positive/negative net-R breakdowns,
+drawdown histogram cut at p99; All runs / Compare / Candidate pipeline removed; display prefs `currency` (CHF display only,
+`web/src/app/money.ts`), `chart_cluster(_distance)`, `prop_discount` (eval + reset, frozen at paper start); research runs restart
+themselves after errors (`JobManager._work_campaign`, `having_problems`); F11 fullscreen (`WindowApi`), `zoomable=False`;
+"Prop Trading"; Strategies opens Families; page skeletons; CI release pruning (`packaging/prune_releases.py`).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -162,7 +168,7 @@ remains. Do not rely on this file alone.
 - **Research flow the user follows:** discovery (Research runs; the protocol's discovery window only) → survivors
   (net > 0 AND the trades pass a prop evaluation with a payout under the Settings account) → Holdout backtest (the
   locked final period, protocol gate, 10 tests in total by default, once per strategy, "criteria met / not met")
-  → Prop & paper (paper accounts on new days; default list = strategies that passed the holdout).
+  → Prop Trading (paper accounts on new days; default list = strategies that passed the holdout).
 - **Paper trading (ADR-81/83):** daily forward Dukascopy days (downloaded by dukascopy-python at start, every 30 min,
   "Update now"); accounts start the next trading day; failed eval → new attempt (reset fee, else eval price);
   pass → activation fee, funded, every payout; funded loss / live point / payout limit → new eval; net = payouts
@@ -170,23 +176,26 @@ remains. Do not rely on this file alone.
   checked once per research dataset against the research data (last 3 complete days inside it, bar by bar);
   a mismatch pauses accounts until a match or "Continue anyway". Paper results are never runs or trials.
 - **Tabs (UI, plain English):**
-  - Home: system facts (strategies, stored runs, backtested trades, AI generations, datasets, version), latest results.
-  - Strategies: Library, Families, Builder, Variations
+  - Home (heading "Munyun Lab"): system facts (strategies, stored runs, backtested trades, AI generations, datasets,
+    version), latest results.
+  - Strategies: Families (default), Library, Builder, Variations
   - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ranked best → worst
     for prop trading on 8 discovery criteria with drawdown and negative months ×2), Flip scan (ADR-88). `/research` →
     `/runs`; job and result deep links still work.
-  - Backtest results: Overview, Strategies explorer, Holdout results, All runs, Compare, Random controls, Candidate
-    pipeline
-  - Prop & paper: Paper accounts, Start paper trading (batch; Passed the holdout | Survivors | All tested), Backtest
+  - Backtest results: Overview, Strategies explorer, Holdout results, Random controls (All runs / Compare / Candidate
+    pipeline removed in ADR-90; run-detail links `/results/<id>` still work). Pool picker: All | Pool 1 | Pool 2.
+  - Prop Trading: Paper accounts, Start paper trading (batch; Passed the holdout | Survivors | All tested), Backtest
     prop check (the old simulator)
-  - Settings: theme (Dark / Light / Same as Windows), CPU cores for research runs, the pass-criteria prop account,
-    prop account fees, Show IDs / read-only switches, updates, workspace, delete-all.
+  - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
+    then about/updates, workspace, pass-criteria account + Live 50K drawdown limit, CPU cores, prop account fees +
+    discounts, delete-all.
   - The top bar shows only the brand, the DEMO badge (demo workspace) and the version chip (Backend OK, protocol and
     workspace chips were removed at the user's request).
 - **Design decisions the user made:**
   - Dark UI by default, plus a light theme (ADR-86). Decorative surfaces use a deep-rose → plum gradient
     (`--warm-gradient`); red is ONLY for losses, negative values and errors.
-  - Field chart (Overview): strategies blue; survivors amber (`--c-survivor`); overlapping blue dots group into bigger
+  - Field chart (Overview): strategies blue (light theme teal); survivors amber (light theme orange; `--c-strategy`,
+    `--c-survivor`); overlapping blue dots group into bigger
     circles (size capped, no number; survivors and random controls never group); clicking a group lists its
     strategies in the side panel, click one to open it. Scatter dots have no outlines; axis titles sit outside the plot.
   - "By session" is grouped by market hours (Asia, London, London–NY overlap, NY AM, NY PM, NY full day, Any time),
@@ -328,11 +337,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..89.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..90.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..89, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..90, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -401,4 +410,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-89). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-90). Update `README.md` status for phases.

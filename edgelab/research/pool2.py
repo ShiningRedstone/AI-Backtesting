@@ -339,3 +339,37 @@ def run_names(svc) -> dict:
         active = act is not None and s["spec"]["protocol"]["protocol_id"] == act["protocol_id"]
         labels[s["campaign_id"]] = f"Strategy pool {pool}" + ("" if active else " (retired protocol)")
     return labels
+
+
+# ------------------------------------------------------------------------------ results pool filter (ADR-90)
+_POOLS: dict[str, Any] = {}
+
+
+def pools(svc) -> list[dict]:
+    """The strategy pools for the Backtest results picker: pool number -> label and its strategy ids (from every frozen
+    campaign of that pool, so pool 1 frozen under the retired and the new protocol counts once). Display only."""
+    from edgelab.research import campaign as C
+    root = C.campaigns_dir(svc)
+    try:
+        stamp = (str(root), root.stat().st_mtime_ns, tuple(sorted((p.name, p.stat().st_mtime_ns) for p in root.glob("CMP_*"))))
+    except OSError:
+        return []
+    if _POOLS.get("key") == stamp:
+        return _POOLS["rows"]
+    heads = dict(_headers(svc))
+    by: dict[int, set[str]] = {}
+    for s in _campaign_specs(svc):
+        h = heads.get(s["spec"]["manifest"]["manifest_id"]) or {}
+        n = _pool_of(h) if h else 1
+        by.setdefault(n, set()).update(s["spec"]["search"]["spec"]["strategies"]["ids"])
+    rows = [{"pool": n, "ref": f"pool:{n}", "label": f"Strategy pool {n}", "n_strategies": len(ids), "ids": ids}
+            for n, ids in sorted(by.items())]
+    _POOLS.update(key=stamp, rows=rows)
+    return rows
+
+
+def pool_ids(svc, n: int) -> set[str]:
+    for p in pools(svc):
+        if p["pool"] == n:
+            return p["ids"]
+    raise ValueError(f"strategy pool {n} does not exist in this workspace")

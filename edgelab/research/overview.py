@@ -236,6 +236,7 @@ def _run_rows_incremental(svc, hit) -> list[dict]:
 
 DEFAULT_CRITERIA_PROFILE = "LUCID_LUCIDFLEX_50K"
 CAMPAIGN_RUN_REF = re.compile(r"^(CMP_[0-9A-F]{12})/(CR_\d{8}_\d{6}_[0-9A-F]{6})$")
+POOL_REF = re.compile(r"^pool:(\d{1,3})$")
 
 
 def campaign_run_scope(svc, ref: Any) -> set[str] | None:
@@ -243,9 +244,13 @@ def campaign_run_scope(svc, ref: Any) -> set[str] | None:
     Read from the run's persisted scope file (written once when the run started; never edited here)."""
     if not ref:
         return None
+    pm = POOL_REF.match(str(ref))
+    if pm:                                                   # ADR-90: a whole strategy pool ("pool:1", "pool:2")
+        from edgelab.research.pool2 import pool_ids
+        return set(pool_ids(svc, int(pm.group(1))))
     m = CAMPAIGN_RUN_REF.match(str(ref))
     if not m:
-        raise ValueError("campaign_run must be '<campaign id>/<run record id>'")
+        raise ValueError("campaign_run must be 'pool:<n>' or '<campaign id>/<run record id>'")
     from edgelab.research import campaign as C
     try:
         return set(C.load_scope(svc, m.group(1), m.group(2))["strategy_ids"])
@@ -332,6 +337,7 @@ def run_row(run_id: str, rec: Mapping, criteria: str | None = None) -> dict:
             "gross_r_per_trade": gross / n if gross is not None and n else None,
             "cost_r_per_trade": cost / n if cost is not None and n else None,
             "profit_factor": _f(hm.get("profit_factor")), "max_drawdown_r": _f(hm.get("max_drawdown_r")),
+            "net_usd": _f(hm.get("net_usd")), "max_drawdown_usd": _f(hm.get("max_drawdown_usd")),
             "sample_label": hm.get("sample_label"),
             "avg_winner_r": aw, "avg_loser_r": al, "avg_rr": aw / abs(al) if aw is not None and al not in (None, 0.0) else None,
             "max_loss_streak": hm.get("max_loss_streak"), "avg_hold_minutes": _f(hm.get("avg_hold_minutes")),
@@ -339,6 +345,54 @@ def run_row(run_id: str, rec: Mapping, criteria: str | None = None) -> dict:
     # survivor (ADR-73/74): positive net R per trade AND the recorded trade sequence passes an evaluation and reaches the
     # first payout under the criteria rule profile (Settings; any profile when none is given). In-sample unless labelled.
     return apply_criteria(row, criteria)
+
+
+# ------------------------------------------------------------------------------ "Live 50K OK" (ADR-90)
+LIVE_DD_DEFAULT = 5000.0
+_YEARS: dict[str, Any] = {}
+
+
+def worst_year_usd(svc) -> dict[str, float]:
+    """Per run: the worst calendar-year net USD of its recorded trades (one aggregate query, cached per store change).
+    Years are New York years of each trade's exit; 1 January always falls in winter time (UTC-5), so the New York
+    year of an exit is exactly the UTC year of (exit - 5 h)."""
+    from edgelab.research.campaign import db_token
+    try:
+        key = db_token(svc)
+    except Exception:                                        # noqa: BLE001
+        return {}
+    if _YEARS.get("key") == key:
+        return _YEARS["rows"]
+    try:
+        rows = svc.store._query(
+            "SELECT run_id, MIN(y_usd) FROM (SELECT run_id, SUM(net_usd) AS y_usd FROM trades "
+            "GROUP BY run_id, strftime('%Y', exit_ts / 1000000000 - 18000, 'unixepoch')) GROUP BY run_id")
+    except Exception:                                        # noqa: BLE001 - no trades table yet
+        rows = []
+    out = {rid: float(v) for rid, v in rows if v is not None}
+    _YEARS.update(key=key, rows=out)
+    return out
+
+
+def live_limit(svc) -> float:
+    try:
+        return float(svc.ui_preferences().get("live_dd_limit_usd") or LIVE_DD_DEFAULT)
+    except Exception:                                        # noqa: BLE001
+        return LIVE_DD_DEFAULT
+
+
+def live_check(ref: Mapping | None, worst_year: float | None, limit: float) -> dict | None:
+    """Would the recorded trades have worked on a live 50K account with real money? Net USD > 0 AND the worst
+    peak-to-trough drawdown (USD, the strategy's own MNQ sizing) within ``limit`` AND no calendar year with a net
+    loss. Historical, under the run's stated assumptions; not a forecast. None when untested."""
+    if not ref or not ref.get("trade_count"):
+        return None
+    net, dd = ref.get("net_usd"), ref.get("max_drawdown_usd")
+    conds = {"net_positive": net is not None and net > 0,
+             "drawdown_within_limit": dd is not None and dd <= limit,
+             "no_losing_year": worst_year is not None and worst_year >= 0}
+    return {"ok": all(conds.values()), **conds, "net_usd": net, "max_drawdown_usd": dd, "worst_year_usd": worst_year,
+            "limit_usd": limit}
 
 
 def protocol_facts(svc) -> dict:
@@ -518,7 +572,8 @@ def _explorer_rows(svc, scope: str) -> tuple[list[dict], dict]:
                                                         "expectancy_r", "gross_r_per_trade", "net_r", "profit_factor",
                                                         "max_drawdown_r", "cost_r_per_trade", "sample_label",
                                                         "synthetic", "avg_rr", "max_loss_streak", "avg_hold_minutes",
-                                                        "prop_pass_eval", "prop_pass_payout")},
+                                                        "prop_pass_eval", "prop_pass_payout", "net_usd",
+                                                        "max_drawdown_usd")},
                      "survivor": bool(ref and ref.get("survivor")), "favorite": f["strategy_id"] in favorites})
         if scope == HOLDOUT_VIEW:                     # ADR-85: the verdict and the discovery figures beside it
             disc = scoped_runs(sruns, "in_sample")
@@ -544,6 +599,10 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
     size = min(MAX_PAGE_SIZE, max(1, int(params.get("page_size") or 50)))
     protocol = params.get("protocol")
     rows, pf = _explorer_rows(svc, scope)
+    years, limit = worst_year_usd(svc), live_limit(svc)
+    rows = [{**r, "live_ok": bool(lc and lc["ok"])}
+            for r in rows for lc in [live_check(r if r.get("trade_count") else None,
+                                                years.get((r.get("ref_run") or {}).get("run_id")), limit)]]
 
     def keep(r: dict) -> bool:
         q = str(params.get("q") or "").strip().lower()
@@ -551,6 +610,8 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
                                                                   "hypothesis", "category")).lower():
             return False
         if params.get("survivors_only") in ("1", "true", True) and not r["survivor"]:
+            return False
+        if params.get("live_only") in ("1", "true", True) and not r["live_ok"]:
             return False
         if params.get("favorites_only") in ("1", "true", True) and not r["favorite"]:
             return False
@@ -594,6 +655,7 @@ def explorer(svc, params: Mapping[str, Any]) -> dict:
             "sort": sort, "order": "desc" if desc else "asc", "facets": facet_values,
             "states": STATE_LABEL, "protocols": pf["protocols"], "library_total": len(rows),
             "criteria_profile": criteria_profile(svc), "campaign_run": params.get("campaign_run") or None,
+            "live_limit_usd": limit,
             "basis": "Metrics come from the latest stored run of each strategy in the chosen scope, net of that "
                      "run's stated costs unless labelled gross. Win rate is shown but never used to rank.",
             "note": DESCRIPTIVE}
@@ -634,12 +696,17 @@ def pipeline_board(svc) -> dict:
 
 
 # ------------------------------------------------------------------------------ research dashboard
-def _hist(values: Iterable[float | None], bins: int = 20, lo: float | None = None, hi: float | None = None) -> dict:
+def _hist(values: Iterable[float | None], bins: int = 20, lo: float | None = None, hi: float | None = None,
+          hi_pct: float | None = None) -> dict:
+    """``hi_pct``: the axis ends at that percentile; larger values are counted in the last bin (``clipped``). Median and
+    mean always use every value (ADR-90: a few 40,000 R drawdowns no longer squash the chart)."""
     v = np.array([x for x in values if x is not None and math.isfinite(x)], dtype=float)
     if not len(v):
         return {"edges": [], "counts": [], "n": 0, "clipped": 0}
     a = float(np.min(v)) if lo is None else lo
     b = float(np.max(v)) if hi is None else hi
+    if hi is None and hi_pct is not None:
+        b = float(np.percentile(v, hi_pct))
     if b <= a:
         b = a + 1.0
     clipped = int(((v < a) | (v > b)).sum())
@@ -699,7 +766,7 @@ def research_dashboard(svc, params: Mapping[str, Any]) -> dict:
             "distributions": {
                 "expectancy_r": _hist(exp, 24),
                 "profit_factor": _hist([r["profit_factor"] for r in runs], 24, 0.0, 4.0),
-                "max_drawdown_r": _hist([r["max_drawdown_r"] for r in runs], 24, 0.0),
+                "max_drawdown_r": _hist([r["max_drawdown_r"] for r in runs], 24, 0.0, hi_pct=99),
                 "trade_count": _hist([float(r["trade_count"]) for r in runs], 24, 0.0),
                 "win_rate": _hist([r["win_rate"] for r in runs], 20, 0.0, 1.0)},
             "pct_runs_positive_net": (sum(1 for x in exp if x is not None and x > 0) / len(exp)) if exp else None,

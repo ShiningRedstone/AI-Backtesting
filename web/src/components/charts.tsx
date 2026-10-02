@@ -378,7 +378,7 @@ export function Histogram({ hist, unit, color = "var(--c2)", marker, height = 17
           <b>{counts[hover]}</b> of {hist.n}
         </Tip>)}
       <div className="chart-foot"><b style={{ color: "var(--text-2)" }}>x: {unit}</b> · n = {hist.n}{hist.median != null ? ` · median ${hist.median.toFixed(3)} · mean ${hist.mean?.toFixed(3)}` : ""}
-        {hist.clipped > 0 ? ` · ${hist.clipped} value(s) outside the axis are drawn in the edge bins` : ""}</div>
+        {hist.clipped > 0 ? ` · ${hist.clipped.toLocaleString()} value${hist.clipped === 1 ? "" : "s"} beyond the axis ${hist.clipped === 1 ? "is" : "are"} counted in the edge bar` : ""}</div>
     </div>
   );
 }
@@ -450,7 +450,7 @@ export function PathsChart({ paths, highlight, height = 220, unit = "R", testId,
 export interface ScatterPoint { id: string; x: number; y: number; label: string; detail?: string }
 /** `cluster` (ADR-86): dots of this group that overlap on screen are drawn as one bigger circle (capped size). */
 export interface ScatterGroup { id: string; label: string; color: string; points: ScatterPoint[]; hollow?: boolean; size?: number; ring?: boolean;
-  cluster?: boolean }
+  cluster?: boolean; clusterDistance?: number }      // ADR-90: Settings grouping distance (1 = touching dots)
 export interface ScatterCurve { id: string; label: string; points: { x: number; y: number }[]; tone?: "warn" | "neutral" }
 interface Mark { g: number; px: number; py: number; r: number; members: ScatterPoint[] }
 const SPAD = { l: 52, r: 14, t: 24, b: 40 };       // room above the plot for the y title and below for the x title
@@ -458,8 +458,8 @@ const CLUSTER_MAX_R = 13;                          // the largest a grouped circ
 
 /** Group a cluster-able group's dots that overlap on screen (greedy, grid-indexed): each mark is one dot or a circle at
  *  its members' average position whose radius grows with sqrt(count) up to CLUSTER_MAX_R. Display only. */
-export function clusterMarks(pts: { px: number; py: number; p: ScatterPoint }[], base: number, g: number): Mark[] {
-  const D = 2 * base + 1, cell = D, grid = new Map<string, number[]>();
+export function clusterMarks(pts: { px: number; py: number; p: ScatterPoint }[], base: number, g: number, dist = 1): Mark[] {
+  const D = (2 * base + 1) * dist, cell = D, grid = new Map<string, number[]>();
   pts.forEach((q, i) => { const k = `${Math.floor(q.px / cell)}:${Math.floor(q.py / cell)}`; (grid.get(k) ?? grid.set(k, []).get(k)!).push(i); });
   const used = new Uint8Array(pts.length), out: Mark[] = [];
   const order = pts.map((_, i) => i).sort((a, b) => pts[a].px - pts[b].px || pts[a].py - pts[b].py);
@@ -500,7 +500,7 @@ export function ScatterChart({ groups, curves = [], height = 340, xUnit = "win r
   const marks = useMemo(() => groups.flatMap((g, gi) => {
     if (hidden.has(g.id)) return [];
     const pts = g.points.map((p) => ({ px: X(p.x), py: Y(p.y), p }));
-    return g.cluster ? clusterMarks(pts, g.size ?? 4, gi) : pts.map((q) => ({ g: gi, px: q.px, py: q.py, r: g.size ?? 4, members: [q.p] }));
+    return g.cluster ? clusterMarks(pts, g.size ?? 4, gi, g.clusterDistance ?? 1) : pts.map((q) => ({ g: gi, px: q.px, py: q.py, r: g.size ?? 4, members: [q.p] }));
   }), [groups, hidden, width, height, t1]);  // eslint-disable-line react-hooks/exhaustive-deps
   if (!groups.some((g) => g.points.length)) return <div className="empty small">No points.</div>;
   const xt = [0, 0.2, 0.4, 0.6, 0.8, 1];

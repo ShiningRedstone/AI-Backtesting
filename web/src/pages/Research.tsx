@@ -6,7 +6,7 @@ import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, plainProse, 
 import { LineageTable, LineageTree, MetricsView, SYNTHETIC_NOTICE, VariationResults } from "../components/strategy";
 import { EquityChart, ScopeBadge } from "../components/strategy/lab";
 import { ChooseWorkspaceLink } from "../components/workspace";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, ObjectView, TableWrap, TechDetails, fmt, shortTime } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Loading, Mono, ObjectView, TableWrap, TechDetails, fmt, shortTime, PageSkeleton } from "../components/ui";
 
 // =========================================================================== families
 export function FamiliesPage() {
@@ -17,7 +17,7 @@ export function FamiliesPage() {
 function FamilyList() {
   const { data, error } = useApi<Record<string, number>>("/api/families");
   if (error) return <ErrorPanel error={error} />;
-  if (!data) return <Loading label="Loading families…" />;
+  if (!data) return <div className="page"><PageSkeleton layout="families" label="Loading families…" /></div>;
   const rows = Object.entries(data);
   return (
     <div className="page">
@@ -220,7 +220,6 @@ function RunPage({ id }: { id: string }) {
         <div className="head-meta"><ScopeBadge status={r.status} /></div></div>
         <div className="actions">
           <Button small onClick={() => go(`/strategies/${r.strategy?.strategy_id}?tab=research`)}>Open strategy in Lab</Button>
-          <Button small onClick={() => go(`/compare?source=lineage&id=${r.strategy?.strategy_id}`)}>Compare lineage</Button>
           <Button small onClick={() => go(`/strategies/${r.strategy?.strategy_id}?tab=validate&dataset=${r.dataset?.parent_dataset_id ?? r.dataset?.dataset_id}`)}>Validate</Button>
           <Button small onClick={() => go(`/prop?run=${id}`)} testId="run-prop">Prop simulation</Button>
         </div></header>

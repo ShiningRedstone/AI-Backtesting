@@ -76,7 +76,7 @@ function Preview({ v, sel, cap, setCap, onRefresh, onCreated, busy }: {
       <Kpi label="Significance family" value={(v.family_size ?? 0).toLocaleString()} sub={`${v.parent.trial_budget.toLocaleString()} research trials + ${sel.n_selected} flips`} />
     </div>
     <Card title="What the scan would flip, worst first" testId="flips-preview"
-      actions={<Button kind="primary" onClick={() => setAsk(true)} disabled={!sel.n_selected || busy} testId="flips-create">
+      actions={<Button small kind="primary" onClick={() => setAsk(true)} disabled={!sel.n_selected || busy} testId="flips-create">
         Create flip scan ({sel.n_selected})</Button>}>
       <div className="inline">
         <Field label="Scan size (most flips)" hint={`1 to ${v.max_cap}; default ${v.default_cap}`}>
@@ -143,7 +143,7 @@ function Created({ v, flip, jobId, setJobId, reload }: { v: FlipView; flip: Flip
       readable; nothing more can be backtested or holdout-tested under it.</Banner>}
     {jobId && <LiveFlip jobId={jobId} onFinished={reload} onClose={() => setJobId(null)} />}
     <Card title="Flipped strategies beside their originals" testId="flips-results"
-      actions={c.remaining > 0 && flip.status === "ACTIVE" ? <Button kind="primary" onClick={start} busy={starting} disabled={!!jobId} testId="flips-start">
+      actions={c.remaining > 0 && flip.status === "ACTIVE" ? <Button small kind="primary" onClick={start} busy={starting} disabled={!!jobId} testId="flips-start">
         {c.completed ? `Backtest the remaining ${c.remaining}` : `Backtest the ${c.flips} flipped strategies`}</Button> : undefined}>
       {err && <ErrorPanel error={err} title="Not started" testId="flips-start-error" />}
       <TableWrap className="fit"><table className="dense fit-table">

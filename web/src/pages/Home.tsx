@@ -4,7 +4,7 @@ import { useApi } from "../app/context";
 import { datasetLabel, humanize, statusLabel, strategyLabel } from "../app/labels";
 import { DatasetIdentity, ExecutionPanel, ProtocolPanel } from "../components/research";
 import { UI_VERSION, useUpdates } from "../components/updates";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Kpi, Loading, Mono, Scope, ScopeOf, TableWrap, TechDetails, n, r, shortTime, signCls, ReadOnly } from "../components/ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, Kpi, Mono, Scope, ScopeOf, TableWrap, TechDetails, n, r, shortTime, signCls, ReadOnly, PageSkeleton } from "../components/ui";
 import { ChooseWorkspaceLink } from "../components/workspace";
 
 const storeLabel = (b: string | null | undefined) => (b === "sqlite" ? "SQLite" : b === "duckdb" ? "DuckDB" : humanize(b));
@@ -16,13 +16,13 @@ const IdTable = ({ head, rows }: { head: string[]; rows: (string | null | undefi
 export function HomePage() {
   const { data: o, error } = useApi<Overview>("/api/overview");
   const [upd] = useUpdates();
-  if (error) return <div className="page"><header className="page-head"><h1>Home</h1></header><ErrorPanel error={error} title="Overview unavailable" /></div>;
-  if (!o) return <div className="page"><header className="page-head"><h1>Home</h1></header><Loading label="Loading the research overview…" /></div>;
+  if (error) return <div className="page"><header className="page-head"><h1>Munyun Lab</h1></header><ErrorPanel error={error} title="Overview unavailable" /></div>;
+  if (!o) return <div className="page"><header className="page-head"><h1>Munyun Lab</h1></header><PageSkeleton layout="home" label="Loading the research overview…" /></div>;
   const f = o.facts, st = f.runs_by_status;
   return (
     <div className="page" data-testid="home">
       <header className="page-head hero">
-        <div><h1>Home</h1></div>
+        <div><h1>Munyun Lab</h1></div>
         <div className="actions">
           <Button kind="primary" onClick={() => go("/runs")} testId="qa-run-research">Run research</Button>
           <Button onClick={() => go("/explorer")}>Strategy explorer</Button>
@@ -79,7 +79,7 @@ export function HomePage() {
       </Card>
 
       <div className="grid-cards">
-        <Card title="Candidates (shortlist tags and holdout ledger)" actions={<a className="small" href={href("/pipeline")}>Pipeline ›</a>} testId="home-candidates">
+        <Card title="Candidates (shortlist tags and holdout ledger)" testId="home-candidates">
           {o.candidates.length ? <TableWrap><table className="dense">
             <thead><tr><th>Strategy</th><th>State</th><th>Protocol</th><th>Outcome</th></tr></thead>
             <tbody>{o.candidates.map((c, i) => (

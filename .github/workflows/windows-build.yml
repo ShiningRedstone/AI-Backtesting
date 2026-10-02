@@ -128,15 +128,15 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { throw "updating installer-main failed" }
 
-      - name: Keep the newest 5 builds of this branch
+      - name: Keep only the newest build of each branch (and none of deleted branches)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $slug = python -c "import os; from edgelab.updater.core import channel_slug; print(channel_slug(os.environ['CHANNEL']))"
-          $prefix = "build-$slug-"
-          $tags = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' |
-            Where-Object { $_.StartsWith($prefix) -and ($_.Substring($prefix.Length) -match '^\d+$') } |
-            Sort-Object { [int]($_.Substring($prefix.Length)) } -Descending
-          $tags | Select-Object -Skip 5 | ForEach-Object {
+          # ADR-90: installer-main and versioned releases are never touched; save-point branches keep their newest build
+          gh release list --repo "$env:GITHUB_REPOSITORY" --limit 500 --json tagName --jq '.[].tagName' | Set-Content -Encoding utf8 tags.txt
+          git ls-remote --heads origin | ForEach-Object { ($_ -split "`t")[1] -replace '^refs/heads/', '' } | Set-Content -Encoding utf8 branches.txt
+          $old = python packaging/prune_releases.py --tags tags.txt --branches branches.txt
+          if ($LASTEXITCODE -ne 0) { throw "release pruning failed" }
+          $old | Where-Object { $_ } | ForEach-Object {
             gh release delete $_ --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag
           }

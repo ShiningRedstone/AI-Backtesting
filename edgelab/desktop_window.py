@@ -66,6 +66,19 @@ def window_runtime_problem() -> str | None:
     return None
 
 
+class WindowApi:
+    """What the page may call through ``window.pywebview.api`` (only public methods are exposed; ADR-90)."""
+
+    def __init__(self, controller: "WindowController"):
+        self._controller = controller
+
+    def toggle_fullscreen(self) -> bool:
+        return self._controller.toggle_fullscreen()
+
+    def is_fullscreen(self) -> bool:
+        return bool(self._controller.state.get("fullscreen"))
+
+
 class WindowController:
     """The one EdgeLab window: created, shown, focused, navigated and closed through pywebview."""
 
@@ -82,8 +95,9 @@ class WindowController:
         if settings is not None and hasattr(settings, "__setitem__"):   # no downloads: the UI offers none
             settings["ALLOW_DOWNLOADS"] = False
             settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+        # ADR-90: no page zoom (Ctrl + wheel, Ctrl +/-, pinch); F11 / Esc toggle fullscreen through the JS bridge
         self.window = webview.create_window(TITLE, self.url, width=SIZE[0], height=SIZE[1], min_size=MIN_SIZE,
-                                            resizable=True, text_select=True, zoomable=True)
+                                            resizable=True, text_select=True, zoomable=False, js_api=WindowApi(self))
         self.state.update(created=True, last_url=self.url)
         try:
             self.window.events.loaded += self._loaded
@@ -133,6 +147,15 @@ class WindowController:
         except Exception:                                       # noqa: BLE001
             pass
         return True
+
+    def toggle_fullscreen(self) -> bool:
+        """F11 in the page (ADR-90): fullscreen on/off. Returns the new state."""
+        w = self.window
+        if w is None or self.state["closed"]:
+            return False
+        w.toggle_fullscreen()
+        self.state["fullscreen"] = not self.state.get("fullscreen", False)
+        return self.state["fullscreen"]
 
     def browse_folder(self) -> str | None:
         """Native folder picker in the EdgeLab window (None if cancelled or no window)."""

@@ -3,14 +3,15 @@
    backend read models (/api/results-view/*, /api/prop/bootstrap); this file only lays them out. Scope (in-sample unless
    labelled), basis (net / gross), synthetic data and simulated results are labelled where they are shown. */
 import { useEffect, useState } from "react";
+import { useMoney } from "../app/money";
 import { api } from "../api/client";
 import type { BootstrapResponse, ControlPanelData, FieldPoint, HoldoutPeriod, PeriodStats, PropSummaryRow, ResultsOverview, StrategyPanelData, YearRow } from "../api/types";
 import { useApi, useApp } from "../app/context";
 import { facetLabel, humanize, profileLabel, statusLabel } from "../app/labels";
 import { href, useRoute } from "../app/router";
-import { HBars, PathsChart, ScatterChart, StepTimeChart } from "./charts";
+import { PathsChart, ScatterChart, StepTimeChart } from "./charts";
 import type { ScatterGroup } from "./charts";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, FavStar, KeyValues, Kpi, Loading, Mono, Scope, TableWrap, TechDetails, n, pct, r, shortTime, signCls } from "./ui";
+import { Badge, Banner, Button, Card, Empty, ErrorPanel, FavStar, KeyValues, Kpi, Loading, Mono, Scope, TableWrap, TechDetails, n, pct, r, signCls, PageSkeleton } from "./ui";
 
 /** The plain name of the prop account chosen in Settings for "passes evaluation / payout" and survivors. */
 export function useCriteriaName(): string {
@@ -18,21 +19,35 @@ export function useCriteriaName(): string {
   return prefs.profile_choices?.find((p) => p.profile_id === prefs.prop_criteria_profile)?.name ?? profileLabel(prefs.prop_criteria_profile);
 }
 
-/** Pick which backtests Backtest results shows: all, or the strategies selected in one (named) research run. */
-export function RunPicker({ value, onChange, testId = "run-picker" }: { value: string; onChange: (ref: string) => void; testId?: string }) {
-  const { data } = useApi<{ ref: string; name: string | null; created_at: string | null; n_scope: number | null; status: string | null }[]>("/api/results-view/runs");
+/** ADR-90: pick which strategies Backtest results shows: all, or one strategy pool (each strategy's latest result). */
+export function PoolPicker({ value, onChange, testId = "pool-picker" }: { value: string; onChange: (ref: string) => void; testId?: string }) {
+  const { data } = useApi<{ pool: number; ref: string; label: string; n_strategies: number }[]>("/api/results-view/pools");
   return (
-    <select className={`input${value ? " active" : ""}`} value={value} aria-label="which backtests" data-testid={testId}
-      onChange={(e: { target: HTMLSelectElement }) => onChange(e.target.value)} style={{ maxWidth: 360 }}>
-      <option value="">All backtests</option>
-      {(data ?? []).map((r) => <option key={r.ref} value={r.ref}>{r.name ?? `Research run of ${shortTime(r.created_at)}`}
-        {r.n_scope != null ? ` · ${r.n_scope.toLocaleString()} strategies` : ""}</option>)}
-    </select>
+    <div className="segmented small" role="group" aria-label="which strategies" data-testid={testId}>
+      <button className={!value ? "on" : ""} onClick={() => onChange("")} data-testid={`${testId}-all`}>All strategies</button>
+      {(data ?? []).map((p) => <button key={p.ref} className={value === p.ref ? "on" : ""} onClick={() => onChange(p.ref)}
+        title={`${p.n_strategies.toLocaleString()} strategies`} data-testid={`${testId}-${p.pool}`}>{p.label.replace("Strategy pool", "Pool")}</button>)}
+    </div>
   );
 }
 
-export const usd = (v: number | null | undefined, digits = 0) => (v == null || !Number.isFinite(v) ? "—"
-  : `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits })}`);
+/** ADR-90: per group, the share of strategies with positive vs negative total net R (green / red split). */
+function SplitRows({ rows }: { rows: { label: string; positive: number; negative: number; zero: number; strategies: number }[] }) {
+  return (
+    <div className="split-rows">
+      {rows.map((g) => {
+        const tot = Math.max(1, g.strategies), pp = g.positive / tot, np = g.negative / tot;
+        return <div className="split-row" key={g.label} title={`${g.positive} positive · ${g.negative} negative${g.zero ? ` · ${g.zero} exactly zero` : ""} (total net R)`}>
+          <span className="split-label">{g.label}</span>
+          <span className="split-bar"><span className="pos-part" style={{ width: `${pp * 100}%` }} /><span className="neg-part" style={{ width: `${np * 100}%` }} /></span>
+          <span className="split-note">{g.strategies.toLocaleString()} strateg{g.strategies === 1 ? "y" : "ies"} · {pct(pp, 0)} positive</span>
+        </div>;
+      })}
+      <div className="split-legend small muted"><span className="dot pos-part" /> positive net R <span className="dot neg-part" /> negative net R</div>
+    </div>
+  );
+}
+
 const hold = (m: number | null | undefined) => (m == null ? "—" : m >= 90 ? `${(m / 60).toFixed(1)} h` : `${Math.round(m)} min`);
 
 const BREAKDOWNS: [string, string][] = [["target_type", "By target"], ["entry_type", "By entry"], ["trailing", "By trailing stop"],
@@ -45,18 +60,21 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
   const [controls, setControls] = useState(true);
   const [allWindows, setAllWindows] = useState(false);
   const route = useRoute();
-  const [run, setRun] = useState(route.query.get("run") ?? "");
+  const { prefs } = useApp();
+  const [run, setRun] = useState(route.query.get("pool") ?? "");
   const crit = useCriteriaName();
+  const money = useMoney();
   const qs = `basis=${basis}&controls=${controls ? 1 : 0}${run ? `&campaign_run=${encodeURIComponent(run)}` : ""}`;
   const { data: o, error } = useApi<ResultsOverview>(`/api/results-view/overview?${qs}`, [qs]);
   const picker = <div className="filterbar" data-testid="results-picker"><span className="fgroup">Show</span>
-    <RunPicker value={run} onChange={setRun} testId="results-run-picker" /></div>;
+    <PoolPicker value={run} onChange={setRun} testId="results-pool" /></div>;
   if (error) return <>{picker}<ErrorPanel error={error} /></>;
-  if (!o || (o.campaign_run ?? "") !== run) return <>{picker}<Loading label="Reading stored backtests…" /></>;
+  if (!o || (o.campaign_run ?? "") !== run) return <>{picker}<PageSkeleton layout="overview" label="Reading stored backtests…" /></>;
   const f = o.facts;
-  const tags = <><Scope kind="is" /><Scope kind={basis} />{f.synthetic_tested > 0 && <Scope kind="synthetic" />}</>;
+  const tags = <>{f.synthetic_tested > 0 && <Scope kind="synthetic" />}</>;        // ADR-90: no scope / basis pills here
   const groups: ScatterGroup[] = [
-    { id: "strategies", label: "Strategies", color: "var(--c2)", size: 3.5, cluster: true,      // ADR-86: overlapping dots group
+    { id: "strategies", label: "Strategies", color: "var(--c-strategy)", size: 3.5, cluster: prefs.chart_cluster ?? true,   // ADR-86/90
+      clusterDistance: prefs.chart_cluster_distance ?? 1,
       points: o.points.filter((p) => !p.survivor && p.win_rate != null && p.avg_rr != null).map((p) => ({ id: p.strategy_id, x: p.win_rate!, y: p.avg_rr!,
         label: p.display_name ?? humanize(p.name ?? "Strategy"), detail: `${p.trades} trades · ${r(p.expectancy_r)} per trade${p.synthetic ? " · synthetic data" : ""}` })) },
     { id: "survivors", label: "Survivors", color: "var(--c-survivor)", size: 5, ring: true,
@@ -66,6 +84,7 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
       points: o.controls.filter((c) => c.win_rate != null && c.avg_rr != null).map((c) => ({ id: c.control_id, x: c.win_rate!, y: c.avg_rr!,
         label: "Random control", detail: `${c.trades} trades · ${r(c.expectancy_r)} per trade · not a strategy` })) }] : []),
   ];
+  const drawnSurvivors = groups.find((g) => g.id === "survivors")?.points.length ?? 0;
   const curves = [{ id: "zero", label: "Break-even before costs", points: o.breakeven.zero.points.map((p) => ({ x: p.win_rate, y: p.avg_rr })) },
     ...(o.breakeven.after_cost ? [{ id: "cost", label: `Break-even after a typical cost (${o.breakeven.after_cost.cost_r.toFixed(3)} R)`, tone: "warn" as const,
       points: o.breakeven.after_cost.points.map((p) => ({ x: p.win_rate, y: p.avg_rr })) }] : [])];
@@ -74,10 +93,12 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
     <>
       {picker}
       <section className="featured" data-testid="results-facts">
-        <h3>The field <span className="labels">{tags}</span></h3>
+        {f.synthetic_tested > 0 && <div className="labels">{tags}</div>}
         <div className="kpis">
           <Kpi label="Strategies" value={f.strategies.toLocaleString()} sub={`${f.tested.toLocaleString()} with trades in this scope`} />
           <Kpi label="Survivors" value={f.survivors.toLocaleString()} accent sub={`positive after costs and pass evaluation and payout under ${crit}`} testId="kpi-survivors" />
+          <Kpi label="Live 50K OK" value={(f.live_ok ?? 0).toLocaleString()} testId="kpi-live"
+            sub={`net profit, worst drawdown ≤ ${money.fmt(f.live_limit_usd ?? 5000)} and no losing calendar year`} />
           <Kpi label="Positive before costs" value={f.gross_positive.toLocaleString()} sub={f.tested ? `${pct(f.gross_positive / f.tested, 0)} of tested` : undefined} />
           <Kpi label="Positive after costs" value={f.net_positive.toLocaleString()} sub={f.tested ? `${pct(f.net_positive / f.tested, 0)} of tested` : undefined} />
           <Kpi label="Typical cost per trade" value={f.median_cost_r_per_trade == null ? "—" : `${n(f.median_cost_r_per_trade, 3)} R`} sub="median across tested strategies" />
@@ -91,6 +112,9 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
           <label className="check small"><input type="checkbox" checked={controls} data-testid="show-controls"
             onChange={(e: { target: HTMLInputElement }) => setControls(e.target.checked)} />show random controls</label></div>}>
         {!o.points.length && !o.controls.length ? <Empty>No tested strategies in this scope yet. <a href={href("/run")}>Run a backtest</a>.</Empty> : <>
+          <p className="small field-totals" data-testid="field-totals"><b>{f.tested.toLocaleString()} strategies tested</b>: {(f.drawn - drawnSurvivors).toLocaleString()} drawn
+            as strategies, {drawnSurvivors.toLocaleString()} survivors{f.tested - f.drawn > 0 ? <>, {(f.tested - f.drawn).toLocaleString()} not drawn
+            (no losing or no winning trade, so no reward to risk)</> : null}.</p>
           <ScatterChart groups={groups} curves={curves} yUnit="avg reward : risk" yMax={8} testId="field-scatter"
             onPick={(id) => (id.startsWith("CTRL_") ? onOpenControl(id) : onOpen(id))}
             onPickMany={onOpenMany ? (ids) => { const set = new Set(ids); onOpenMany(o.points.filter((p) => set.has(p.strategy_id))); } : undefined} />
@@ -109,10 +133,9 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
           return <Card key={k} title={<>{title} {tags}</>} testId={`results-by-${k.replace(/_/g, "-")}`}
             actions={k === "session" && o.breakdowns.session_group ? <Button small onClick={() => setAllWindows(!allWindows)} testId="session-toggle">
               {allWindows ? "Group by market hours" : "Show all windows"}</Button> : undefined}>
-            {!rows.length ? <Empty>No tested strategies.</Empty> : <HBars rows={rows.map((g) => ({
-              label: dim === "session_group" ? g.group : facetLabel(k, g.group), value: g.median_expectancy_r,
-              note: `${g.strategies} strateg${g.strategies === 1 ? "y" : "ies"} · ${pct(g.survivor_rate, 0)} survivors` }))}
-              unit={`median ${basis === "net" ? "net" : "gross"} R per trade`} />}
+            {!rows.length ? <Empty>No tested strategies.</Empty> : <SplitRows rows={rows.map((g) => ({
+              label: dim === "session_group" ? g.group : facetLabel(k, g.group), positive: g.positive ?? 0, negative: g.negative ?? 0,
+              zero: g.zero ?? 0, strategies: g.strategies }))} />}
           </Card>;
         })}
       </div>
@@ -126,7 +149,7 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
             ["Difference", <span className={signCls(ex.difference_r)}>{ex.difference_r == null ? "—" : r(ex.difference_r)}</span>]]} />
           <p className="small muted">Median per strategy. Different strategies sit in each group, so this is a description, not a controlled test.</p>
         </Card>
-        <Card title={<>Evaluation simulator <span className="labels"><Scope kind="sim" /><Scope kind="is" /></span></>} testId="results-eval-summary">
+        <Card title={<>Evaluation simulator <span className="labels"><Scope kind="sim" /></span></>} testId="results-eval-summary">
           {!ev.survivors ? <Empty>No survivors yet, so there is nothing to simulate.</Empty> : <>
             <TableWrap><table className="dense"><thead><tr><th>Prop account</th><th className="r">Typical chance to pass</th></tr></thead>
               <tbody>{Object.entries(ev.median_p_pass).map(([pid, v]) => <tr key={pid}><td>{profileLabel(pid, ev.profile_names?.[pid])}</td>
@@ -142,6 +165,7 @@ export function ResultsOverviewSection({ onOpen, onOpenControl, onOpenMany }: { 
 
 // ------------------------------------------------------------------------------ strategy panel
 export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) {
+  const usd = useMoney().fmt;                                // ADR-90: USD or CHF (display only)
   const { data: p, error } = useApi<StrategyPanelData>(`/api/results-view/strategies/${id}${scope ? `?scope=${scope}` : ""}`, [id, scope]);
   if (error) return <ErrorPanel error={error} />;
   if (!p) return <Loading label="Loading strategy…" />;
@@ -153,8 +177,8 @@ export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) 
         <div className="inline" style={{ flexWrap: "wrap", gap: 6 }}>
           {p.tested && <FavStar id={p.strategy_id} testId="panel-fav" />}<b style={{ fontSize: 16 }}>{p.display_name}</b>
           {p.survivor && <Badge tone="ok">Survivor</Badge>}
-          {p.tested && <Scope kind={panelScope(p.status, p.is_holdout)} />}
-          {p.tested && <Scope kind="net" />}{p.synthetic && <Scope kind="synthetic" />}
+          {p.tested && p.is_holdout && <Scope kind="holdout" />}{p.synthetic && <Scope kind="synthetic" />}
+          {p.live?.ok && <Badge tone="ok">Live 50K OK</Badge>}
         </div>
         <p className="small muted" style={{ margin: "6px 0 0" }}>{p.explanation}</p>
         {p.dataset && <p className="small muted" style={{ margin: "4px 0 0" }}>{p.dataset.instrument ?? "Market"} · {facetLabel("timeframe", p.dataset.timeframe)} bars ·
@@ -177,7 +201,19 @@ export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) 
         </div>
         <p className="small muted">Dollar figures are R multiplied by your risk per trade ({usd(p.risk_per_trade_usd)}, set in Settings); the
           backtest itself is unchanged.</p>
-        {p.curve && <Card title={<>Equity curve <Scope kind={panelScope(p.status, p.is_holdout)} /><Scope kind="net" /></>} testId="panel-equity">
+        {p.live && <div className="live-check" data-testid="panel-live">
+          <b>{p.live.ok ? "Live 50K OK" : "Not live 50K OK"}</b>
+          <span className="muted small"> · the recorded trades on a 50K account with real money, at the strategy's own MNQ sizing</span>
+          <ul className="small">
+            <li className={p.live.net_positive ? "pos" : "neg"}>{p.live.net_positive ? "✓" : "✗"} Net profit {usd(p.live.net_usd)}</li>
+            <li className={p.live.drawdown_within_limit ? "pos" : "neg"}>{p.live.drawdown_within_limit ? "✓" : "✗"} Worst drawdown {usd(p.live.max_drawdown_usd)}
+              {" "}(limit {usd(p.live.limit_usd)}, Settings)</li>
+            <li className={p.live.no_losing_year ? "pos" : "neg"}>{p.live.no_losing_year ? "✓" : "✗"} No losing calendar year
+              {p.live.worst_year_usd != null ? ` (worst year ${usd(p.live.worst_year_usd)})` : ""}</li>
+          </ul>
+          <p className="small muted" style={{ margin: 0 }}>Historical result under the stated costs, not a forecast.</p>
+        </div>}
+        {p.curve && <Card title={<>Equity curve {p.is_holdout && <Scope kind="holdout" />}</>} testId="panel-equity">
           <StepTimeChart points={p.curve.points.map((x) => ({ t: x.exit_ts, v: x.equity_r, n: x.i }))} start={p.dataset?.start}
             end={hp?.to ?? p.dataset?.end} testId="panel-equity-chart"
             band={hp ? { from: hp.from, to: hp.to, label: hp.evaluated ? "Holdout evaluation" : "Holdout · locked, not backtested",
@@ -192,7 +228,7 @@ export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) 
               : <>The shaded period ({dayMonthYear(hp.trading_dates[0])} to {dayMonthYear(hp.trading_dates[1])}) is the research protocol's locked holdout.
                   Research backtests never use it, so this strategy has no results there yet. It is kept unseen for the final holdout evaluation.</>}</p>}
         </Card>}
-        {!!p.years?.length && <Card title={<>Results by year <Scope kind={panelScope(p.status, p.is_holdout)} /><Scope kind="net" /></>} testId="panel-years">
+        {!!p.years?.length && <Card title={<>Results by year {p.is_holdout && <Scope kind="holdout" />}</>} testId="panel-years">
           <YearTable years={p.years} dataset={p.dataset} holdout={hp ?? undefined} />
           <p className="small muted" style={{ marginBottom: 0 }}>Click a year to see its months. Each trade counts in the year and month of its
             exit (New York time), so a year's total matches the equity curve. Dollar figures are R × your risk per trade ({usd(p.risk_per_trade_usd)}).
@@ -222,11 +258,11 @@ export function StrategyPanel({ id, scope }: { id: string; scope?: "holdout" }) 
   );
 }
 
-const panelScope = (status?: string, holdout?: boolean) => (holdout ? "holdout" : status === "OUT_OF_SAMPLE" ? "oos" : status === "WALK_FORWARD" ? "wf" : "is");
 
 /** Per-year results with an expandable row per year showing its twelve months (from the backend read model). Holdout
     years follow, labelled Holdout: "locked, not backtested", or this strategy's holdout evaluation. */
 function YearTable({ years, dataset, holdout }: { years: YearRow[]; dataset?: StrategyPanelData["dataset"]; holdout?: HoldoutPeriod }) {
+  const usd = useMoney().fmt;
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (key: string) => setOpen((o) => { const s = new Set(o); if (s.has(key)) s.delete(key); else s.add(key); return s; });
   const partialOf = (first?: string, last?: string) => (y: number) => [first && first.startsWith(`${y}-`) && !first.endsWith("-01-01") ? `from ${dayMonth(first)}` : null,
@@ -371,6 +407,7 @@ export function BootstrapSimulator({ runId, profileId, profileName }: { runId: s
 
 // ------------------------------------------------------------------------------ control panel
 export function ControlPanelView({ id }: { id: string }) {
+  const usd = useMoney().fmt;
   const { data: c, error } = useApi<ControlPanelData>(`/api/results-view/controls/${id}`, [id]);
   if (error) return <ErrorPanel error={error} />;
   if (!c) return <Loading label="Loading control…" />;
