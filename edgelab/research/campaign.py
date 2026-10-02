@@ -627,7 +627,14 @@ def check(svc, cid: str) -> dict:
            and spec["discovery"]["last_bar"] == mat["windows"]["discovery"]["last_bar"]
            and spec["search"]["spec"]["period"] == discovery_period(mat) == spec["discovery"]["period"],
            spec["discovery"]["trading_dates"])
-        ok("research config = protocol config", svc._config_hash() == mat["config_hash"] == spec["config_hash"])
+        same_cfg = svc._config_hash() == mat["config_hash"] == spec["config_hash"]
+        if same_cfg:
+            ok("research config = protocol config", True)
+        else:                                                   # ADR-89: say exactly what differs
+            from edgelab.research.config_restore import mismatch_detail
+            ok("research config = protocol config", False,
+               {**mismatch_detail(svc, mat["config_hash"]), "protocol_id": p["protocol_id"],
+                "campaign_config_hash": spec["config_hash"]})
         led = ledger(svc, spec)
         done = led["cells_by_status"].get("completed", 0)
         ok("no foreign trials on the protocol", led["foreign_trials"] == 0, led["foreign_trials"])
@@ -655,7 +662,11 @@ def check(svc, cid: str) -> dict:
             per[c["strategy_id"]] = per.get(c["strategy_id"], 0) + 1
         ok("plan: exactly one eligible cell per strategy", len(el) == n and len(per) == n and set(per.values()) == {1},
            {"eligible": len(el), "planned": plan.counts["planned"], "search_id": plan.search_id})
-        ok("search id = frozen search id", plan.search_id == spec["search"]["search_id"])
+        ok("search id = frozen search id", plan.search_id == spec["search"]["search_id"],
+           None if plan.search_id == spec["search"]["search_id"] else
+           f"the search id includes the research settings fingerprint (now {plan.search_id}, frozen "
+           f"{spec['search']['search_id']})" + ("; it follows from the settings difference above"
+                                               if svc._config_hash() != spec["config_hash"] else ""))
         ok("plan governed by the frozen protocol", plan.protocol_id == pr["protocol_id"], plan.protocol_id)
         want = {c["strategy_id"]: c["dataset_id"] for c in assign_cells(rows, by_tf)} if not bad else {}
         wrong = [c["strategy_id"] for c in el if want.get(c["strategy_id"]) != c["dataset_id"]]

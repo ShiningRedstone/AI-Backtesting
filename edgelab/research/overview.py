@@ -24,6 +24,7 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 import pandas as pd
 
+from edgelab.analytics.metrics import recorded_trades_per_week
 from edgelab.research.lab import SCOPE_LABEL
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -325,7 +326,7 @@ def run_row(run_id: str, rec: Mapping, criteria: str | None = None) -> dict:
             "synthetic": str(rec.get("notes") or "").startswith("SYNTHETIC"),
             "notes": rec.get("notes"), "cost_status": a.get("cost_status"), "cost_profile": costs.get("profile"),
             "cost_scenario": costs.get("scenario"), "spread_source": costs.get("spread_source"),
-            "trade_count": n, "trades_per_week": _f(hm.get("trades_per_week")), "win_rate": _f(hm.get("win_rate")),
+            "trade_count": n, "trades_per_week": _f(recorded_trades_per_week(rec)), "win_rate": _f(hm.get("win_rate")),
             "expectancy_r": _f(hm.get("expectancy_r")), "net_r": _f(hm.get("net_r")),
             "gross_r": gross, "cost_r": cost,
             "gross_r_per_trade": gross / n if gross is not None and n else None,
@@ -842,7 +843,8 @@ def run_analytics(svc, run_id: str) -> dict:
     mults = svc.cfg["backtest"].get("cost_sensitivity_multipliers", [0.5, 1.0, 1.5, 2.0, 3.0])
     per_month = Counter(f"{y}-{m:02d}" for y, m in zip(local.year, local.month))
     return {**base, "n_trades": int(len(t)),
-            "metrics": {"net": compute_metrics(t, "net_r", thr), "gross": compute_metrics(t, "gross_r", thr)},
+            "metrics": {k: {**compute_metrics(t, col, thr), "trades_per_week": row["trades_per_week"]}    # ADR-89
+                        for k, col in (("net", "net_r"), ("gross", "gross_r"))},
             "curve": lab.run_curve(svc, run_id),
             "rolling_expectancy": {"window": ROLLING_WINDOW, "points": rolling, "basis": "net"},
             "direction": bucket(direction, ["long", "short"]),

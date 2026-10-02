@@ -41,6 +41,7 @@ import pandas as pd
 
 from edgelab.core.config import load_config
 from edgelab.core.fsutil import atomic_write_text
+from edgelab.runtime import legacy_hidden
 from edgelab.data.calendar import load_calendars
 from edgelab.data.importer import ImportOptions, import_dataset, inspect_file, load_validated
 from edgelab.data.store import open_store
@@ -552,12 +553,13 @@ class Services:
         datasets = self.list_datasets()
         return _jsonable({
             "instruments": [{"symbol": k, "asset_class": v.asset_class, "underlying": v.underlying,
-                             "calendar": v.calendar, "tick_size": v.tick_size} for k, v in insts.items()],
+                             "calendar": v.calendar, "tick_size": v.tick_size} for k, v in insts.items()
+                            if not legacy_hidden(k)],
             "datasets": [{k: d[k] for k in ("dataset_id", "instrument", "asset_type", "provider",
                                            "timeframe", "start", "end")} for d in datasets],
             "timeframes_by_dataset": {d["dataset_id"]: d["timeframe"] for d in datasets},
             "sessions": {k: v.definition() for k, v in self.sessions.items()},
-            "calendars": sorted(load_calendars(self.cfg)),
+            "calendars": sorted(c for c in load_calendars(self.cfg) if not legacy_hidden(c)),
             "features": [{"id": d.feature_id, "version": d.version, "category": d.category,
                           "params": [p.describe() for p in d.params], "requires": list(d.requires)}
                          for d in all_defs()],
@@ -856,7 +858,8 @@ class Services:
         bound = strat.bind(FeatureContext(ds, self.sessions, self.cache))
         res = run_backtest(ds, bound, costs, self.cfg["backtest"], sizing=strat.sizing,
                            contract=contract_for(self.cfg, strat.sizing))
-        met = compute_metrics(res.trades, sample_thresholds=self.cfg.get("sample_size"))
+        met = compute_metrics(res.trades, sample_thresholds=self.cfg.get("sample_size"),
+                              span=(ds.manifest.start, ds.manifest.end))      # ADR-89: per week of the tested data
         synthetic = self._is_synthetic(ds.manifest)
         # ADR-64: EVERY backtest runs the prop lifecycle layer (pure function of the trades; worker processes have no
         # profiles and leave it to the parent's record step, which computes it from the same trades)
@@ -1525,8 +1528,11 @@ class Services:
         return _jsonable(rows)
 
     def get_run(self, run_id: str, max_trades: int = 500) -> dict:
+        from edgelab.analytics.metrics import recorded_trades_per_week
         rec, trades = self.store.load_run(run_id)
         rec = {k: v for k, v in rec.items() if k not in ("config", "environment")}
+        if rec.get("headline_metrics"):                     # ADR-89: per week of the tested data (read-time correction)
+            rec["headline_metrics"] = {**rec["headline_metrics"], "trades_per_week": recorded_trades_per_week(rec)}
         t = trades.head(max_trades)
         for c in t.columns:
             if str(t[c].dtype).startswith("datetime"):
@@ -1895,6 +1901,40 @@ class Services:
                 self.store.retire_protocol(c["protocol_id"])
         created = self.store.save_protocol(rec, key)
         return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
+
+    def protocol_config_difference(self, protocol_id: str) -> dict:
+        """ADR-89: how the workspace's research settings differ from the protocol's recorded ones (read only)."""
+        from edgelab.research import config_restore as CR
+        p = self.get_protocol(protocol_id)
+        return _jsonable({"protocol_id": protocol_id, **CR.mismatch_detail(self, p["material"]["config_hash"])})
+
+    def restore_protocol_config(self, protocol_id: str, confirm: str) -> dict:
+        """ADR-89: put the protocol's recorded settings back into <root>/configs (verified to hash exactly to the
+        protocol's config hash before anything is written; the old configs/ is backed up; requires confirm ==
+        "RESTORE"; refused while a background job runs). Then the settings are reloaded in place."""
+        import logging
+        from edgelab.research import config_restore as CR
+        if confirm != "RESTORE":
+            raise ValueError("type RESTORE to confirm restoring the protocol's settings")
+        if self._jobs is not None and self._jobs.active():
+            raise ValueError("a background job is running; wait for it to finish or cancel it first")
+        p = self.get_protocol(protocol_id)
+        with self.lock:
+            try:
+                out = CR.restore(self, p["material"]["config_hash"])
+            except CR.ConfigRestoreError as exc:
+                raise ValueError(f"[{exc.code}] {exc}") from None
+            if out.get("restored"):
+                new = load_config(self.root / "configs")
+                keep = all(new.get(k) == self.cfg.get(k) for k in ("storage", "features"))
+                if keep:                                   # storage/cache unchanged: reload the settings in place
+                    self.cfg = new
+                    self.sessions = load_sessions(new)
+                out["restart_required"] = not keep
+                logging.getLogger("edgelab.services").info(
+                    "restored protocol %s settings into %s (files %s, backup %s)", protocol_id,
+                    self.root / "configs", out["files"], out["backup"])
+        return _jsonable({"protocol_id": protocol_id, **out})
 
     def get_protocol(self, protocol_id: str) -> dict:
         from edgelab.research.protocol import verify_record

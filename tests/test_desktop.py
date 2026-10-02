@@ -65,7 +65,9 @@ class TestWorkspace(unittest.TestCase):
             self.assertEqual((root / "configs" / "web.yaml").read_text(), "web:\n  port: 9999\n")
             self.assertEqual(again["config_differences"], ["web.yaml"])        # reported, not applied
             from edgelab.core.config import config_hash, load_config
-            self.assertEqual(config_hash(load_config(root / "configs")), config_hash(load_config(REPO / "configs")))
+            fresh = Path(d) / "fresh"                     # ADR-89: a new workspace = shipped configs minus legacy blocks
+            runtime.copy_default_configs(REPO / "configs", fresh)
+            self.assertEqual(config_hash(load_config(root / "configs")), config_hash(load_config(fresh)))
 
     def test_refuses_a_data_root_inside_the_bundle(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(sys, "frozen", True, create=True), \

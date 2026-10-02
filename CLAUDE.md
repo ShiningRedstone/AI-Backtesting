@@ -120,6 +120,13 @@ that lose clearly BEFORE costs (30+ trades, 95% upper bound of gross R/trade < 0
 entries; trailing / no-progress / no-target refused by name), registered in ONE companion flip protocol per parent (role
 `flip_companion`, scope `...#flip`, own budget = the flips, own holdout looks, Bonferroni family = parent budget + flips);
 `_governing_protocol(..., logic_hash=)` routes registered flips to it everywhere, never to the parent; lineage `mirror`.
+ADR-89: the user's workspace IS the source clone, so `configs/` changes alter its settings fingerprint and break the active
+protocol (ADR-86's HistData removal did: PREFLIGHT_FAILED). The old HistData entries are back inside `# >>> histdata-legacy`
+blocks (repo hash = pre-ADR-86, known answer in `tests/test_config_legacy.py`; never change `configs/` without the user);
+new workspaces drop them (`runtime.copy_default_configs`), the app never lists them (`runtime.legacy_hidden`). Preflight
+lists the differing settings (`research/config_restore.py`, from a run recorded under the protocol's hash) with
+"Restore the protocol's settings" (verified hash, backup). Trades per week = trades / weeks of the tested window
+(`analytics.metrics.trades_per_week`; stored runs corrected at read time).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -149,6 +156,9 @@ remains. Do not rely on this file alone.
   - A workspace keeps its OWN copy of `configs/`, made when the workspace was created; app updates never change it.
     The ACTIVE research protocol is bound to that config's hash, so never change a user's workspace configs
     (research and holdout tests would be refused with PROTOCOL_CONFIG_CHANGED).
+  - **The user's research workspace is the source clone itself** (Settings → Research Workspace =
+    `C:\Users\Ethan\Documents\AI-Backtesting`), so the repository's `configs/` ARE their settings: any committed change
+    to `configs/*.yaml` that alters the parsed values breaks their active protocol (ADR-89). Comments are safe.
 - **Research flow the user follows:** discovery (Research runs; the protocol's discovery window only) → survivors
   (net > 0 AND the trades pass a prop evaluation with a payout under the Settings account) → Holdout backtest (the
   locked final period, protocol gate, 10 tests in total by default, once per strategy, "criteria met / not met")
@@ -318,11 +328,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..88.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..89.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..88, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..89, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -391,4 +401,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-88). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-89). Update `README.md` status for phases.

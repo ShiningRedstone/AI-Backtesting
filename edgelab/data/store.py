@@ -210,6 +210,12 @@ class ResultStore(ABC):
         tr = self._read_sql("SELECT * FROM trades WHERE run_id = ?", (run_id,))
         return record, (_trades_from_table(tr) if len(tr) else pd.DataFrame())
 
+    def run_record_for_config(self, config_hash: str) -> dict | None:
+        """The newest stored run record made under ``config_hash`` (its ``config`` is the full settings tree; ADR-89)."""
+        rows = self._query("SELECT record_json FROM runs WHERE config_hash = ? ORDER BY run_id DESC LIMIT 1",
+                           (config_hash,))
+        return json.loads(rows[0][0]) if rows else None
+
     def list_runs(self) -> pd.DataFrame:
         rows = self._query("SELECT run_id, created_at, status, strategy_id, dataset_id, trades_hash "
                            "FROM runs ORDER BY run_id")

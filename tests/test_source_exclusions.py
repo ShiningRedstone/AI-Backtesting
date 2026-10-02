@@ -155,8 +155,16 @@ class TestAnomalyGate(unittest.TestCase):
         for name, spec in (CFG.get("source_exclusions") or {}).items():   # any shipped set is well formed
             for w in parse_exclusion_set(name, spec):
                 self.assertTrue(w["reason"])
-        for section in (CFG["calendars"], CFG["instruments"], CFG["costs"]["symbols"],
-                        CFG.get("source_exclusions") or {}):              # HistData removed (ADR-86)
+        # HistData removed (ADR-86) from NEW workspaces; the shipped files keep it only inside histdata-legacy blocks
+        # so a workspace that is the source clone keeps its settings fingerprint (ADR-89, tests/test_config_legacy.py)
+        from edgelab.core.config import load_config
+        from edgelab.runtime import copy_default_configs
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        copy_default_configs(Path(__file__).resolve().parents[1] / "configs", tmp / "configs")
+        fresh = load_config(tmp / "configs", environ={})
+        for section in (fresh["calendars"], fresh["instruments"], fresh["costs"]["symbols"],
+                        fresh.get("source_exclusions") or {}):
             self.assertFalse([k for k in section if "HISTDATA" in k.upper()])
         self.assertEqual((INSTRUMENTS["NAS100_CFD"].tick_size, INSTRUMENTS["NAS100_CFD"].calendar), (0.01, "CME_EQUITY"))
         c = CALENDARS["CME_EQUITY"]

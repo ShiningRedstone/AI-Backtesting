@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Research settings repaired, preflight explains settings changes, trades per week fixed (ADR-89)
+
+| Item | Status |
+|---|---|
+| The 20,000-strategy pool failed preflight because the HistData removal (ADR-86) changed the settings of a workspace that is the source clone; the exact old entries are back (marked as legacy), so the settings fingerprint matches the protocol again | IMPLEMENTED, TESTED (known-answer fingerprint; the user's case replayed in `test_research_campaign`) |
+| New workspaces still get no HistData (the legacy blocks are dropped when a workspace is created); the entries are never listed in the app | IMPLEMENTED, TESTED |
+| Preflight lists exactly which settings differ from the protocol's (instead of "error") | IMPLEMENTED, TESTED (screenshot on synthetic data) |
+| "Restore the protocol's settings": verified to reproduce the protocol's fingerprint before anything is written, old files backed up, refused while a job runs | IMPLEMENTED, TESTED |
+| Trades per week = trades ÷ weeks of the tested data (one 1-minute trade no longer shows 10,080 per week); existing results corrected when shown, nothing re-run; the holdout ranking uses the corrected value | IMPLEMENTED, TESTED |
+| Your 20,000-pool preflight after updating | REQUIRES REAL DATA (runs on your PC) |
+| Backtests, fills, costs, sizing, prop rules, protocols, trade lists and fingerprints | UNCHANGED |
+
 ## Flip scan: the worst strategies, fully mirrored and tested again (ADR-88)
 
 | Item | Status |

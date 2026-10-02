@@ -262,6 +262,40 @@ class TestCampaignWorkspace(unittest.TestCase):
         self.assertEqual(cm.exception.code, "PREFLIGHT_FAILED")
         mf.write_text(morig)
         self.assertEqual(s.protocol_status(self.pid)["holdout"]["looks_used"], 0)
+        # ---- ADR-89: the workspace's settings change after the protocol (the user's case: the HistData entries
+        # disappear from a workspace that is the source clone). The preflight says exactly what differs; restoring the
+        # protocol's recorded settings makes it ready again, nothing else changes.
+        from edgelab.runtime import strip_legacy_blocks
+        before = {f.name: f.read_text() for f in (self.root / "configs").glob("*.yaml")}
+        for name in ("costs.yaml", "data.yaml", "instruments.yaml"):
+            f = self.root / "configs" / name
+            f.write_text(strip_legacy_blocks(f.read_text()))
+        s2 = self.svc()
+        rep = s2.campaign_check(cid)
+        bad = {c["check"]: c for c in rep["checks"] if not c["ok"]}
+        self.assertEqual(set(bad), {"research config = protocol config", "search id = frozen search id"})
+        det = bad["research config = protocol config"]["detail"]
+        paths = {d["path"]: d["change"] for d in det["differences"]}
+        self.assertEqual(paths["costs.symbols.NAS100_HISTDATA"], "removed")
+        self.assertEqual(paths["instruments.NAS100_HISTDATA"], "removed")
+        self.assertEqual(paths["costs.symbols.NQ_DUKASCOPY.notes"], "changed")
+        self.assertTrue(det["restorable"])
+        self.assertEqual(det["protocol_hash"], s2.get_protocol(self.pid)["material"]["config_hash"])
+        self.assertIn("settings fingerprint", bad["search id = frozen search id"]["detail"])
+        with self.assertRaises(C.CampaignError) as cm:
+            s2.campaign_run(cid)
+        self.assertEqual(cm.exception.code, "PREFLIGHT_FAILED")
+        with self.assertRaises(ValueError):
+            s2.restore_protocol_config(self.pid, "yes")                               # typed confirmation required
+        out = s2.restore_protocol_config(self.pid, "RESTORE")
+        self.assertTrue(out["restored"])
+        self.assertEqual(sorted(out["files"]), ["costs.yaml", "data.yaml", "instruments.yaml"])
+        self.assertTrue(Path(out["backup"]).is_dir())
+        self.assertTrue(s2.campaign_check(cid)["ready"])                              # reloaded in place
+        self.assertTrue(self.svc().campaign_check(cid)["ready"])                      # and on a fresh start
+        self.assertEqual(s2.store.count_trials(self.pid), self.n)                     # nothing evaluated or counted
+        for name, text in before.items():                                              # back to the shipped files
+            (self.root / "configs" / name).write_text(text)
 
     def test_missing_timeframe_dataset_fails_before_anything(self):
         s = self.svc()

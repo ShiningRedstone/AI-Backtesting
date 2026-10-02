@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -129,7 +130,7 @@ def init_workspace(root: str | Path, defaults: str | Path | None = None) -> dict
     if not (root / "configs").exists():
         if not defaults.is_dir():
             raise FileNotFoundError(f"bundled default configs not found at {defaults}")
-        shutil.copytree(defaults, root / "configs")
+        copy_default_configs(defaults, root / "configs")
         created_configs = True
     for d in ("data/import", "reports", "logs"):
         (root / d).mkdir(parents=True, exist_ok=True)
@@ -139,6 +140,58 @@ def init_workspace(root: str | Path, defaults: str | Path | None = None) -> dict
                                       "created_by": build_label()}, indent=1) + "\n")
     return {"root": str(root), "configs_created": created_configs,
             "config_differences": config_differences(root / "configs", defaults)}
+
+
+LEGACY_BEGIN = "# >>> histdata-legacy"
+LEGACY_END = "# <<< histdata-legacy"
+_NEW_ONLY = re.compile(r"^(\s*)#\| (.*)$")
+
+
+def strip_legacy_blocks(text: str) -> str:
+    """The shipped configs keep the old HistData entries between ``# >>> histdata-legacy`` / ``# <<< histdata-legacy``
+    so a workspace that IS the source clone keeps its settings fingerprint (ADR-89). A NEW workspace drops those blocks
+    and un-comments the ``#| `` replacement lines, giving exactly the HistData-free configs of ADR-86."""
+    out, skipping = [], False
+    for line in text.split("\n"):
+        s = line.strip()
+        if s.startswith(LEGACY_BEGIN):
+            if skipping:
+                raise ValueError("nested histdata-legacy block")
+            skipping = True
+            continue
+        if s.startswith(LEGACY_END):
+            if not skipping:
+                raise ValueError("histdata-legacy end marker without a start")
+            skipping = False
+            continue
+        if not skipping:
+            m = _NEW_ONLY.match(line)
+            out.append(m.group(1) + m.group(2) if m else line)
+    if skipping:
+        raise ValueError("unterminated histdata-legacy block")
+    return "\n".join(out)
+
+
+def legacy_hidden(name: str) -> bool:
+    """Display filter: config entries kept only for the settings fingerprint (HistData, ADR-89) are never listed."""
+    return "HISTDATA" in str(name).upper()
+
+
+def copy_default_configs(defaults: Path, dest: Path) -> None:
+    """Copy the bundled default configs into a NEW workspace, without the legacy blocks (``strip_legacy_blocks``)."""
+    shutil.copytree(defaults, dest)
+    for p in dest.rglob("*.yaml"):
+        text = p.read_text(encoding="utf-8")
+        if LEGACY_BEGIN in text or "#| " in text:
+            p.write_text(strip_legacy_blocks(text), encoding="utf-8")
+
+
+def _same_as_new_workspace(mine: bytes, shipped: bytes) -> bool:
+    """A new workspace's copy of a shipped file without its legacy blocks (ADR-89) is not a user change."""
+    try:
+        return mine.decode("utf-8") == strip_legacy_blocks(shipped.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return False
 
 
 def config_differences(user_configs: Path, defaults: Path) -> list[str]:
@@ -151,7 +204,11 @@ def config_differences(user_configs: Path, defaults: Path) -> list[str]:
         if p.is_file():
             rel = p.relative_to(defaults)
             q = user_configs / rel
-            if not q.exists() or q.read_bytes() != p.read_bytes():
+            if not q.exists():
+                out.append(rel.as_posix())
+                continue
+            mine, shipped = q.read_bytes(), p.read_bytes()
+            if mine != shipped and not (p.suffix == ".yaml" and _same_as_new_workspace(mine, shipped)):
                 out.append(rel.as_posix())
     return out
 

@@ -820,3 +820,9 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 @media (max-width: 900px) { :root[data-theme="light"] .sidebar { box-shadow: 8px 0 30px rgba(0, 0, 0, .12); } }
 :root[data-theme="light"] .btn-primary:active:not(:disabled) { background: #000000; filter: none; }
 :root[data-theme="light"] .hero { background: linear-gradient(180deg, #ffffff, #f4f1f6); }
+
+/* ADR-89: settings differ from the research protocol's (preflight detail) */
+.config-mismatch { margin: 6px 0 4px; }
+.config-mismatch p { margin: 4px 0; }
+.config-mismatch ul { margin: 4px 0 8px; padding-left: 18px; }
+.config-mismatch .mono { word-break: break-all; }

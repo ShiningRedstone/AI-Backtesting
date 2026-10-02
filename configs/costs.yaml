@@ -46,14 +46,47 @@ costs:
       providers: {}
     US100_CFD: *cfd_unconfigured
     NQ_CFD: *cfd_unconfigured
-    # Dukascopy USATECH.IDX/USD (feed E_NQ-100, BID; Phase 9): its OWN profile. No other feed's assumed costs are
+    # >>> histdata-legacy: kept so existing workspaces keep their settings fingerprint (ADR-89); new workspaces drop it
+    # HistData research proxy. Symbol level stays UNCONFIGURED (any other provider is refused);
+    # only the HISTDATA feed gets the approved MNQ-equivalent research ASSUMPTIONS below.
+    NAS100_HISTDATA:
+      status: unconfigured
+      notes: "research proxy; only providers.HISTDATA carries assumed MNQ-equivalent costs"
+      slippage_unit: points
+      commission_per_side: null
+      slippage_ticks_market: null
+      slippage_ticks_stop: null
+      spread_points: null
+      providers:
+        HISTDATA:
+          status: assumed                 # research assumption, NOT broker-verified
+          notes: >-
+            HistData NSXUSD BID prices are a research proxy (not CME NQ/MNQ prices). Costs are
+            MNQ-equivalent research ASSUMPTIONS, not any broker's actual costs: 1 research unit =
+            $1/index point, 1 MNQ = 2 units; $1.00 per MNQ per side commission+fees = $0.50 per
+            unit per side; spread 0.50 points = 2 MNQ ticks; slippage 0.25 points = 1 MNQ tick
+            on market and stop fills. Financing none under the MNQ/futures concept.
+          commission_per_side: 0.50       # $ per research unit per side (commission + fees)
+          fees_per_side: 0
+          slippage_unit: points
+          slippage_ticks_market: 0.25     # index points
+          slippage_ticks_stop: 0.25
+          slippage_ticks_limit: 0
+          spread_source: fixed
+          spread_points: 0.50             # full spread in index points, charged once per round trip
+          financing_mode: none
+    # <<< histdata-legacy
+    # Dukascopy USATECH.IDX/USD (feed E_NQ-100, BID; Phase 9): its OWN profile. HistData's assumed costs are never
     # reused for it (a different feed has a different spread/price side). Ships UNCONFIGURED:
     # the dataset imports, but every backtest is refused until you enter real numbers here
     # (commission/fees per unit per side, spread, slippage, financing) with a status of
     # `assumed` or `broker_verified` and a rationale in `notes`.
     NQ_DUKASCOPY:
       status: unconfigured
-      notes: "Dukascopy USATECH.IDX/USD; no costs are assumed (not CME NQ's)"
+      # >>> histdata-legacy: kept so existing workspaces keep their settings fingerprint (ADR-89); new workspaces drop it
+      notes: "Dukascopy USATECH.IDX/USD; no costs are assumed (not HistData's, not CME NQ's)"
+      # <<< histdata-legacy
+      #| notes: "Dukascopy USATECH.IDX/USD; no costs are assumed (not CME NQ's)"
       slippage_unit: points
       commission_per_side: null
       slippage_ticks_market: null

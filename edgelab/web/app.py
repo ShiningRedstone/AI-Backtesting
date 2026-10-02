@@ -254,9 +254,12 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def config():
         from edgelab.engine.costs import CostConfigError, cost_model_from_config
         from edgelab.instruments import load_instruments
+        from edgelab.runtime import legacy_hidden
         cfg = svc.cfg
         costs = {}
         for sym in load_instruments(cfg):
+            if legacy_hidden(sym):                     # kept only for the settings fingerprint (ADR-89)
+                continue
             try:
                 cm = cost_model_from_config(cfg, sym)
                 costs[sym] = {"status": cm.status, "profile": getattr(cm, "profile", None)}
@@ -266,7 +269,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                         "backtest": cfg["backtest"], "sessions": {k: v.definition() for k, v in svc.sessions.items()},
                         "instruments": {k: {"asset_class": v.asset_class, "tick_size": v.tick_size,
                                             "point_value": v.point_value, "calendar": v.calendar}
-                                        for k, v in load_instruments(cfg).items()},
+                                        for k, v in load_instruments(cfg).items() if not legacy_hidden(k)},
                         "cost_profiles": costs, "sample_size": cfg.get("sample_size"),
                         "import_profiles": sorted((cfg.get("import_profiles") or {}).keys()),
                         "web": {"host": web.host, "port": web.port, "import_dirs": web.import_dirs,
@@ -1065,6 +1068,17 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         that creates, edits or retires a protocol, or resets a ledger."""
         pid = _id(pid, PROTOCOL_ID, "protocol id")
         return jsonify({"record": call(svc.get_protocol, pid), "status": call(svc.protocol_status, pid)})
+
+    @app.get("/api/protocols/<pid>/config-difference")
+    def protocol_config_difference(pid):
+        """ADR-89 (read only): how the workspace's research settings differ from the protocol's recorded ones."""
+        return jsonify(call(svc.protocol_config_difference, _id(pid, PROTOCOL_ID, "protocol id")))
+
+    @app.post("/api/protocols/<pid>/restore-config")
+    def restore_protocol_config(pid):
+        """ADR-89: rewrites the WORKSPACE's config files to the protocol's recorded settings (verified, backed up).
+        The protocol record itself is never edited."""
+        return jsonify(call(svc.restore_protocol_config, _id(pid, PROTOCOL_ID, "protocol id"), body().get("confirm")))
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")

@@ -14,6 +14,7 @@ import pandas as pd
 
 from edgelab.data.synthetic import generate_bars
 from edgelab.data.calendar import load_calendars
+from edgelab.runtime import copy_default_configs
 
 MARKER = "DEMO_WORKSPACE"
 NOTICE = "Synthetic demonstration - not evidence of trading performance."
@@ -38,7 +39,7 @@ def create_demo_workspace(root: str | Path, repo: str | Path) -> dict:
     if is_demo_root(root):
         return {"root": str(root), "created": False}
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(repo / "configs", root / "configs")
+    copy_default_configs(repo / "configs", root / "configs")       # new workspace: no legacy HistData blocks
     (root / MARKER).write_text(NOTICE + "\n")
     from edgelab.services import Services
     svc = Services(root=root)

@@ -2291,3 +2291,42 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   `protocol_id`); a mirror of a mirror with a risk/reward target is the same behaviour but a different logic hash.
 - **Unchanged:** the engine, fills, costs, sizing, compiler, prop rules, the survivor rule, the parent protocol's ledgers
   and gate, existing search identities and the Phase 1 demo (verified identical).
+
+### ADR-89 Settings fingerprint repair (HistData config entries restored as legacy blocks), preflight settings diff, trades per week
+- **Problem (user):** research on the 20,000-strategy pool failed preflight: "Research config = protocol config: error",
+  "Search ID = frozen search ID: error". Cause: the user's research workspace IS the source clone, so its settings are
+  the repository's `configs/`. ADR-86 deleted the HistData entries (and changed one `notes` text) in `costs.yaml`,
+  `data.yaml` and `instruments.yaml`; pulling that changed the workspace's config hash, and the active protocol (created
+  earlier) is bound to the old hash. The search id embeds the config hash, so both checks failed together. ADR-86's
+  statement "a workspace's own configs are untouched" did not hold for a workspace that is the clone.
+- **Repair:** the exact pre-ADR-86 entries are back, each inside `# >>> histdata-legacy` / `# <<< histdata-legacy`
+  comment markers (comments do not change the parsed tree): the repository configs hash to the pre-ADR-86 value again
+  (known answer in `tests/test_config_legacy.py`). New workspaces (`runtime.init_workspace`, the demo workspace) copy the
+  defaults through `runtime.copy_default_configs`, which drops the marked blocks and un-comments `#| ` replacement lines,
+  giving exactly ADR-86's HistData-free configs (known answer too). The entries are never listed in the app
+  (`runtime.legacy_hidden`: `/api/config`, research config options). Existing workspaces' configs are still never
+  rewritten by an update.
+- **Preflight explains a settings change** (`research/config_restore.py`): every run record keeps its full settings tree
+  (`"config"`), so the protocol's settings are recovered from a stored run made under the protocol's config hash
+  (trusted only if it re-hashes). The failing check carries `mismatch_detail`: current and protocol fingerprints, the
+  config folder, `EDGELAB__*` overrides and the differing settings as dotted paths (added / removed / changed). The
+  search-id check says it follows from that difference. Research runs page: `ConfigMismatchPanel`
+  (`web/src/components/configdiff.tsx`) instead of a bare "error".
+- **"Restore the protocol's settings"** (`Services.restore_protocol_config(protocol_id, confirm="RESTORE")`,
+  `POST /api/protocols/<pid>/restore-config`; read-only `GET .../config-difference`): refused while a job runs or with
+  `EDGELAB__` overrides; the protocol's tree is split back into the config files (current placement, else the bundled
+  defaults'), written in a temporary folder, and accepted ONLY if it loads to exactly the protocol's hash; then the old
+  `configs/` is copied to `configs.backup-<UTC>/` and only the differing files are replaced. Settings and sessions are
+  reloaded in place (a restart is asked for only if storage/feature-cache settings changed). The protocol record, runs,
+  trials and results are never edited.
+- **Trades per week** (`analytics.metrics.trades_per_week`): trades / weeks of the TESTED window (first to last bar of
+  the evaluated dataset slice; under a day counts as a day). The old first-entry-to-last-exit span made one 1-minute
+  trade read as 10,080 per week. `compute_metrics(span=)` (absent = old formula: Phase 1 demo unchanged) is given the
+  window by `Services`; stored runs are corrected at read time (`recorded_trades_per_week` in `overview.run_row`,
+  `run_analytics`, `get_run`), so the explorer, strategy panel, `max_trades_per_week` filter and the holdout ranking use
+  the corrected value. Trades, P&L, `trades_hash`, config/search/trial identities are unaffected.
+- **Unchanged:** the engine, fills, costs, sizing, compiler, prop rules, protocols and their gates. Phase 1 demo: identical
+  results; its config-hash line shows the restored pre-ADR-86 fingerprint.
+- **Known limitations:** if a workspace's settings differ in a way no stored run recorded (no run under the protocol's
+  hash), the difference cannot be listed or restored. A future change to `configs/` again changes the fingerprint of
+  every workspace that is the source clone: `tests/test_config_legacy.py` fails on purpose when that happens.

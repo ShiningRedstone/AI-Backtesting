@@ -65,8 +65,30 @@ def profit_factor(x: np.ndarray) -> float:
     return float(gains / losses)
 
 
+def trades_per_week(n: int, start, end) -> float | None:
+    """Trades per calendar week of the TESTED window ``[start, end]`` (first to last bar of the evaluated data; ADR-89).
+    Dividing by the first-entry-to-last-exit span instead made one 1-minute trade read as 10,080 per week."""
+    try:
+        days = (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds() / 86400
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(days) or days <= 0:
+        return None
+    return n / max(days, 1.0) * 7
+
+
+def recorded_trades_per_week(rec: Mapping) -> float | None:
+    """``trades_per_week`` of a stored run record, from its evaluated dataset window (stored runs are corrected at read
+    time; nothing is re-run). Falls back to the stored value when the record has no window."""
+    d, hm = rec.get("dataset") or {}, rec.get("headline_metrics") or {}
+    v = trades_per_week(int(hm.get("trade_count") or 0), d.get("start"), d.get("end")) if d.get("start") and d.get("end") else None
+    return v if v is not None else hm.get("trades_per_week")
+
+
 def compute_metrics(trades: pd.DataFrame, r_col: str = "net_r",
-                    sample_thresholds: Mapping | None = None) -> dict:
+                    sample_thresholds: Mapping | None = None, span: tuple | None = None) -> dict:
+    """``span`` = (first, last) bar of the tested data: ``trades_per_week`` per week of that window (ADR-89).
+    Without it the historical first-entry-to-last-exit formula is kept (Phase 1 demo output unchanged)."""
     n = len(trades)
     out: dict = {"trade_count": n, "sample_label": sample_label(n, sample_thresholds)}
     if n == 0:
@@ -82,7 +104,8 @@ def compute_metrics(trades: pd.DataFrame, r_col: str = "net_r",
     downside = r[r < 0]
     dd_std = float(np.sqrt(np.mean(np.minimum(r, 0) ** 2))) if n else math.nan
     out.update({
-        "trades_per_week": n / span_days * 7,
+        "trades_per_week": (tpw if span is not None and (tpw := trades_per_week(n, *span)) is not None
+                            else n / span_days * 7),
         "win_rate": len(wins) / n, "win_rate_ci95": (wr_lo, wr_hi),
         "loss_rate": len(losses) / n,
         "expectancy_r": float(r.mean()), "expectancy_se": se,

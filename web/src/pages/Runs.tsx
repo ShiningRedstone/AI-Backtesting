@@ -7,6 +7,7 @@ import type { CampaignDetail, CampaignJob, CampaignListRow, CampaignRunRecord, C
 import { useApi, useApp } from "../app/context";
 import { datasetLabel, facetLabel, familyLabel, humanize, keyLabel, metricLabel, profileLabel, statusLabel, valueLabel } from "../app/labels";
 import { go, href, useRoute } from "../app/router";
+import { ConfigMismatchPanel, isConfigMismatch } from "../components/configdiff";
 import { Pool2Panel } from "../components/pool2";
 import { plainText } from "../components/research";
 import { Badge, Banner, Button, Card, Empty, ErrorPanel, KeyValues, Kpi, Loading, Mono, ObjectView, ReadOnly, TableWrap, TechDetails, fmt, n, r,
@@ -219,7 +220,9 @@ function CampaignPage({ cid, home }: { cid: string; home?: { switcher: ReactNode
         {err && <ErrorPanel error={err} title="The run could not start" />}
         {check && <Banner tone={check.ready ? "ok" : "error"} testId="check-result">
           {check.ready ? "Ready" : "Not ready"} — {plainText(check.note)}
-          {!check.ready && <ul>{check.checks.filter((x) => !x.ok).map((x) => <li key={x.check}>{humanize(x.check)}: <ObjectView value={x.detail} /></li>)}</ul>}
+          {!check.ready && <ul>{check.checks.filter((x) => !x.ok).map((x) => <li key={x.check}>{humanize(x.check)}:{" "}
+            {isConfigMismatch(x.detail) ? <ConfigMismatchPanel d={x.detail} onRestored={runCheck} />
+              : typeof x.detail === "string" ? plainText(x.detail) : x.detail != null ? <ObjectView value={x.detail} /> : "not met"}</li>)}</ul>}
           {!check.ready && <TechDetails><pre className="code">{JSON.stringify(check.checks.filter((x) => !x.ok), null, 2)}</pre></TechDetails>}
         </Banner>}
         <p className="small muted">{plainText(tree.note)}. Each selected strategy is evaluated once, on the dataset of its own frozen timeframe,
@@ -325,8 +328,10 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
         ["Protocol id", L.protocol_id ? <Mono>{L.protocol_id}</Mono> : null],
         ["Current strategy id", L.current && !final ? <Mono>{L.current.strategy_id}</Mono> : null], ["Current dataset id", L.current && !final ? <Mono>{L.current.dataset_id}</Mono> : null]]} />
       {job.error && <Banner tone="error">{job.error}</Banner>}
-      {!!L.errors?.length && <details><summary>{L.errors.length} error(s)</summary><ul className="small">
-        {L.errors.map((e, i) => <li key={i}>{e.check ? `${humanize(e.check)}: ` : ""}{e.error ? plainText(e.error) : e.detail != null ? <ObjectView value={e.detail} /> : "error"}</li>)}</ul>
+      {!!L.errors?.length && <details open={L.errors.some((e) => isConfigMismatch(e.detail))}><summary>{L.errors.length} error(s)</summary><ul className="small">
+        {L.errors.map((e, i) => <li key={i}>{e.check ? `${humanize(e.check)}: ` : ""}{e.error ? plainText(e.error)
+          : isConfigMismatch(e.detail) ? <ConfigMismatchPanel d={e.detail} />
+          : typeof e.detail === "string" ? plainText(e.detail) : e.detail != null ? <ObjectView value={e.detail} /> : "not met (no further detail)"}</li>)}</ul>
         <TechDetails><pre className="code">{JSON.stringify(L.errors, null, 2)}</pre></TechDetails></details>}
     </Card>
   );
