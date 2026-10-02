@@ -825,8 +825,11 @@ def run_scope(svc, cid: str, *, families: list[str] | None = None, strategy_ids:
             b = read_outside_lock(svc, guard, lambda: svc.store.get_search_batch(sid)) or {}
             return int(b.get("n_failed") or 0) > max_failures
 
+        def on_plan(mp: dict) -> None:                           # ADR-91: cores actually used (memory plan)
+            emit(memory_plan=mp, processes_used=mp["processes"])
+
         out = run_search(svc, spec["search"]["spec"], processes, lock=lock, cancel=stop,
-                         include=None if whole else set(ids), on_cell=on_cell)
+                         include=None if whole else set(ids), on_cell=on_cell, on_plan=on_plan)
     except CampaignError:
         raise
     except BaseException as exc:                              # infrastructure failure: recorded, never a trial

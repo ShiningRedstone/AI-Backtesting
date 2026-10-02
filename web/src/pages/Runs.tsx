@@ -328,7 +328,8 @@ function LiveRun({ jobId, onFinished, onDismiss }: { jobId: string; onFinished: 
         {" "}· family <b>{familyLabel(L.current.family_id)}</b> · {facetLabel("timeframe", L.current.timeframe)} on {datasetLabel(L.current.dataset_id)}
         {" "}({fmt(L.current.index)} of {fmt(L.current.of)} in this scope)</p>}
       <p className="small muted" data-testid="live-cores">{L.protocol_version != null ? `Research protocol version ${L.protocol_version} · ` : ""}
-        {(job.processes ?? 1) > 1 ? `${job.processes} CPU cores at once (same results as one core; change in Settings)` : "1 CPU core (change in Settings)"}
+        {L.memory_plan ? `${L.memory_plan.note} (same results as one core; change in Settings)`
+          : (job.processes ?? 1) > 1 ? `${job.processes} CPU cores at once (same results as one core; change in Settings)` : "1 CPU core (change in Settings)"}
         {" "}· holdout locked · results are stored in plan order as they finish.</p>
       <TechDetails rows={[["Job id", <Mono>{job.job_id}</Mono>], ["Campaign id", <Mono>{job.campaign_id}</Mono>], ["Search id", <Mono>{job.search_id}</Mono>],
         ["Protocol id", L.protocol_id ? <Mono>{L.protocol_id}</Mono> : null],

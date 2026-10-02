@@ -101,6 +101,17 @@ class BarArrays:
                 arr.flags.writeable = False
                 object.__setattr__(self, name, arr)
 
+    def __getstate__(self) -> dict:                       # ADR-91: remembered hashes never travel between processes
+        return {k: v for k, v in self.__dict__.items() if k not in ("_hash_memo", "_head_of", "_head_hashes")}
+
+    def __setstate__(self, state: dict) -> None:
+        """Arrays arrive writeable after unpickling (worker processes): make them read-only again, like every
+        BarArrays built in this process (they are this process's own copies)."""
+        for v in state.values():
+            if isinstance(v, np.ndarray) and v.flags.writeable:
+                v.flags.writeable = False
+        self.__dict__.update(state)
+
     def __len__(self) -> int:
         return len(self.ts_ns)
 
@@ -132,9 +143,11 @@ class BarArrays:
 
     def head(self, n: int) -> "BarArrays":
         """Truncated view - used by the causality (lookahead) checker."""
-        return BarArrays(self.ts_ns[:n], self.open[:n], self.high[:n], self.low[:n],
-                         self.close[:n], self.volume[:n], self.tf_minutes,
-                         None if self.spread is None else self.spread[:n], **self._ask(n))
+        child = BarArrays(self.ts_ns[:n], self.open[:n], self.high[:n], self.low[:n],
+                          self.close[:n], self.volume[:n], self.tf_minutes,
+                          None if self.spread is None else self.spread[:n], **self._ask(n))
+        object.__setattr__(child, "_head_of", (self, int(n)))          # ADR-91: lets the parent remember its hash
+        return child
 
     @property
     def ts(self) -> pd.DatetimeIndex:
@@ -148,7 +161,36 @@ class BarArrays:
     def has_volume(self) -> bool:
         return bool(len(self.volume)) and bool(np.isfinite(self.volume).all())
 
+    def _frozen(self) -> bool:
+        return all(not a.flags.writeable for a in self._columns() if a is not None)
+
+    def _columns(self) -> list:
+        return [self.ts_ns, self.open, self.high, self.low, self.close, self.volume, self.spread] + \
+            [getattr(self, k) for k in ASK_COLUMNS]
+
     def content_hash(self) -> str:
+        """SHA-256 of the exact bar bytes. ADR-91: remembered per object (and, for a causality-check truncation, by
+        its parent per length) - valid because the arrays are read-only; if any array was made writeable again the
+        hash is recomputed from the bytes, exactly as before."""
+        memo = self.__dict__.get("_hash_memo")
+        if memo is not None and self._frozen():
+            return memo
+        head = self.__dict__.get("_head_of")
+        if head is not None and self._frozen() and head[0]._frozen():
+            got = head[0].__dict__.get("_head_hashes", {}).get(head[1])
+            if got is not None:
+                object.__setattr__(self, "_hash_memo", got)
+                return got
+        h = self._content_hash()
+        if self._frozen():
+            object.__setattr__(self, "_hash_memo", h)
+            if head is not None and head[0]._frozen():
+                hh = head[0].__dict__.setdefault("_head_hashes", {})
+                if len(hh) < 256:                                     # bounded: causality cuts are ~21 per dataset
+                    hh[head[1]] = h
+        return h
+
+    def _content_hash(self) -> str:
         arrays = [self.ts_ns, self.open, self.high, self.low, self.close, self.volume]
         if self.spread is not None:          # absent spread leaves Phase 1 hashes unchanged
             arrays.append(self.spread)

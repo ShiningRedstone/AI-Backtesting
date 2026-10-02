@@ -68,10 +68,10 @@ def _vwap(inp, p):
     b = inp.bars
     anchor = p["anchor"]
     if anchor == "trading_day":
-        grp = inp.calendar.trading_dates(b.ts).astype(np.int64)
+        grp = inp.calendar.trading_dates_of(b).astype(np.int64)
         active = np.ones(len(b), bool)
     else:
-        active, grp, _ = inp.session(anchor).membership(b.ts_ns)
+        active, grp, _ = inp.session(anchor).membership_of(b)
     tp = (b.high + b.low + b.close) / 3.0
     v = np.where(active, b.volume, NAN)
     pv = v * tp

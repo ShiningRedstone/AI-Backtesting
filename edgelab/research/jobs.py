@@ -232,9 +232,11 @@ class JobManager:
                     final = "cancelled"
                     break
                 if out["run_status"] in ("stopped_on_failure", "incomplete") and out.get("n_failed_cells"):
-                    first = (out.get("failed_cells") or [{}])[0]
+                    from edgelab.research.memory import failed_texts, is_memory_failure
+                    texts = failed_texts(out)
+                    first = next((t for t in texts if is_memory_failure(t)), texts[0] if texts else "")
                     error = (f"{out['n_failed_cells']} strateg{'y' if out['n_failed_cells'] == 1 else 'ies'} failed"
-                             + (f" (first: {first.get('error')})" if first.get("error") else ""))
+                             + (f" (first: {first})" if first else ""))
                 else:
                     final = "completed"
                     break
@@ -253,7 +255,12 @@ class JobManager:
                     job.error = error
                     final = "cancelled" if job.cancel_requested.is_set() else "failed"
                     break
-            # ---- an error: wait, then restart (resume)
+            # ---- an error: wait, then restart (resume). ADR-91: out of memory -> the restart uses half the cores
+            from edgelab.research.memory import is_memory_failure
+            if is_memory_failure(error) and job.processes > 1:
+                used = int((job.live or {}).get("processes_used") or job.processes)
+                job.processes = max(1, min(job.processes, used) // 2)
+                error = f"{error} (out of memory: restarting with {job.processes} CPU core{'s' if job.processes != 1 else ''})"
             now = time.monotonic()
             job.error_times = [t for t in job.error_times if now - t <= self.PROBLEM_WINDOW] + [now]
             job.restarts += 1

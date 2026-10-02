@@ -133,6 +133,11 @@ drawdown histogram cut at p99; All runs / Compare / Candidate pipeline removed; 
 `web/src/app/money.ts`), `chart_cluster(_distance)`, `prop_discount` (eval + reset, frozen at paper start); research runs restart
 themselves after errors (`JobManager._work_campaign`, `having_problems`); F11 fullscreen (`WindowApi`), `zoomable=False`;
 "Prop Trading"; Strategies opens Families; page skeletons; CI release pruning (`packaging/prune_releases.py`).
+ADR-91: research memory/speed: `FeatureCache(max_bytes)` (env `EDGELAB_FEATURE_CACHE_MB`; features.yaml count bound unchanged),
+`research/memory.py` memory plan (workers = what fits in free RAM, per-worker cache budgets, `memory_plan` in the run record), restart
+with half the cores after MemoryError; `core/memo.py` byte-bounded derived-input memo (HTF bars, session membership, trading dates)
+keyed by exact bar content hash; `BarArrays.content_hash` remembered while read-only (truncations via `_head_of`); zero-copy
+`hash_arrays`. Bit-identical (tests/test_memory_speed.py); never change the causality check's procedure.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -337,11 +342,11 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 - Known stale docs: a reference to a nonexistent `tests/test_reproducibility.py` in
   `research/runs.py`, ADR-10's `FAMILY_<hash>` id scheme (superseded for DSL strategies by
   ADR-23), and `reports/phase1_demo_output.txt` (recorded in an older environment).
-- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..90.
+- Full list: `ARCHITECTURE.md`, "Known limitations" sections and ADR-72..91.
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..90, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..91, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -410,4 +415,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-90). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-91). Update `README.md` status for phases.

@@ -48,11 +48,31 @@ def _arrays_hash(arrays: dict) -> str:
     return hash_arrays(np.array(names, dtype=object).astype(str), *(arrays[k] for k in names))
 
 
+DEFAULT_MEMORY_MB = 2048
+
+
+def memory_budget_bytes() -> int:
+    """ADR-91: size budget of a process's in-memory feature cache: env EDGELAB_FEATURE_CACHE_MB (set per worker by the
+    research memory plan; 0 = no size bound), else 2 GB. A runtime setting, never part of the research config."""
+    try:
+        mb = int(os.environ.get("EDGELAB_FEATURE_CACHE_MB", DEFAULT_MEMORY_MB))
+    except ValueError:
+        mb = DEFAULT_MEMORY_MB
+    return max(0, mb) * 1024 * 1024
+
+
 class FeatureCache:
-    def __init__(self, root: str | Path | None, verify: bool = True, memory_entries: int = 512):
+    def __init__(self, root: str | Path | None, verify: bool = True, memory_entries: int = 512,
+                 max_bytes: int | None = None):
         self.root = Path(root) if root else None
         self.verify = verify
         self.memory_entries = memory_entries
+        # ADR-91: the memory tier is ALSO bounded by size (bytes); the count bound comes from configs/features.yaml
+        # (part of the research settings fingerprint, so unchanged). A miss only means a disk read or a recompute of
+        # the same content-keyed result: results never depend on what is held in memory.
+        self.max_bytes = memory_budget_bytes() if max_bytes is None else int(max_bytes)
+        self._sizes: dict[str, int] = {}
+        self.bytes = 0
         self._mem: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.RLock()       # in-memory LRU + stats only
         self.stats = {"memory_hits": 0, "disk_hits": 0, "misses": 0, "writes": 0, "corrupt": 0}
@@ -132,15 +152,26 @@ class FeatureCache:
         self._count("writes")
 
     def _remember(self, key: str, arrays: dict) -> None:
+        size = int(sum(np.asarray(a).nbytes for a in arrays.values()))
         with self._lock:
+            if key in self._mem:
+                self.bytes -= self._sizes.pop(key, 0)
+            if self.max_bytes and size > self.max_bytes:     # larger than the whole budget: not kept in memory
+                self._mem.pop(key, None)
+                return
             self._mem[key] = arrays
             self._mem.move_to_end(key)
-            while len(self._mem) > self.memory_entries:
-                self._mem.popitem(last=False)
+            self._sizes[key] = size
+            self.bytes += size
+            while self._mem and (len(self._mem) > self.memory_entries or (self.max_bytes and self.bytes > self.max_bytes)):
+                old, _ = self._mem.popitem(last=False)
+                self.bytes -= self._sizes.pop(old, 0)
 
     def clear_memory(self) -> None:
         with self._lock:
             self._mem.clear()
+            self._sizes.clear()
+            self.bytes = 0
 
     def entries(self, dataset_id: str | None = None) -> list[dict]:
         """Metadata of stored entries (Feature Lab 'cache status')."""
@@ -172,23 +203,4 @@ class MemoryFeatureCache(FeatureCache):
     computed from, so an entry is only ever reused for byte-identical input."""
 
     def __init__(self, max_bytes: int):
-        super().__init__(None, verify=False, memory_entries=1 << 30)
-        self.max_bytes = int(max_bytes)
-        self._sizes: dict[str, int] = {}
-        self.bytes = 0
-
-    def _remember(self, key: str, arrays: dict) -> None:
-        size = int(sum(np.asarray(a).nbytes for a in arrays.values()))
-        with self._lock:
-            if key in self._mem:
-                self.bytes -= self._sizes.pop(key, 0)
-            if size > self.max_bytes:
-                self._mem.pop(key, None)
-                return
-            self._mem[key] = arrays
-            self._mem.move_to_end(key)
-            self._sizes[key] = size
-            self.bytes += size
-            while self.bytes > self.max_bytes and self._mem:
-                old, _ = self._mem.popitem(last=False)
-                self.bytes -= self._sizes.pop(old, 0)
+        super().__init__(None, verify=False, memory_entries=1 << 30, max_bytes=max(1, int(max_bytes)))

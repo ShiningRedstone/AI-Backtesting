@@ -160,7 +160,7 @@ def _daily_nr(inp, p):
     n = p["n"]
     b = inp.bars
     lv = _daily(inp, {})
-    td = inp.calendar.trading_dates(b.ts).astype(np.int64)
+    td = inp.calendar.trading_dates_of(b).astype(np.int64)
     size = len(b)
     rng = lv["prev_day_high"] - lv["prev_day_low"]
     _, first = np.unique(td, return_index=True)

@@ -48,7 +48,15 @@ class SessionCalendar:
     early_closes: Mapping[date, str] = field(default_factory=dict)  # trading date -> "13:00"
 
     def fingerprint(self) -> str:
-        """Stable hash of the full calendar definition (used in dataset + feature-cache identity)."""
+        """Stable hash of the full calendar definition (used in dataset + feature-cache identity). ADR-91: computed
+        once per (immutable) calendar object."""
+        fp = self.__dict__.get("_fp")
+        if fp is None:
+            fp = self._fingerprint()
+            object.__setattr__(self, "_fp", fp)
+        return fp
+
+    def _fingerprint(self) -> str:
         from edgelab.core.identity import hash_obj
         return hash_obj({"name": self.name, "tz": self.timezone, "open": self.session_open,
                          "close": self.session_close, "weekdays": list(self.trading_weekdays),
@@ -75,7 +83,18 @@ class SessionCalendar:
         return pd.Timedelta(minutes=(1440 - self.open_min) % 1440)
 
     def session_bounds(self, trading_date: date) -> tuple[pd.Timestamp, pd.Timestamp]:
-        """(open, close) of a trading date as tz-aware local timestamps."""
+        """(open, close) of a trading date as tz-aware local timestamps. ADR-91: remembered per date (a pure function
+        of the immutable calendar; Timestamps are immutable)."""
+        memo = self.__dict__.get("_bounds")
+        if memo is None:
+            memo = {}
+            object.__setattr__(self, "_bounds", memo)
+        hit = memo.get(trading_date)
+        if hit is None:
+            hit = memo[trading_date] = self._session_bounds(trading_date)
+        return hit
+
+    def _session_bounds(self, trading_date: date) -> tuple[pd.Timestamp, pd.Timestamp]:
         tz = self.timezone
         d = pd.Timestamp(trading_date)
         open_day = d - pd.Timedelta(days=1) if self.overnight else d
@@ -90,6 +109,16 @@ class SessionCalendar:
     # ---- vectorized ---------------------------------------------------------
     def local(self, ts_utc: pd.DatetimeIndex) -> pd.DatetimeIndex:
         return ts_utc.tz_convert(self.timezone)
+
+    def trading_dates_of(self, bars) -> np.ndarray:
+        """``trading_dates(bars.ts)``, remembered by the bars' exact content hash (ADR-91; read-only result)."""
+        from edgelab.core.memo import derived
+        head = bars.__dict__.get("_head_of")              # bar-by-bar: a truncation = the first k values of the full
+        if head is not None and head[0]._frozen() and bars._frozen():
+            parent, k = head
+            return self.trading_dates_of(parent)[:k]
+        return derived().get_or_compute(("trading_dates", bars.content_hash(), self.fingerprint()),
+                                        lambda: self.trading_dates(bars.ts))
 
     def trading_dates(self, ts_utc: pd.DatetimeIndex) -> np.ndarray:
         """Trading date (datetime64[D]) for each bar-open timestamp."""

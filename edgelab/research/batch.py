@@ -123,9 +123,14 @@ _WORKER: dict = {}
 
 
 def _worker_init(cfg: Mapping, config_hash: str, datasets: Mapping, cache_args: Mapping, root=None,
-                 causality_cache_mb: int | None = None) -> None:
+                 causality_cache_mb: int | None = None, feature_cache_mb: int | None = None,
+                 derived_cache_mb: int | None = None) -> None:
     if causality_cache_mb is not None:                      # ADR-77: each worker's share of the memory budget
         os.environ["EDGELAB_CAUSALITY_CACHE_MB"] = str(int(causality_cache_mb))
+    if feature_cache_mb is not None:                        # ADR-91: size bound of the worker's feature memory cache
+        os.environ["EDGELAB_FEATURE_CACHE_MB"] = str(int(feature_cache_mb))
+    if derived_cache_mb is not None:                        # ADR-91: size bound of the derived-input memo
+        os.environ["EDGELAB_DERIVED_CACHE_MB"] = str(int(derived_cache_mb))
     _WORKER["ctx"] = _CellContext(cfg, config_hash, datasets, cache_args, root)
 
 
@@ -154,7 +159,7 @@ def resolve_workers(canon: Mapping, workers: int | None) -> int:
 # ============================================================ runner
 def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None,
                cancel: Callable[[], bool] | None = None, include: Collection[str] | None = None,
-               on_cell: Callable[..., None] | None = None) -> dict:
+               on_cell: Callable[..., None] | None = None, on_plan: Callable[[dict], None] | None = None) -> dict:
     """Plan and run a search. `workers` (default: the spec's `workers`) > 1 computes cells in
     worker processes; results are always written by this process in plan order. Optional hooks
     for the background job manager (both default to the plain synchronous behaviour):
@@ -262,6 +267,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
             store.update_search_batch(sid, n_cancelled=counts["n_cancelled"])
 
     status = "completed"
+    mem: dict = {}                                          # ADR-91: the memory plan of a multi-core run
     try:
         if n_workers == 1:
             for k, c in enumerate(eligible):
@@ -299,7 +305,7 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
                                      "_error": out.get("error")}, k, len(eligible))
         else:
             status = _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prior, done,
-                                   sources, period, counts, record, cancel_rest, pids, on_cell)
+                                   sources, period, counts, record, cancel_rest, pids, on_cell, on_plan, mem)
     except Exception:
         with guard:
             store.update_search_batch(sid, status="failed", finished_at=_now())
@@ -310,12 +316,12 @@ def run_search(services, spec: Mapping, workers: int | None = None, *, lock=None
         store.update_search_batch(sid, status=status, finished_at=_now())
         out = search_summary(store, sid)
     out["execution"] = {"workers": n_workers, "mode": "sequential" if n_workers == 1 else "processes",
-                        "worker_processes": len(pids)}
+                        "worker_processes": len(pids), "memory_plan": mem or None}
     return out
 
 
 def _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prior, done, sources, period,
-                  counts, record, cancel_rest, pids, on_cell=None) -> str:
+                  counts, record, cancel_rest, pids, on_cell=None, on_plan=None, mem=None) -> str:
     """Workers compute; the parent consumes results in plan order and is the only writer. `on_cell` sees the same
     events as in sequential mode, in plan order ("start" when the parent starts waiting for that cell)."""
     import multiprocessing
@@ -335,12 +341,20 @@ def _run_parallel(services, plan, eligible, n_workers, guard, lock, cancel, prio
     datasets = {did: (load(did, None, lock) if load is not None else services.load_dataset(did)) for did in need}
     cache = services.cache
     cache_args = {"root": cache.root, "verify": cache.verify, "memory_entries": cache.memory_entries}
-    from edgelab.features.strategy_api import truncation_budget_mb
-    per_worker_mb = max(128, truncation_budget_mb() // n_workers)
+    # ADR-91: only as many workers as fit in the free memory, each with its own cache budgets (results never depend
+    # on the number of workers or on what a cache holds)
+    from edgelab.research import memory as M
+    mp = M.plan(n_workers, datasets.values())
+    n_workers = mp.processes
+    if mem is not None:
+        mem.update(mp.to_dict(), note=mp.note)
+    if on_plan is not None:
+        on_plan({**mp.to_dict(), "note": mp.note})
     pool = ProcessPoolExecutor(max_workers=n_workers, mp_context=multiprocessing.get_context("spawn"),
                                initializer=_worker_init,
                                initargs=(dict(services.cfg), plan.config_hash, datasets, cache_args,
-                                         getattr(services, "root", None), per_worker_mb))
+                                         getattr(services, "root", None), mp.truncation_cache_mb, mp.feature_cache_mb,
+                                         mp.derived_cache_mb))
     inflight: deque = deque()                               # futures in plan order
     nxt = 0
     stop = False

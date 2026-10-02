@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Research runs: no out-of-memory, faster, identical results (ADR-91)
+
+| Item | Status |
+|---|---|
+| The feature memory cache is limited by size (MB), not only by count; every worker gets a share | IMPLEMENTED, TESTED |
+| Before a multi-core run the app measures free memory and uses only as many cores as fit ("6 of 15 CPU cores: limited by memory") | IMPLEMENTED, TESTED |
+| An out-of-memory error restarts the run with half the cores | IMPLEMENTED, TESTED |
+| Repeated work removed: fingerprints, higher-timeframe bars, session membership, trading dates and calendar lookups are reused for identical data; hashing without copies | IMPLEMENTED, TESTED (bit-identical: 85 strategies' trades hashes unchanged; a run with tiny caches equals the default) |
+| Measured on a synthetic dataset as large as yours: 832 s → 411 s for 85 strategies (about 2× faster on one core); one process's peak memory 5.7 GB → 2.5 GB | TESTED (synthetic) |
+| Speed and memory on your PC | REQUIRES REAL DATA (runs on your PC) |
+| Backtests, fills, costs, sizing, prop rules, protocols, the causality check itself | UNCHANGED |
+
 ## Display and app round: pools, Live 50K OK, CHF, fee discounts, auto-restart (ADR-90)
 
 | Item | Status |

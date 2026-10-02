@@ -249,7 +249,7 @@ def _weekly(inp, p):
     out = {k: np.full(n, NAN) for k in keys}
     if n == 0:
         return out
-    td = cal.trading_dates(b.ts).astype("datetime64[D]").astype(np.int64)
+    td = cal.trading_dates_of(b).astype("datetime64[D]").astype(np.int64)
     wk = td - ((td + 3) % 7)                             # Monday (days since epoch) of the trading date's week
     last_wd = max(cal.trading_weekdays)                  # the week ends at the close of its last scheduled weekday
     df = pd.DataFrame({"i": wk, "o": b.open, "h": b.high, "l": b.low, "c": b.close})

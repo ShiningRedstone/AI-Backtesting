@@ -29,7 +29,10 @@ def hash_arrays(*arrays: np.ndarray) -> str:
         a = np.ascontiguousarray(a)
         h.update(str(a.dtype).encode())
         h.update(str(a.shape).encode())
-        h.update(a.tobytes())
+        if a.dtype.hasobject or not a.size:
+            h.update(a.tobytes())
+        else:                                  # ADR-91: the same bytes without a full copy (memoryview of the buffer)
+            h.update(memoryview(a.reshape(-1).view(np.uint8)))
     return h.hexdigest()
 
 

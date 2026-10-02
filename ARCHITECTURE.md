@@ -2389,3 +2389,46 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   - The CHF rate is whatever the user typed (no live rate).
   - Live 50K OK uses the stored trades' USD at the backtest's 50K sizing, not the risk-per-trade display amount.
   - Branch deletion could not be done from the build environment; merged idle branches are deleted by hand.
+
+### ADR-91 Research runs: no more out-of-memory, less repeated work, identical results
+- **Problem (user):** pool-2 research runs on 32 GB with "Automatic" cores (15 workers) failed with
+  `MemoryError: Unable to allocate 8.51 MiB for an array with shape (1114923,)`.
+  - Profiling one process on a synthetic dataset of the same size (1,114,700 one-minute bars plus 5m/15m/30m/60m)
+    measured a 5.7 GB peak: each worker keeps its own datasets and caches, and the feature memory cache was bounded by
+    entry count (512) only.
+  - 98% of the time was the causality check (21 recomputations of every feature on truncated histories). Inside it:
+    re-resampling to higher timeframes, session membership, trading dates and calendar bounds were recomputed for
+    every strategy, and the bars were re-hashed with full copies.
+- **Memory:**
+  - `FeatureCache` is also bounded by bytes (`max_bytes`; env `EDGELAB_FEATURE_CACHE_MB`, default 2 GB). The count
+    bound from `configs/features.yaml` is unchanged, since that file is part of the settings fingerprint.
+  - `research/memory.py` plans a multi-core run: free memory (`GlobalMemoryStatusEx` / `/proc/meminfo`), each worker's
+    measured fixed cost (its datasets × 2 for the period copy, plus process overhead), and per-worker cache budgets
+    (feature, truncation, derived).
+  - It uses only as many workers as fit; the live run shows "6 of 15 CPU cores: limited by memory (12.4 GB free)" and
+    the run record keeps `memory_plan`.
+  - An out-of-memory failure (MemoryError / BrokenProcessPool) makes the automatic restart halve the cores (minimum 1).
+  - `hash_arrays` hashes a byte view instead of `tobytes()` copies; the digests are identical.
+- **Less repeated work (bit-identical):**
+  - `BarArrays.content_hash` is remembered per object while every array is read-only, which `BarArrays` guarantees and
+    unpickling now restores. A truncation (`head(k)`) asks its parent per length. If an array was made writeable again,
+    the hash is recomputed from the bytes. `verify_unchanged` uses the same rule.
+  - `core/memo.py` is a byte-bounded memo keyed by exact bar content hash + calendar/session definition. It holds:
+    - higher-timeframe bars (`build_htf`);
+    - session membership (`SessionWindow.membership_of`);
+    - trading dates (`SessionCalendar.trading_dates_of`).
+
+    Membership and trading dates are computed bar by bar, so a truncation's values are the full result's first k values
+    (proven equal in tests).
+  - `session_bounds` and calendar/session fingerprints are remembered per immutable object.
+  - Per-bar dictionary lookups in `resample_bars` / `build_htf` are vectorized (`searchsorted`).
+  - The causality check itself is unchanged: the same cuts, 21 full signal recomputations and every comparison.
+- **Measured** (85 strategies, one per family of both pools, one process): 832 s → 541 s with the memos, and → 411 s
+  with worker-sized caps and truncations reusing the full membership / trading dates. The peak memory of one process
+  went from 5.7 GB to 2.5 GB.
+  - All 85 trades hashes are identical in every run, and a run with tiny caches (constant evictions) equals the default
+    run cell for cell.
+  - The plan's per-worker overhead (1.2 GB) comes from this measurement; with 25 GB free, 8 workers.
+  - Real runs (hundreds of strategies per family on the same datasets) reuse more.
+- **Unchanged:** engine, fills, costs, sizing, compiler, prop rules, protocols, identities, the causality check's
+  procedure, the Phase 1 demo.

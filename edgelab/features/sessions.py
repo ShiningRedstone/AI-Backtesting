@@ -57,7 +57,23 @@ class SessionWindow:
                 "end": self.end, "weekdays": list(self.weekdays)}
 
     def fingerprint(self) -> str:
-        return hash_obj(self.definition())
+        fp = self.__dict__.get("_fp")                     # ADR-91: once per (immutable) window object
+        if fp is None:
+            fp = hash_obj(self.definition())
+            object.__setattr__(self, "_fp", fp)
+        return fp
+
+    def membership_of(self, bars) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``membership(bars.ts_ns)``, remembered by the bars' exact content hash (ADR-91; read-only arrays).
+        ``membership`` is computed bar by bar (each value depends only on that bar's own timestamp), so for a
+        causality-check truncation ``bars.head(k)`` it is exactly the first k values of the full bars' result."""
+        from edgelab.core.memo import derived
+        head = bars.__dict__.get("_head_of")
+        if head is not None and head[0]._frozen() and bars._frozen():
+            parent, k = head
+            return tuple(a[:k] for a in self.membership_of(parent))
+        return derived().get_or_compute(("session_membership", bars.content_hash(), self.fingerprint()),
+                                        lambda: self.membership(bars.ts_ns))
 
     def membership(self, ts_ns: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """-> (in_session bool, instance int64 [days since epoch of local start date; -1 outside],

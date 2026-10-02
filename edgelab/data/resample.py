@@ -23,9 +23,9 @@ def resample_bars(df: pd.DataFrame, calendar: SessionCalendar, tf_minutes: int) 
         raise ValueError("resample requires sorted bars (run clean_bars first)")
     td = calendar.trading_dates(ts_idx)
     uniq = np.unique(td)
-    open_ns = {d: calendar.session_bounds(pd.Timestamp(d).date())[0].tz_convert("UTC").as_unit("ns").value
-               for d in uniq}
-    sess_open = np.array([open_ns[d] for d in td], dtype=np.int64) if len(td) else np.array([], np.int64)
+    open_ns = np.array([calendar.session_bounds(pd.Timestamp(d).date())[0].tz_convert("UTC").as_unit("ns").value
+                        for d in uniq], dtype=np.int64)
+    sess_open = open_ns[np.searchsorted(uniq, td)] if len(td) else np.array([], np.int64)   # ADR-91: vectorized lookup
     since = ts_idx.asi8 - sess_open
     if (since < 0).any():
         raise ValueError("bar precedes its session open - calendar/timezone mismatch")

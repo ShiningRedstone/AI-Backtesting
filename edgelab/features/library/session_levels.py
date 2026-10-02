@@ -41,7 +41,7 @@ def _instance_levels(b, ts_close, member, inst, end_of_instance):
 def _session(inp, p):
     w = inp.session(p["session"])
     b = inp.bars
-    member, inst, into = w.membership(b.ts_ns)
+    member, inst, into = w.membership_of(b)
     lv = _instance_levels(b, inp.ts_close_ns, member, inst, w.end_ns)
     return {"in_session": member.astype(float), "minutes_into": into,
             "bars_into": lv["bars_into"], "session_open": lv["open"],
@@ -75,7 +75,7 @@ register(FeatureDef(
 
 def _daily(inp, p):
     b, cal = inp.bars, inp.calendar
-    td = cal.trading_dates(b.ts).astype(np.int64)
+    td = cal.trading_dates_of(b).astype(np.int64)
     member = np.ones(len(b), bool)
 
     def ends(days):
@@ -113,7 +113,7 @@ register(FeatureDef(
 def _time_of_day(inp, p):
     b = inp.bars
     loc = b.ts.tz_convert(p["timezone"])
-    td = inp.calendar.trading_dates(b.ts)
+    td = inp.calendar.trading_dates_of(b)
     td_wd = ((td.astype("datetime64[D]").astype(np.int64) + 3) % 7).astype(float)   # 1970-01-01 = Thu
     return {"weekday": np.asarray(loc.dayofweek, float),
             "trading_weekday": td_wd,
