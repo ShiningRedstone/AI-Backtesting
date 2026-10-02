@@ -105,6 +105,10 @@ ADR-85: Run backtest → Holdout backtest (`/holdout`, `research/holdout.py`: su
 negative months ×2; `HoldoutJob` in the one-at-a-time JobManager; auto-shortlist; `evaluate_holdout` per strategy) and Backtest
 results → Holdout results (`/holdout-results` = explorer `scope=holdout`); holdout gate made timeframe-aware (`stage_of(tf_ns)`,
 `Services._holdout_dataset` checks everything BEFORE a look is spent).
+ADR-86: strategy pool 2 (`strategy/factory_space_p2.py`: 25 new families + new variables for the 30 old ones, 6,000/4,000, risk sizing only,
+pool-1 logic excluded; `factory.generate(S=)` keeps pool 1 = FM_3B0B01CFC81AB15E byte-identical); 9 new indicators (`features/library/trend_extra.py`);
+`research/pool2.py` (Research runs: "Create strategy pool 2", then "Switch" typed SWITCH -> `create_protocol(replaces=)` 20,000 budget,
+holdout looks carried over, both pools frozen as sibling campaigns `protocol_siblings`).
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -282,7 +286,7 @@ events/regimes, instruments/datasets, strategy families and controlled variation
 
 ## Where things are
 
-- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..85, known
+- Docs: `README.md` (status, quickstart), `ARCHITECTURE.md` (layers, module maps, ADR-1..86, known
   limitations), `CHANGELOG.md` (per change: IMPLEMENTED/TESTED/NOT IMPLEMENTED/REQUIRES REAL DATA, newest first),
   `CONFIG.md`, `DATA_IMPORT.md`, `FEATURES.md` (generated; drift-tested), `STRATEGY_DSL.md`,
   `STRATEGY_GENERATION.md`, `WEB_UI.md`, `DESKTOP_PACKAGING.md` (desktop app, installer, updater, CI),
@@ -346,4 +350,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-85). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-86). Update `README.md` status for phases.

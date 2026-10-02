@@ -11,8 +11,9 @@ import re
 from typing import Any, Mapping
 
 from edgelab.strategy import factory_space as S
+from edgelab.strategy import factory_space_p2 as P2
 
-_FAMILIES = {f.fid: f for f in S.FAMILIES}
+_FAMILIES = {f.fid: f for f in S.FAMILIES} | {f.fid: f for f in P2.NEW_FAMILIES}     # pool 2 (ADR-86): 25 new families
 
 SESSION_TEXT = {
     "asia": "the Asia session", "london": "the London session", "london_morning": "the London morning",
@@ -20,6 +21,9 @@ SESSION_TEXT = {
     "ny_afternoon": "the New York afternoon", "ny_first30": "the first 30 minutes of the New York open",
     "ny_last90": "the last 90 minutes of the New York session", "ny_morning": "the New York morning",
     "ny_open": "the New York open", "ny_rth": "New York regular hours",
+    "ny_1000_1100": "New York 10:00-11:00", "ny_lunch": "the New York lunch hours", "ny_last30": "the last 30 minutes "
+    "of the New York session", "london_close": "the London close (New York 10:00-12:00)",
+    "ny_evening": "the New York evening (20:00-23:00)",
 }
 STOP_TEXT = {
     "points": "a fixed-points stop", "atr": "an ATR-based stop", "swing": "a stop at the last swing",
@@ -27,12 +31,16 @@ STOP_TEXT = {
     "ma": "a moving-average stop", "chandelier": "a chandelier (ATR from the extreme) stop", "channel": "a channel stop",
     "day_structure": "a stop at the day's structure level", "range_side": "a stop at the far side of the range",
     "zone": "a stop at the setup's invalidation level",
+    "pct": "a percent-of-price stop", "stdev": "a standard-deviation stop", "range_mid": "a stop at the middle of the range",
 }
 TARGET_TEXT = {
     "none": None, "points": "a fixed-points target", "rr": "a risk-multiple target", "atr": "an ATR-based target",
     "prev_day_level": "the previous day's level as target", "swing": "the opposite swing as target",
     "session_level": "the session level as target", "band_far": "the far band as target", "band_mid": "the middle band as target",
     "ma": "the moving average as target", "range_opposite": "the opposite side of the range as target",
+    "prior_close": "the prior New York close as target", "pivot": "the R1/S1 pivot as target",
+    "fib_ext": "a Fibonacci extension as target", "midnight_open": "the New York midnight open as target",
+    "range_ext": "an opening-range extension as target",
 }
 TRAIL_TEXT = {
     "none": None, "atr": "an ATR trailing stop", "breakeven": "a move to breakeven", "chandelier": "a chandelier trailing stop",
@@ -45,6 +53,11 @@ REGIME_TEXT = {
     "ma_alignment": "aligned moving averages", "above_day_open": "price on the day-open side",
     "overnight_gap": "an overnight gap", "prior_day_direction": "agreement with the prior day's direction",
     "prior_day_nr": "a narrow-range prior day",
+    "sma200_trend": "the 200-bar SMA trend side", "above_prior_close": "price on the prior-close side",
+    "open_inside_prior_range": "an open inside the prior regular session's range",
+    "open_outside_prior_range": "an open outside the prior regular session's range",
+    "gap_large": "a large opening gap", "gap_small": "a small opening gap",
+    "wide_first_hour": "a wide first hour", "narrow_first_hour": "a narrow first hour",
 }
 CONFIRM_TEXT = {"none": None, "candle": "a candle confirmation", "close_strength": "a close-strength confirmation",
                 "momentum": "a momentum confirmation", "trend": "a trend confirmation"}
@@ -56,7 +69,8 @@ MTF_TEXT = {"htf_ema_trend": "the higher-timeframe EMA trend", "htf_ema_slope": 
             "htf_vol_regime": "the higher-timeframe volatility regime"}
 WEEKDAY_TEXT = {"all": None, "mon": "Mondays only", "tue": "Tuesdays only", "wed": "Wednesdays only", "thu": "Thursdays only",
                 "fri": "Fridays only", "mon_thu": "Monday to Thursday", "tue_fri": "Tuesday to Friday", "tue_thu": "Tuesday to Thursday"}
-ORDER_TEXT = {"market": "market orders", "stop": "resting stop orders", "limit": "resting limit orders"}
+ORDER_TEXT = {"market": "market orders", "stop": "resting stop orders", "limit": "resting limit orders",
+              "bar_stop": "stop orders beyond the signal bar", "bar_limit": "limit orders at 50% of the signal bar"}
 
 
 def humanize(key: Any) -> str:

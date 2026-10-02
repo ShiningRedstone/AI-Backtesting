@@ -889,6 +889,26 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def holdout_cancel(jid):                        # stops BEFORE the next strategy; a granted test always finishes
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
+    # ------------------------------------------------------------------ strategy pool 2 (ADR-86)
+    @app.get("/api/pool2")
+    def pool2_status():
+        return jsonify(call(svc.pool2_status))
+
+    @app.post("/api/pool2/generate")
+    def pool2_generate():
+        return jsonify(call(svc.start_pool2_job, "generate")), 202
+
+    @app.post("/api/pool2/switch")
+    def pool2_switch():
+        conf = body().get("confirm")
+        if not isinstance(conf, str):
+            raise _bad("confirm must be the confirmation word")
+        return jsonify(call(svc.start_pool2_job, "switch", conf)), 202
+
+    @app.get("/api/pool2/jobs/<jid>")
+    def pool2_job(jid):                             # lock-free: in-memory job record
+        return jsonify(svc.pool2_job(_id(jid, JOB_ID, "job id")))
+
     @app.get("/api/research/searches")
     def research_searches():
         return jsonify(call(svc.list_searches))

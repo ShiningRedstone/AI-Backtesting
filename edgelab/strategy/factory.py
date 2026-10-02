@@ -45,6 +45,9 @@ TF_WEIGHTS = {"1m": 0.15, "5m": 0.35, "15m": 0.25, "30m": 0.15, "60m": 0.10}
 MTF_PROBABILITY = 0.35
 
 
+_POOL1 = S                    # the pool-1 space (ADR-60); pool 2 passes factory_space_p2 as ``S`` (ADR-86)
+
+
 class FactoryError(RuntimeError):
     pass
 
@@ -71,7 +74,7 @@ class Draw:
         return vals[-1]
 
 
-def family_spec(fam: S.Family) -> dict:
+def family_spec(fam: S.Family, S=S) -> dict:
     """The declarative definition of a family (what a manifest row's family hash pins)."""
     return {"num": fam.num, "family_id": fam.fid, "name": fam.name, "group": fam.group, "hypothesis": fam.hypothesis,
             "parameters": {k: list(v) for k, v in sorted(fam.params.items())}, "timeframes": list(fam.timeframes),
@@ -82,12 +85,12 @@ def family_spec(fam: S.Family) -> dict:
             "ict_setup_params": {k: sorted(v) for k, v in sorted(S.ICT_PARAMS.items())} if fam.fid == "ict_liquidity_fvg" else None}
 
 
-def family_hash(fam: S.Family) -> str:
-    return hash_obj(family_spec(fam))
+def family_hash(fam: S.Family, S=S) -> str:
+    return hash_obj(family_spec(fam, S))
 
 
-def catalog_hash() -> str:
-    return hash_obj([[f.fid, family_hash(f)] for f in S.FAMILIES])
+def catalog_hash(S=S) -> str:
+    return hash_obj([[f.fid, family_hash(f, S)] for f in S.FAMILIES])
 
 
 def _json_key(v) -> str:
@@ -95,13 +98,13 @@ def _json_key(v) -> str:
 
 
 # =============================================================================== sampling
-def sample_choice(fam: S.Family, seed: int, seq: int) -> dict:
+def sample_choice(fam: S.Family, seed: int, seq: int, S=S) -> dict:
     d = Draw(seed, fam.fid, seq)
     p = {k: d.pick(f"param.{k}", vals) for k, vals in sorted(fam.params.items())}
     if fam.inactive:
         for k in sorted(fam.inactive(p)):
             p[k] = fam.params[k][0]                 # pinned: never varied when it has no effect
-    tf = d.pick("timeframe", fam.timeframes, TF_WEIGHTS)
+    tf = d.pick("timeframe", fam.timeframes, getattr(S, "TF_WEIGHTS", TF_WEIGHTS))
     tfm = timeframe_minutes(tf)
     ch: dict = {"family_params": p, "timeframe": tf,
                 "session": None if fam.window else d.pick(
@@ -110,13 +113,14 @@ def sample_choice(fam: S.Family, seed: int, seq: int) -> dict:
                 "direction": d.pick("direction", S.DIRECTIONS, S.DIRECTIONS),
                 "weekdays": d.pick("weekdays", S.WEEKDAY_SETS, {k: v[0] for k, v in S.WEEKDAY_SETS.items()})}
     ch["mtf"] = None
-    if fam.mtf and S.MTF_PAIRS.get(tf) and d.u("mtf.use") < MTF_PROBABILITY:
+    if fam.mtf and S.MTF_PAIRS.get(tf) and d.u("mtf.use") < getattr(S, "MTF_PROBABILITY", MTF_PROBABILITY):
         ch["mtf"] = {"filter": d.pick("mtf.filter", S.MTF_FILTERS), "htf": d.pick("mtf.htf", S.MTF_PAIRS[tf])}
     regs = [r for r in fam.regimes if r != "none"]
     ch["regime"] = "none" if d.u("regime.use") < 0.5 or not regs else d.pick("regime", regs)
     confs = [c for c in fam.confirms if c != "none"]
     ch["confirm"] = "none" if d.u("confirm.use") < 0.6 or not confs else d.pick("confirm", confs)
-    orders = ["market"] + (["stop"] if fam.stop_entry else []) + (["limit"] if fam.limit_entry else [])
+    orders = ["market"] + (["stop"] if fam.stop_entry else []) + (["limit"] if fam.limit_entry else []) + \
+        list(getattr(S, "EXTRA_ORDER_TYPES", ()))
     ch["order"] = {"type": "market" if len(orders) == 1 or d.u("order.use") < 0.6 else d.pick("order", orders[1:])}
     if ch["order"]["type"] != "market":
         ch["order"]["expiry_bars"] = d.pick("order.expiry", S.ORDER_EXPIRY)
@@ -133,9 +137,9 @@ def sample_choice(fam: S.Family, seed: int, seq: int) -> dict:
     sx = {"none": 0.5, "opposite_signal": 0.25, "reversal": 0.25} if fam.reversal_exit and fam.reversal else \
         {"none": 0.7, "opposite_signal": 0.3}
     ch["signal_exit"] = d.pick("signal_exit", sx, sx)
-    ch["trailing"] = sample_trailing(d, tfm)
+    ch["trailing"] = sample_trailing(d, tfm, S)
     ch["sizing"] = d.pick("sizing", S.SIZING, S.SIZING)
-    ch["no_progress"] = sample_no_progress(d, tfm)
+    ch["no_progress"] = sample_no_progress(d, tfm, S)
     ch["max_trades"] = d.pick("max_trades", S.MAX_TRADES, S.MAX_TRADES)
     rk = d.pick("reentry.kind", S.REENTRY, S.REENTRY)
     rm = d.pick("reentry.minutes", S.REENTRY_MINUTES)
@@ -144,7 +148,7 @@ def sample_choice(fam: S.Family, seed: int, seq: int) -> dict:
     return ch
 
 
-def sample_no_progress(d: Draw, tfm: int) -> dict:
+def sample_no_progress(d: Draw, tfm: int, S=S) -> dict:
     """No-progress exit (ADR-62). All draws are unconditional so the stream never depends on the outcome."""
     on = d.pick("no_progress.use", S.NO_PROGRESS, S.NO_PROGRESS) == "yes"
     bars = d.pick("no_progress.bars", S.NO_PROGRESS_BARS)
@@ -154,7 +158,7 @@ def sample_no_progress(d: Draw, tfm: int) -> dict:
     return {"type": "none"} if not on else {"type": "yes", "bars": bars, "kind": kind, "value": value}
 
 
-def sample_trailing(d: Draw, tfm: int) -> dict:
+def sample_trailing(d: Draw, tfm: int, S=S) -> dict:
     """Trailing choice (ADR-61). Every draw is made unconditionally so the stream never depends on the kind."""
     kind = d.pick("trailing.kind", S.TRAIL_KINDS, S.TRAIL_KINDS)
     tr: dict = {"type": kind}
@@ -195,7 +199,7 @@ class Ctx:
     sessions: dict = field(default_factory=dict)
 
 
-def _windows(fam: S.Family, ch: Mapping) -> tuple[S.Window, str]:
+def _windows(fam: S.Family, ch: Mapping, S=S) -> tuple[S.Window, str]:
     if fam.window:
         return fam.window(ch["family_params"]), f"{fam.fid}_anchored"
     return S.SESSION_PRESETS[ch["session"]], ch["session"]
@@ -213,7 +217,7 @@ def _ny_interval(tz: str, start: str, end: str) -> list[tuple[int, int]]:
     return out
 
 
-def check_session(fam: S.Family, ch: Mapping, w: S.Window, tfm: int) -> None:
+def check_session(fam: S.Family, ch: Mapping, w: S.Window, tfm: int, S=S) -> None:
     flat = S.mins(w.flat) - S.FLAT_RULES[ch["flat_rule"]][1]
     e0, e1 = S.mins(w.entry_start), S.mins(w.entry_end)
     for name, t in (("entry_start", e0), ("entry_end", e1), ("flat", flat)):
@@ -228,6 +232,8 @@ def check_session(fam: S.Family, ch: Mapping, w: S.Window, tfm: int) -> None:
         if r:
             raise Reject("session", r, f"session {ch['session']!r} not valid for this setup")
     refs = fam.references(ch["family_params"]) if fam.references else {}
+    if hasattr(S, "choice_refs"):                      # pool-2 filters / targets that read a reference window
+        refs = {**refs, **S.choice_refs(ch)}
     for rname, (tz, wd, a, b) in refs.items():
         if (S.mins(a) % tfm) or (S.mins(b) % tfm):
             raise Reject("session", "SESSION_TF_MISALIGNED", f"reference window {a}-{b} is not on the {tfm}m grid")
@@ -241,23 +247,27 @@ def check_session(fam: S.Family, ch: Mapping, w: S.Window, tfm: int) -> None:
 
 
 # =============================================================================== building
-def _stop_level(fam, ch, ctx, s):
+def _stop_level(fam, ch, ctx, s, S=S):
     st = ch["stop"]
     if st["type"] == "range_side":
         return S.off(S._ref_level(S._orb_ref(ctx.p), -s), st["buffer"], -s)
     if st["type"] == "zone":
         return S.off(fam.zone_stop(ctx.p, s), st["buffer"], -s)
+    if hasattr(S, "stop_level_ext"):                   # pool-2 stops that need the family / its parameters
+        lvl = S.stop_level_ext(fam, ctx.p, st, s)
+        if lvl is not None:
+            return lvl
     return S.stop_operand(st["type"], st, s)
 
 
-def _stop_block(fam, ch, ctx, sides) -> dict:
+def _stop_block(fam, ch, ctx, sides, S=S) -> dict:
     st = ch["stop"]
     if st["type"] in ("points", "atr"):
         return S.stop_operand(st["type"], st, 1)
-    return {"type": "price", **{side: _stop_level(fam, ch, ctx, 1 if side == "long" else -1) for side in sides}}
+    return {"type": "price", **{side: _stop_level(fam, ch, ctx, 1 if side == "long" else -1, S) for side in sides}}
 
 
-def _target_block(ch, sides) -> dict:
+def _target_block(ch, sides, S=S, fam=None, ctx=None) -> dict:
     t = ch["target"]
     k = t["type"]
     if k == "none":
@@ -268,17 +278,21 @@ def _target_block(ch, sides) -> dict:
         return {"type": "atr", "multiple": float(t["multiple"]), "period": 14}
     if k == "rr":
         return {"type": "risk_reward", "multiple": float(t["multiple"])}
+    if hasattr(S, "target_level_ext"):                 # pool-2 targets that need the family / its parameters
+        lv = {side: S.target_level_ext(fam, ctx.p, t, 1 if side == "long" else -1) for side in sides}
+        if all(v is not None for v in lv.values()):
+            return {"type": "price", **lv}
     return {"type": "price", **{side: S.target_operand(k, t, 1 if side == "long" else -1) for side in sides}}
 
 
-def _sizing(key: str) -> dict:
+def _sizing(key: str, S=S) -> dict:
     """Sizing block. Every mode trades WHOLE contracts of the execution contract (ADR-63)."""
-    out = _sizing_mode(key)
+    out = _sizing_mode(key, S)
     out["contract"] = S.EXECUTION_CONTRACT
     return out
 
 
-def _sizing_mode(key: str) -> dict:
+def _sizing_mode(key: str, S=S) -> dict:
     """No account size here: the strategy's identity must not depend on the account (the run supplies it)."""
     if key in S.FIXED_QUANTITY:
         return {"mode": "fixed", "quantity": S.FIXED_QUANTITY[key]}
@@ -289,11 +303,11 @@ def _sizing_mode(key: str) -> dict:
     raise KeyError(key)
 
 
-def build_definition(fam: S.Family, ch: Mapping) -> tuple[dict, Ctx]:
+def build_definition(fam: S.Family, ch: Mapping, S=S) -> tuple[dict, Ctx]:
     tf = ch["timeframe"]
     tfm = timeframe_minutes(tf)
     p = dict(ch["family_params"])
-    w, skey = _windows(fam, ch)
+    w, skey = _windows(fam, ch, S)
     flat = S.mins(w.flat) - S.FLAT_RULES[ch["flat_rule"]][1]
     hold_end = S.hm(flat - tfm)
     ename = S.session_name("FXE", w.tz, w.weekdays, w.entry_start, w.entry_end)
@@ -303,6 +317,9 @@ def build_definition(fam: S.Family, ch: Mapping) -> tuple[dict, Ctx]:
                 hname: S.session_def(w.tz, w.weekdays, w.entry_start, hold_end)}
     if fam.references:
         for rn, (tz, wd, a, b) in fam.references(p).items():
+            sessions[rn] = S.session_def(tz, wd, a, b)
+    if hasattr(S, "choice_refs"):
+        for rn, (tz, wd, a, b) in S.choice_refs(ch).items():
             sessions[rn] = S.session_def(tz, wd, a, b)
     ctx.sessions = sessions
     direction = ch["direction"]
@@ -315,16 +332,21 @@ def build_definition(fam: S.Family, ch: Mapping) -> tuple[dict, Ctx]:
         s = 1 if side == "long" else -1
         if otype == "market":
             core = S.lagged(fam.entry(p, s, ctx), ch["entry_delay"])
+        elif otype in getattr(S, "EXTRA_ORDER_TYPES", ()):      # pool 2: resting order at the signal bar
+            core, level = fam.entry(p, s, ctx), S.signal_bar_level(otype, s)
+            order["type"] = S.EXTRA_ORDER_TYPES[otype]
+            order[f"{side}_price"] = level
         else:
             core, level = (fam.stop_entry if otype == "stop" else fam.limit_entry)(p, s, ctx)
             order[f"{side}_price"] = level
-        conds = [core, S.regime_cond(ch["regime"], s), S.confirm_cond(ch["confirm"], s)]
+        reg = S.regime_cond_for(ch, s) if hasattr(S, "regime_cond_for") else S.regime_cond(ch["regime"], s)
+        conds = [core, reg, S.confirm_cond(ch["confirm"], s)]
         if ch["mtf"]:
             conds.append(S.mtf_cond(ch["mtf"]["filter"], ch["mtf"]["htf"], s))
         if ch["stop_bounds"] != "none":
             ref = order.get(f"{side}_price", S.CLOSE)
-            dist = S.ar("sub", ref, _stop_level(fam, ch, ctx, s)) if s > 0 else \
-                S.ar("sub", _stop_level(fam, ch, ctx, s), ref)
+            dist = S.ar("sub", ref, _stop_level(fam, ch, ctx, s, S)) if s > 0 else \
+                S.ar("sub", _stop_level(fam, ch, ctx, s, S), ref)
             conds += [S.cmp(dist, ">=", S.ar("mul", 0.5, S.ATR)), S.cmp(dist, "<=", S.ar("mul", 3.0, S.ATR))]
         entry[side] = S.ALL(*conds)
         exits = [flat_condition(hname)]
@@ -356,7 +378,7 @@ def build_definition(fam: S.Family, ch: Mapping) -> tuple[dict, Ctx]:
         entry["reentry"] = {"block_day_after": "target"}
     elif rk == "cooldown_after_exit":
         entry["reentry"] = {"cooldown_bars": ch["reentry"]["minutes"] // tfm}
-    exit_ = {"stop": _stop_block(fam, ch, ctx, sides), "target": _target_block(ch, sides),
+    exit_ = {"stop": _stop_block(fam, ch, ctx, sides, S), "target": _target_block(ch, sides, S, fam, ctx),
              "max_hold_bars": int(max_hold), "signal": signal}
     npg = ch["no_progress"]
     if npg["type"] == "yes":
@@ -367,20 +389,20 @@ def build_definition(fam: S.Family, ch: Mapping) -> tuple[dict, Ctx]:
     if trailing:
         exit_["trailing"] = trailing
     defn = {"dsl_version": DSL_VERSION, "name": f"{fam.fid}_candidate",
-            "description": describe(fam, ch),
+            "description": describe(fam, ch, S),
             "family": {"id": fam.fid, "name": fam.name, "category": fam.group, "hypothesis": fam.hypothesis},
-            "timeframe": tf, "sessions": sessions, "entry": entry, "exit": exit_, "sizing": _sizing(ch["sizing"])}
+            "timeframe": tf, "sessions": sessions, "entry": entry, "exit": exit_, "sizing": _sizing(ch["sizing"], S)}
     return defn, ctx
 
 
-def describe(fam: S.Family, ch: Mapping) -> str:
+def describe(fam: S.Family, ch: Mapping, S=S) -> str:
     """Plain-language rule summary (no performance language)."""
     p = ", ".join(f"{k}={v}" for k, v in sorted(ch["family_params"].items()))
     m = f"; HTF {ch['mtf']['filter']}@{ch['mtf']['htf']}" if ch["mtf"] else ""
     return (f"{fam.name} [{p}] on {ch['timeframe']}{m}; session {ch['session'] or 'anchored'} ({ch['flat_rule']}); "
             f"{ch['direction']}; stop {ch['stop']['type']}; target {ch['target']['type']}; "
             f"trailing {ch['trailing']['type']}; "
-            f"generated by {FACTORY_VERSION} (day-trading, flat same NY trading date)")
+            f"generated by {getattr(S, 'FACTORY_VERSION', FACTORY_VERSION)} (day-trading, flat same NY trading date)")
 
 
 # =============================================================================== validation
@@ -401,7 +423,7 @@ def _check_param_domain(fam: S.Family, ch: Mapping) -> None:
             raise Reject("parameter_domain", r, str(p))
 
 
-def _check_structure(fam: S.Family, ch: Mapping) -> None:
+def _check_structure(fam: S.Family, ch: Mapping, S=S) -> None:
     tk = (ch.get("trailing") or {}).get("type", "none")
     if tk in S.NOT_EXECUTABLE["trailing"]:
         code = S.NOT_EXECUTABLE["trailing"][tk]
@@ -432,7 +454,11 @@ def _check_structure(fam: S.Family, ch: Mapping) -> None:
     if ch["confirm"] not in fam.confirms:
         raise Reject("entry_exit", "REDUNDANT_OR_INAPPLICABLE_FILTER", f"confirm {ch['confirm']!r} for {fam.fid}")
     otype = ch["order"]["type"]
-    if (otype == "stop" and not fam.stop_entry) or (otype == "limit" and not fam.limit_entry):
+    if otype in getattr(S, "EXTRA_ORDER_TYPES", ()):
+        pass
+    elif otype not in ("market", "stop", "limit"):
+        raise Reject("entry_exit", "ORDER_TYPE_NOT_APPLICABLE", f"{otype} entry for {fam.fid}")
+    elif (otype == "stop" and not fam.stop_entry) or (otype == "limit" and not fam.limit_entry):
         raise Reject("entry_exit", "ORDER_TYPE_NOT_APPLICABLE", f"{otype} entry for {fam.fid}")
     if otype != "market" and ch["entry_delay"]:
         raise Reject("entry_exit", "DELAY_WITH_RESTING_ORDER", "entry delay applies to market entries only")
@@ -458,8 +484,8 @@ def _check_structure(fam: S.Family, ch: Mapping) -> None:
     if tg["type"] == "none" and ch["signal_exit"] == "none" and te == "window":
         raise Reject("entry_exit", "NO_TARGET_WITHOUT_EXIT_RULE",
                      "no target needs a signal exit or a time exit shorter than the session")
-    w, _ = _windows(fam, ch)
-    check_session(fam, ch, w, tfm)
+    w, _ = _windows(fam, ch, S)
+    check_session(fam, ch, w, tfm, S)
     flat = S.mins(w.flat) - S.FLAT_RULES[ch["flat_rule"]][1]
     hold = (flat - S.mins(w.entry_start)) % 1440
     if te != "window":
@@ -475,8 +501,8 @@ def _check_structure(fam: S.Family, ch: Mapping) -> None:
     if tg["type"] == "rr" and st["type"] == "atr" and st["multiple"] * tg["multiple"] > reach:
         raise Reject("stop_target", "TARGET_UNREACHABLE_IN_WINDOW",
                      f"{st['multiple']}x{tg['multiple']} ATR target > 1.5*sqrt({bars} bars)")
-    _check_trailing(ch, tfm, bars)
-    _check_management(fam, ch, tfm, bars, w, flat)
+    _check_trailing(ch, tfm, bars, S)
+    _check_management(fam, ch, tfm, bars, w, flat, S)
     cd = S.COOLDOWNS[ch["cooldown"]][1]
     e_len = (S.mins(w.entry_end) - S.mins(w.entry_start)) % 1440
     if isinstance(cd, int) and cd < tfm:
@@ -490,7 +516,7 @@ def _check_structure(fam: S.Family, ch: Mapping) -> None:
             raise Reject("entry_exit", "REDUNDANT_FLAT_RULE", "the time exit always binds before the earlier flat")
 
 
-def _check_management(fam: S.Family, ch: Mapping, tfm: int, bars: int, w: S.Window, flat: int) -> None:
+def _check_management(fam: S.Family, ch: Mapping, tfm: int, bars: int, w: S.Window, flat: int, S=S) -> None:
     """No-progress exit, per-strategy trade cap and exit-based re-entry (ADR-62): domains and redundancy."""
     npg, cap, re_ = ch["no_progress"], ch["max_trades"], ch["reentry"]
     tgt = ch["target"]
@@ -520,7 +546,7 @@ def _check_management(fam: S.Family, ch: Mapping, tfm: int, bars: int, w: S.Wind
         if m >= e_len:
             raise Reject("entry_exit", "REDUNDANT_REENTRY", f"{m} min >= the {e_len} min entry window")
 
-def _check_trailing(ch: Mapping, tfm: int, bars: int) -> None:
+def _check_trailing(ch: Mapping, tfm: int, bars: int, S=S) -> None:
     """Trailing-specific admissibility (ADR-61): domains, redundancy, room to act. Never repairs."""
     tr = ch["trailing"]
     k = tr["type"]
@@ -578,11 +604,13 @@ class Candidate:
     rejection: dict | None = None
 
 
-def validate_candidate(fam: S.Family, ch: Mapping) -> tuple[dict, dict]:
+def validate_candidate(fam: S.Family, ch: Mapping, S=S) -> tuple[dict, dict]:
     """-> (definition, identity) or raises Reject. Order: structural stages, day-trading, DSL, identity."""
     _check_param_domain(fam, ch)
-    _check_structure(fam, ch)
-    defn, ctx = build_definition(fam, ch)
+    _check_structure(fam, ch, S)
+    if hasattr(S, "extra_checks"):                     # pool 2: e.g. every existing-family variant uses a new value
+        S.extra_checks(fam, ch)
+    defn, ctx = build_definition(fam, ch, S)
     dt = validate_day_trading(defn)
     if dt:
         raise Reject("day_trading", dt[0]["code"], dt[0]["detail"])
@@ -609,13 +637,13 @@ def validate_candidate(fam: S.Family, ch: Mapping) -> tuple[dict, dict]:
 
 
 # =============================================================================== tags / lineage
-def explorer_tags(fam: S.Family, ch: Mapping, defn: Mapping) -> dict:
+def explorer_tags(fam: S.Family, ch: Mapping, defn: Mapping, S=S) -> dict:
     st = ch["stop"]["type"]
     if st in ("swing", "recent_extreme", "prev_bar", "day_structure", "channel", "range_side") and \
             ch["stop"].get("buffer", 0):
         st = f"{st}+atr_buffer"
     risk = ch["sizing"]
-    w, skey = _windows(fam, ch)
+    w, skey = _windows(fam, ch, S)
     return {"family_id": fam.fid, "family_num": fam.num, "group": fam.group, "timeframe": ch["timeframe"],
             "mtf": bool(ch["mtf"]), "htf": ch["mtf"]["htf"] if ch["mtf"] else None,
             "mtf_filter": ch["mtf"]["filter"] if ch["mtf"] else None, "session": skey,
@@ -671,12 +699,19 @@ class FactoryResult:
 
 
 def generate(seed: int = DEFAULT_SEED, quotas: Mapping[str, int] | None = None,
-             families: Iterable[str] | None = None, progress=None) -> FactoryResult:
-    """Generate the candidate universe. ``quotas`` defaults to the frozen allocation (10,000)."""
+             families: Iterable[str] | None = None, progress=None, S=S,
+             exclude: Mapping[str, Any] | None = None) -> FactoryResult:
+    """Generate the candidate universe. ``quotas`` defaults to the frozen allocation (10,000).
+
+    ``S`` is the variation space (default: the pool-1 space ``factory_space``; pool 2 passes ``factory_space_p2``).
+    ``exclude`` (pool 2): ``{"manifest_id", "logic_hashes"}`` of an earlier pool whose strategies must not be generated
+    again; a candidate with one of those logic hashes is recorded as a duplicate of that pool and never kept."""
     alloc = S.allocate()
     q = dict(quotas) if quotas is not None else dict(alloc)
     fams = [f for f in S.FAMILIES if (families is None or f.fid in set(families)) and q.get(f.fid, 0) > 0]
     seen: dict[str, str] = {}                            # logic_hash -> strategy_id
+    prior = frozenset((exclude or {}).get("logic_hashes") or ())
+    kw = {} if S is _POOL1 else {"S": S}                 # pool 1: the exact pre-ADR-86 call shape
     seen_def: dict[str, str] = {}
     strategies, rejections, duplicates = [], [], []
     attempts = {}
@@ -687,15 +722,21 @@ def generate(seed: int = DEFAULT_SEED, quotas: Mapping[str, int] | None = None,
             if seq >= limit:
                 raise FactoryError(f"{fam.fid}: only {got}/{want} unique valid variants after {seq} candidates "
                                    f"(space too small or too many rejections) - refusing to under-fill silently")
-            ch = sample_choice(fam, seed, seq)
+            ch = sample_choice(fam, seed, seq, **kw)
             try:
-                defn, ident = validate_candidate(fam, ch)
+                defn, ident = validate_candidate(fam, ch, **kw)
             except Reject as r:
                 rejections.append({"family_id": fam.fid, "candidate_seq": seq, "valid": False,
                                    "rejection": r.to_dict(), "variation": ch})
                 seq += 1
                 continue
             lh, dh = ident["logic_hash"], ident["definition_hash"]
+            if lh in prior:
+                duplicates.append({"family_id": fam.fid, "candidate_seq": seq, "logic_hash": lh,
+                                   "duplicate_of": f"earlier pool {exclude['manifest_id']}",
+                                   "same_definition_hash": False, "variation": ch})
+                seq += 1
+                continue
             if lh in seen:
                 duplicates.append({"family_id": fam.fid, "candidate_seq": seq, "logic_hash": lh,
                                    "duplicate_of": seen[lh], "same_definition_hash": dh in seen_def,
@@ -708,10 +749,10 @@ def generate(seed: int = DEFAULT_SEED, quotas: Mapping[str, int] | None = None,
                 "strategy_id": ident["strategy_id"], "logic_hash": lh, "definition_hash": dh, "valid": True,
                 "family_id": fam.fid, "family_name": fam.name, "group": fam.group,
                 "allocation_bucket": f"{fam.group}/{fam.fid}", "candidate_seq": seq, "family_rank": got,
-                "variation": ch, "tags": explorer_tags(fam, ch, defn), "prop_inputs": prop_inputs(defn, ch),
+                "variation": ch, "tags": explorer_tags(fam, ch, defn, **kw), "prop_inputs": prop_inputs(defn, ch),
                 "lineage": {"generation_method": "factory_variant", "parent_template": f"{fam.fid}@{S.VARIATION_SPACE_VERSION}",
-                            "family_spec_sha256": family_hash(fam), "setup": ch["family_params"].get("setup"),
-                            "seed": seed, "factory_version": FACTORY_VERSION,
+                            "family_spec_sha256": family_hash(fam, **kw), "setup": ch["family_params"].get("setup"),
+                            "seed": seed, "factory_version": getattr(S, "FACTORY_VERSION", FACTORY_VERSION),
                             "variation_space_version": S.VARIATION_SPACE_VERSION,
                             "allocation_version": S.ALLOCATION_VERSION, "dsl_version": DSL_VERSION,
                             "compiler_version": COMPILER_VERSION},
@@ -721,7 +762,7 @@ def generate(seed: int = DEFAULT_SEED, quotas: Mapping[str, int] | None = None,
         attempts[fam.fid] = seq
         if progress:
             progress(fam.fid, got, seq)
-    header = _header(seed, q, alloc, strategies, rejections, duplicates, attempts, quotas is None)
+    header = _header(seed, q, alloc, strategies, rejections, duplicates, attempts, quotas is None, S, exclude)
     return FactoryResult(header, strategies, rejections, duplicates)
 
 
@@ -738,19 +779,26 @@ def distributions(strategies: list) -> dict:
     return {k: _counts(strategies, lambda r, k=k: r["tags"][k]) for k in keys}
 
 
-def _header(seed, quotas, alloc, strategies, rejections, duplicates, attempts, full: bool) -> dict:
+def _header(seed, quotas, alloc, strategies, rejections, duplicates, attempts, full: bool, S=S,
+            exclude: Mapping | None = None) -> dict:
     ident = {
-        "manifest_format": MANIFEST_FORMAT, "factory_version": FACTORY_VERSION,
+        "manifest_format": MANIFEST_FORMAT, "factory_version": getattr(S, "FACTORY_VERSION", FACTORY_VERSION),
         "variation_space_version": S.VARIATION_SPACE_VERSION, "allocation_version": S.ALLOCATION_VERSION,
         "dsl_version": DSL_VERSION, "compiler_version": COMPILER_VERSION, "seed": int(seed),
-        "catalog_sha256": catalog_hash(), "capability_sha256": hash_obj(capabilities.matrix()), "quotas": dict(sorted(quotas.items())), "full_allocation": full,
+        "catalog_sha256": catalog_hash(S),
+        "capability_sha256": hash_obj(S.capability_matrix() if hasattr(S, "capability_matrix") else capabilities.matrix()),
+        "quotas": dict(sorted(quotas.items())), "full_allocation": full,
         "strategies_sha256": hash_obj([[r["strategy_id"], r["definition_hash"], r["family_id"], r["candidate_seq"]]
                                        for r in strategies]),
         "rejections_sha256": hash_obj([[r["family_id"], r["candidate_seq"], r["rejection"]["code"]] for r in rejections]),
         "duplicates_sha256": hash_obj([[r["family_id"], r["candidate_seq"], r["logic_hash"]] for r in duplicates]),
     }
+    if hasattr(S, "POOL"):                               # pool 2+: the pool and the earlier pool it excludes
+        ident["pool"] = dict(S.POOL)
+        ident["excluded_pool"] = {"manifest_id": (exclude or {}).get("manifest_id"),
+                                  "logic_hashes_sha256": hash_obj(sorted((exclude or {}).get("logic_hashes") or ()))}
     mid = "FM_" + hash_obj(ident)[:16].upper()
-    fams = [{**family_spec(f), "family_spec_sha256": family_hash(f), "scores": dict(f.scores),
+    fams = [{**family_spec(f, S), "family_spec_sha256": family_hash(f, S), "scores": dict(f.scores),
              "score_total": sum(f.scores.values()), "allocation": alloc[f.fid]} for f in S.FAMILIES]
     n_gen = sum(attempts.values())
     return {"manifest_id": mid, "identity": ident, "families": fams,
@@ -760,7 +808,8 @@ def _header(seed, quotas, alloc, strategies, rejections, duplicates, attempts, f
             "day_trading_policy": DAY_TRADING_POLICY,
             "engine_config_requirements": "edgelab.strategy.daytrading.check_engine_config(backtest) must return []",
             "dimensions": S.dimension_catalog(),
-            "validation_stages": list(STAGES), "capability_matrix": capabilities.matrix(),
+            "validation_stages": list(STAGES),
+            "capability_matrix": S.capability_matrix() if hasattr(S, "capability_matrix") else capabilities.matrix(),
             "counts": {"candidates_generated": n_gen, "valid_unique": len(strategies), "rejected": len(rejections),
                        "duplicates": len(duplicates), "per_family_candidates": dict(sorted(attempts.items())),
                        "per_family_valid": _counts(strategies, lambda r: r["family_id"]),
@@ -773,7 +822,8 @@ def _header(seed, quotas, alloc, strategies, rejections, duplicates, attempts, f
                                  "trial budget covers it. No existing protocol is modified.",
                          "future_trial_identity": "research.protocol.trial_key(protocol_id, logic_hash, "
                                                   "eval_content_hash, config_hash)"},
-            "regenerate": f"python -m edgelab.cli factory generate --seed {int(seed)}"}
+            "regenerate": getattr(S, "REGENERATE", "python -m edgelab.cli factory generate --seed {seed}").format(
+                seed=int(seed))}
 
 
 # =============================================================================== persistence / explorer

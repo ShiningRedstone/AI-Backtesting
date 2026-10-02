@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("factory", help="day-trading strategy factory: generate / list / summary / query / verify "
                                        "a strategy-universe manifest (generation only: no data, no trials)")
-    p.add_argument("action", choices=("generate", "list", "summary", "query", "verify", "capabilities"))
+    p.add_argument("action", choices=("generate", "generate-pool2", "list", "summary", "query", "verify", "capabilities"))
     p.add_argument("manifest_id", nargs="?", help="FM_ id (summary / query / verify)")
     p.add_argument("--seed", type=int, help="generate: seed (default: the factory default seed)")
     p.add_argument("--filter", action="append", default=[], help="query: key=value (repeatable)")
@@ -313,6 +313,11 @@ def _factory(svc, a, ap) -> int:
             print(f"manifest {r['manifest_id']} -> {r['path']}\n  candidates {c['candidates_generated']}, valid unique "
                   f"{c['valid_unique']}, rejected {c['rejected']}, duplicates {c['duplicates']}\n"
                   "  (generation only: no market data read, no numerical trials, no holdout looks)")
+        return 0
+    if a.action == "generate-pool2":              # ADR-86: needs the workspace's pool-1 campaign manifest
+        from edgelab.research import pool2
+        r = pool2.generate(svc, seed=a.seed)
+        _print(r, a.json)
         return 0
     if a.action == "list":
         _print(svc.factory_manifests(), a.json)

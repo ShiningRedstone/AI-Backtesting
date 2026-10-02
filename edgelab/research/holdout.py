@@ -134,8 +134,10 @@ def candidates(svc) -> dict:
 
 
 def _ledger(svc, pid: str) -> dict:
+    from edgelab.research.protocol import holdout_exposed
     return {"access": svc.store.list_holdout_access(pid), "trials": svc.store.list_trial_events(pid),
-            "batches": {b["search_id"]: b for b in svc.store.list_search_batches()}}
+            "batches": {b["search_id"]: b for b in svc.store.list_search_batches()},
+            "exposed": holdout_exposed(svc.store.get_protocol(pid))}
 
 
 def _logic_hash(svc, sid: str) -> str | None:
@@ -157,6 +159,9 @@ def _eligibility(svc, row: Mapping, facets: Mapping, led: Mapping | None) -> dic
         return {"eligible": False, "reason": "already holdout-tested (one test per strategy)", "search_id": a["search_id"],
                 "tested": {"access_id": a["access_id"], "status": a["status"], "run_id": a.get("run_id"),
                            "outcome": res.get("outcome"), "created_at": a.get("created_at")}}
+    if row["strategy_id"] in led.get("exposed", ()):
+        return {"eligible": False, "search_id": None, "tested": None,
+                "reason": "already holdout-tested under an earlier protocol (one test per strategy)"}
     searches = [e["search_id"] for e in led["trials"] if e["counted"] and e["logic_hash"] == lh and e.get("search_id")
                 and (led["batches"].get(e["search_id"]) or {}).get("protocol_id") == row["protocol_id"]]
     if not searches:

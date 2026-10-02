@@ -283,6 +283,13 @@ def verify_record(rec: Mapping) -> None:
                               protocol_id=rec.get("protocol_id"))
 
 
+def holdout_exposed(rec: Mapping) -> set[str]:
+    """Strategy ids whose holdout was already looked at under an EARLIER protocol (ADR-86: listed in this protocol's
+    pre-protocol exposure by the strategy-pool switch); they are never tested on the holdout again."""
+    runs = ((rec.get("material") or {}).get("pre_protocol_exposure") or {}).get("runs") or []
+    return {r["strategy_id"] for r in runs if r.get("strategy_id") and str(r.get("note", "")).startswith("holdout look under")}
+
+
 # ============================================================ trials
 def trial_key(pid: str, logic_hash: str, eval_content_hash: str, config_hash: str) -> str:
     return hash_obj({"protocol_id": pid, "logic_hash": logic_hash, "evaluated_content_hash": eval_content_hash,
