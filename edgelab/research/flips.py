@@ -60,7 +60,7 @@ class FlipError(ValueError):
 # ======================================================================================== parent / flip protocols
 def parent_protocol(svc, protocol_id: str | None = None) -> dict:
     """The ACTIVE research protocol whose discovery results are scanned (never a flip protocol)."""
-    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not rp.is_companion(p)]
+    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not rp.is_flip(p)]
     if protocol_id:
         act = [p for p in act if p["protocol_id"] == protocol_id]
     if not act:

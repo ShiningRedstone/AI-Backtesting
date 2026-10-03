@@ -82,7 +82,6 @@ never counted or aggregated as an ordinary OOS test. Win rate is shown but never
 ```
 Home               Home (#/)
 Strategies         Families (#/families, default) · Library (#/strategies[/id]) · Builder (#/builder) · Variations (#/variations)
-                   · Combinations (#/combinations[?c=STR_..,STR_..], ADR-92)
 Run backtest       Single backtest (#/run) · Research runs (#/runs) · Experiments (#/research[/SRCH_..])
 Backtest results   Overview (#/dashboard) · Strategies (#/explorer, drawer ?open=STR_..) · Holdout results · Random controls
                    (#/controls); run detail #/results/RUN_.. (links only); #/compare, #/pipeline -> Overview (ADR-90)
@@ -442,20 +441,3 @@ The browser tests need `pip install playwright` and a Chromium build (`playwrigh
   slider; Live 50K drawdown limit; fee discounts (one switch, % per account type).
 - Research runs restart themselves after an error; a banner (Research runs) and a top strip (every page) when it keeps failing.
 - F11 / Esc fullscreen; no zooming in the desktop window; rounded gear; page-shaped skeletons; teal/orange light-mode bubbles.
-
-## Combinations (ADR-92)
-
-- **Strategies → Combinations (`#/combinations`, `?c=` = the open combination).**
-  - Up to 5 survivors in one prop account, one position at a time, from their recorded research trades.
-  - "Find best combinations" runs the read-only search in the background (live progress, Stop).
-  - The ranked list on the left (size filter); "Build your own" picks 2..5 survivors; combinations can be saved by name.
-  - The panel on the right: KPIs, the combination vs each strategy alone on the 7 ranking criteria, the equity curve,
-    results by year with months, members (trades taken / skipped), and the holdout test.
-- **Registration and holdout tests.** Tick combinations and press "Register for holdout tests" (type REGISTER). This
-  happens once per research protocol. "Holdout-test this combination" then uses one of its 10 tests; the verdict reads
-  "criteria met / not met", never "approved".
-- **API** (`/api/combinations/*`):
-  - `survivors`, `panel?ids=`, `search` (GET latest / POST start), `jobs/<id>` (+ `/cancel`);
-  - `saved` (GET / POST) and `saved/delete`;
-  - `registration` (GET / POST with `confirm`), `holdout` (POST `protocol_id`, `combo_id`).
-- **Settings → Prop firm pass criteria → "Combinations: trades per week limit"** (`ui.combo_tpw_cap`, default 5).

@@ -120,36 +120,6 @@ class PoolJob(Job):
                 "result": self.result}
 
 
-class ComboHoldoutJob(Job):
-    """The holdout test of one registered combination (ADR-92) through Services.evaluate_combination_holdout."""
-
-    def __init__(self, job_id: str, protocol_id: str, combo_id: str, members: list[str]):
-        super().__init__(job_id, "", {})
-        self.kind, self.protocol_id, self.combo_id, self.members = "combo_holdout", protocol_id, combo_id, members
-        self.live: dict = {"phase": "queued"}
-        self.result: dict | None = None
-        self.code: str | None = None
-
-    def snapshot(self) -> dict:
-        return {**super().snapshot(), "kind": "combo_holdout", "protocol_id": self.protocol_id, "combo_id": self.combo_id,
-                "members": list(self.members), "live": dict(self.live), "result": self.result, "code": self.code}
-
-
-class ComboSearchJob(Job):
-    """The combination search (ADR-92): read-only (no runs, no trials); its own slot beside the research job."""
-
-    def __init__(self, job_id: str, scope_ref: str | None, processes: int):
-        super().__init__(job_id, "", {})
-        self.kind, self.scope_ref, self.processes = "combo_search", scope_ref, processes
-        self.live: dict = {"done": 0, "total": None}
-        self.result: dict | None = None
-
-    def snapshot(self) -> dict:
-        return {**super().snapshot(), "kind": "combo_search", "scope_ref": self.scope_ref, "processes": self.processes,
-                "live": dict(self.live),
-                "search_id": (self.result or {}).get("search_id") if self.result else None}
-
-
 class JobManager:
     RESTART_FIRST, RESTART_MAX = 10.0, 300.0     # ADR-90: seconds before an automatic restart (doubling, capped)
     PROBLEM_WINDOW, PROBLEM_COUNT = 600.0, 3     # "having problems" after 3 errors within 10 minutes
@@ -339,87 +309,6 @@ class JobManager:
         job.finished_at = _now()
         job._set(final)
 
-    # ------------------------------------------------------------------ combinations (ADR-92)
-    def start_combo_holdout(self, protocol_id: str, combo_id: str) -> dict:
-        """One registered combination's holdout test; the same one-research-job-at-a-time rule."""
-        from edgelab.research import protocol as rp
-        reading = getattr(self.services, "in_read_context", lambda: False)()
-        with (nullcontext() if reading else self.lock):
-            p = self.services.store.get_protocol(protocol_id)        # KeyError: unknown
-            if not rp.is_combo(p):
-                raise ValueError("not a combination protocol")
-            entry = next((c for c in p["material"]["combo_set"] if c["combo_id"] == combo_id), None)
-            if entry is None:
-                raise ValueError("this combination is not registered")
-        with self._mu:
-            if self._active is not None and self._active.state in ACTIVE:
-                raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
-            job = ComboHoldoutJob("JOB_" + uuid.uuid4().hex[:12].upper(), protocol_id, combo_id,
-                                  [m["strategy_id"] for m in entry["members"]])
-            self._jobs[job.job_id] = job
-            self._active = job
-            self._thread = threading.Thread(target=self._work_combo_holdout, args=(job,), name=f"edgelab-{job.job_id}",
-                                            daemon=True)
-            self._thread.start()
-        return job.snapshot()
-
-    def _work_combo_holdout(self, job: ComboHoldoutJob) -> None:
-        job.started_at = _now()
-        job._set("running")
-        job.live = {"phase": "testing the members on the holdout"}
-        try:
-            with self.lock:                                  # store writes and the ledger; pages read lock-free
-                job.result = self.services.evaluate_combination_holdout(job.protocol_id, job.combo_id)
-            final = "completed"
-        except BaseException as exc:                         # recorded, never swallowed silently
-            job.error = f"{type(exc).__name__}: {exc}"
-            job.code = getattr(exc, "code", None)
-            final = "failed"
-        job.live = {"phase": "finished"}
-        job.finished_at = _now()
-        job._set(final)
-
-    def start_combo_search(self, scope_ref: str | None, processes: int) -> dict:
-        """The read-only combination search in its own slot (one at a time); it uses one core while a research job runs."""
-        with self._mu:
-            cur = getattr(self, "_combo_search", None)
-            if cur is not None and cur.state in ACTIVE:
-                raise JobConflict(f"the combination search {cur.job_id} is still {cur.state}")
-            busy = self._active is not None and self._active.state in ACTIVE
-            job = ComboSearchJob("JOB_" + uuid.uuid4().hex[:12].upper(), scope_ref, 1 if busy else max(1, processes))
-            self._jobs[job.job_id] = job
-            self._combo_search = job
-            threading.Thread(target=self._work_combo_search, args=(job,), name=f"edgelab-{job.job_id}",
-                             daemon=True).start()
-        return job.snapshot()
-
-    def _work_combo_search(self, job: ComboSearchJob) -> None:
-        from edgelab.research import combos as CB
-        job.started_at = _now()
-        job._set("running")
-
-        def progress(done: int, total: int) -> None:
-            job.live = {"done": done, "total": total}
-        try:
-            with self.services.read_context(page=False):       # read-only store connections, no service lock
-                job.result = CB.run_search(self.services, job.scope_ref, job.processes, progress, job.cancel_requested)
-            final = "cancelled" if job.cancel_requested.is_set() else "completed"
-        except BaseException as exc:                         # recorded, never swallowed silently
-            job.error = f"{type(exc).__name__}: {exc}"
-            final = "failed"
-        job.finished_at = _now()
-        job._set(final)
-
-    def combo_status(self, job_id: str) -> dict:
-        job = self._get(job_id)
-        if not isinstance(job, (ComboHoldoutJob, ComboSearchJob)):
-            raise KeyError(job_id)
-        return job.snapshot()
-
-    def active_combo_search(self) -> dict | None:
-        cur = getattr(self, "_combo_search", None)
-        return None if cur is None else cur.snapshot()
-
     # ------------------------------------------------------------------ flip scan jobs (ADR-88)
     def start_flip(self, flip_id: str, processes: int = 1) -> dict:
         """Run (or resume) a flip protocol's search in the background; the same one-research-job-at-a-time rule."""
@@ -552,12 +441,11 @@ class JobManager:
         job = self._get(job_id)
         if job.state in ACTIVE:
             job.cancel_requested.set()
-        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob, FlipJob, PoolJob, ComboHoldoutJob,
-                                                  ComboSearchJob)) else self.status(job_id)
+        return job.snapshot() if isinstance(job, (CampaignJob, HoldoutJob, FlipJob, PoolJob)) else self.status(job_id)
 
     def status(self, job_id: str) -> dict:
         job = self._get(job_id)
-        if isinstance(job, (CampaignJob, HoldoutJob, FlipJob, PoolJob, ComboHoldoutJob, ComboSearchJob)):
+        if isinstance(job, (CampaignJob, HoldoutJob, FlipJob, PoolJob)):
             return job.snapshot()
         return {**job.snapshot(), "progress": self.progress(job.search_id)}
 

@@ -59,8 +59,8 @@ def _campaign_specs(svc) -> list[dict]:
 
 
 def _active_protocol(svc) -> dict | None:
-    from edgelab.research.protocol import is_companion
-    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not is_companion(p)]  # ADR-88/92: never a companion
+    from edgelab.research.protocol import is_flip
+    act = [p for p in svc.store.list_protocols(status="ACTIVE") if not is_flip(p)]     # ADR-88: never a flip protocol
     return act[0] if len(act) == 1 else None
 
 

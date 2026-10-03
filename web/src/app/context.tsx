@@ -9,8 +9,7 @@ export interface UiPrefs { favorites: string[]; prop_criteria_profile: string; s
   profile_choices?: { profile_id: string; name: string }[]; prop_fees?: Record<string, PaperFees>; theme?: Theme;
   // ADR-90 (display / paper only)
   currency?: "USD" | "CHF"; chf_per_usd?: number | null; chart_cluster?: boolean; chart_cluster_distance?: number;
-  live_dd_limit_usd?: number; prop_discount?: { enabled: boolean; pct: Record<string, number> };
-  combo_tpw_cap?: number }                        // ADR-92: combination score: trades per week counted up to this
+  live_dd_limit_usd?: number; prop_discount?: { enabled: boolean; pct: Record<string, number> } }
 export type Theme = "dark" | "light" | "system";
 const THEME_KEY = "munyun.theme";
 /** ADR-86: apply a theme to <html data-theme>; "system" follows the Windows / browser setting. Remembered locally so the

@@ -193,42 +193,6 @@ def _consistency(c: Mapping, day_pnls: list[float], profit: float) -> dict:
             "profit_needed_normal_rule": _r(best / share) if share else None}
 
 
-# ------------------------------------------------------------------------------------ day groups
-_ROW_GROUPS = True        # ADR-92 speed: plain row tuples per trading day (False = the original pandas groups; tests)
-
-
-class _DayRows:
-    """One trading day's trades as the row tuples ``DataFrame.itertuples()`` yields (same order, same values): what
-    ``_Run._day`` reads, without building a DataFrame per day."""
-    __slots__ = ("rows",)
-
-    def __init__(self, rows: list):
-        self.rows = rows
-
-    def itertuples(self):
-        return iter(self.rows)
-
-    def __len__(self) -> int:
-        return len(self.rows)
-
-    def last_exit(self):
-        return max(r.exit_ts for r in self.rows)
-
-
-def _day_groups(t: pd.DataFrame, col: str) -> list:
-    """[(trading day, that day's trades)] in day order, trades in their stored order (as ``groupby(col, sort=True)``)."""
-    if not _ROW_GROUPS:
-        return [(d, g) for d, g in t.groupby(col, sort=True)]
-    by: dict = {}
-    for day, row in zip(t[col].tolist(), t.itertuples()):
-        by.setdefault(day, []).append(row)
-    return [(d, _DayRows(by[d])) for d in sorted(by)]
-
-
-def _last_exit(rows):
-    return rows.last_exit() if isinstance(rows, _DayRows) else rows["exit_ts"].max()
-
-
 # ------------------------------------------------------------------------------------ simulation
 def simulate_lifecycle(trades: pd.DataFrame, profile: Mapping) -> dict:
     ident = profile_identity(profile)
@@ -308,7 +272,7 @@ class _Run:
                 rec["dll_soft_breach"] = True
                 self.ev(stage, "DLL_SOFT_BREACH", day, r.exit_ts, day_pnl=rec["day_pnl"], amount=float(dll["amount"]),
                         measurement=dll["measurement"])
-        rec["last_exit_ts"] = _iso(_last_exit(rows)) if len(rows) else None
+        rec["last_exit_ts"] = _iso(rows["exit_ts"].max()) if len(rows) else None
         return rec, None
 
     def _limit(self, cfg: Mapping, tier: int | None) -> tuple[float, str]:
@@ -328,7 +292,7 @@ class _Run:
 
     def run(self) -> dict:
         ev_cfg = self.p["evaluation"]
-        groups = _day_groups(self.t, "evaluation_day")
+        groups = [(d, g) for d, g in self.t.groupby("evaluation_day", sort=True)]
         acct = _Account("evaluation", ev_cfg)
         sc = ev_cfg["scaling"]
         tier = sc["start_micros"] if sc["enabled"] else None
@@ -403,7 +367,7 @@ class _Run:
         acct = _Account("funded", fu, start)
         act = passed["day_end"]
         rest = self.t[self.t["entry_ts"] >= act.tz_convert("UTC")]
-        groups = _day_groups(rest, "funded_day")
+        groups = [(d, g) for d, g in rest.groupby("funded_day", sort=True)]
         sc = fu["scaling"]
         tier = sc["start_micros"] if sc["enabled"] else None
         paid_out = 0.0

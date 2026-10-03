@@ -410,7 +410,6 @@ function PropCriteriaCard() {
       <p className="small muted">This account's rules decide "Pass eval", "Pass payout" and the survivor label across the app. It reads the prop
         check stored with every backtest; backtests are unchanged.</p>
       <LiveLimit />
-      <ComboCap />
     </Card>
   );
 }
@@ -432,25 +431,6 @@ function LiveLimit() {
         <Button small kind="primary" onClick={save} disabled={!Number(shown) || shown === saved} testId="live-limit-save">Save</Button></span></label>
     <p className="small muted">USD {money.hint(Number(shown) || null)}. A strategy is "Live 50K OK" when its recorded trades made money, never fell
       more than this from a peak, and had no calendar year with a loss (real money, no prop-firm rules). Display only.</p>
-  </div>;
-}
-
-/** ADR-92: the combination score counts trades per week only up to this limit (display preference, outside the research config). */
-function ComboCap() {
-  const { prefs, setPref, toast } = useApp();
-  const [val, setVal] = useState<string | null>(null);
-  const saved = String(prefs.combo_tpw_cap ?? 5);
-  const shown = val ?? saved;
-  const save = () => setPref({ combo_tpw_cap: Number(shown) }).then(() => { setVal(null); toast("ok", "Combination trades per week limit saved"); })
-    .catch((e: Error) => toast("error", e.message));
-  return <div style={{ marginTop: 12 }}>
-    <label className="switch-row"><span>Combinations: trades per week limit</span>
-      <span className="inline" style={{ gap: 6 }}>
-        <input className="input" style={{ width: 80 }} inputMode="decimal" value={shown} aria-label="combination trades per week limit" data-testid="combo-cap"
-          onChange={(e: { target: HTMLInputElement }) => setVal(e.target.value.replace(/[^0-9.]/g, ""))} />
-        <Button small kind="primary" onClick={save} disabled={!Number(shown) || shown === saved} testId="combo-cap-save">Save</Button></span></label>
-    <p className="small muted">When Strategies → Combinations ranks combinations, more trades per week only count up to this number (between 0.5 and 100).
-      It changes the ranking of the next search, never a backtest.</p>
   </div>;
 }
 

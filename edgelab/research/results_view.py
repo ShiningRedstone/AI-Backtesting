@@ -494,7 +494,7 @@ def strategy_panel(svc, strategy_id: str, params: Mapping[str, Any]) -> dict:
         n_weeks = None
     weeks_with = len({(x.isocalendar()[0], x.isocalendar()[1]) for x in entry})
     oos = [r for r in runs if r["status"] in ("OUT_OF_SAMPLE", "WALK_FORWARD") and not r["holdout"]]
-    holdout = [r for r in runs if r["holdout"] and not r.get("combination")]      # ADR-92: not a combination's member run
+    holdout = [r for r in runs if r["holdout"]]
     ranked = sorted([x["ref"] for x in rows if x["ref"] and x["ref"]["trade_count"]], key=lambda r: -(r["net_r"] or -1e18))
     rank = next((i + 1 for i, r in enumerate(ranked) if r["run_id"] == ref["run_id"]), None)
     profiles = []

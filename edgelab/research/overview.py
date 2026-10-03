@@ -47,8 +47,8 @@ HOLDOUT_VIEW = "holdout"           # ADR-85: Holdout results = each strategy's h
 def scoped_runs(runs: list[dict], scope: str) -> list[dict]:
     """Runs of one strategy in a results scope: a status scope never includes holdout runs; the holdout view is only
     holdout runs (ADR-85)."""
-    if scope == HOLDOUT_VIEW:                                # ADR-92: a combination test's member runs are not a
-        return [r for r in runs if r["holdout"] and not r.get("combination")]   # strategy's own holdout result
+    if scope == HOLDOUT_VIEW:
+        return [r for r in runs if r["holdout"]]
     return [r for r in runs if r["status"] in SCOPES[scope] and not r["holdout"]]
 
 
@@ -211,10 +211,9 @@ def run_records(svc) -> list[dict]:
         out = _run_rows_incremental(svc, hit)
         _FACET_CACHE["runs"] = (key, out, getattr(svc, "writer_store", svc.store))
     hr = holdout_run_ids(svc)
-    cr = combination_run_ids(svc)
     crit = criteria_profile(svc)
-    return [{**apply_criteria(r, crit), "holdout": True, "scope": HOLDOUT_SCOPE, "combination": r["run_id"] in cr}
-            if r["run_id"] in hr else {**apply_criteria(r, crit), "holdout": False} for r in out]
+    return [{**apply_criteria(r, crit), "holdout": True, "scope": HOLDOUT_SCOPE} if r["run_id"] in hr
+            else {**apply_criteria(r, crit), "holdout": False} for r in out]
 
 
 def _run_rows_incremental(svc, hit) -> list[dict]:
@@ -288,28 +287,11 @@ HOLDOUT_SCOPE = "Holdout evaluation (protocol)"
 
 
 def holdout_run_ids(svc) -> set[str]:
-    """Runs made by a protocol holdout evaluation (status OUT_OF_SAMPLE, but never an ordinary OOS test), including the
-    member runs of a combination's holdout test (ADR-92)."""
+    """Runs made by a protocol holdout evaluation (status OUT_OF_SAMPLE, but never an ordinary OOS test)."""
     try:
-        own = {r[0] for r in svc.store._query("SELECT run_id FROM holdout_access WHERE run_id IS NOT NULL")}
+        return {r[0] for r in svc.store._query("SELECT run_id FROM holdout_access WHERE run_id IS NOT NULL")}
     except Exception:                                        # noqa: BLE001 - no protocol tables in this store
         return set()
-    return own | combination_run_ids(svc)
-
-
-def combination_run_ids(svc) -> set[str]:
-    """Member runs of combination holdout tests (ADR-92): holdout runs, but never a strategy's own holdout result."""
-    try:
-        rows = svc.store._query("SELECT result_json FROM holdout_access WHERE strategy_id LIKE 'CMB_%' "
-                                "AND result_json IS NOT NULL")
-    except Exception:                                        # noqa: BLE001
-        return set()
-    out = set()
-    for (raw,) in rows:
-        for m in (_loads(raw) or {}).get("members") or ():
-            if m.get("run_id"):
-                out.add(m["run_id"])
-    return out
 
 
 def prop_summary(rec: Mapping) -> list[dict]:

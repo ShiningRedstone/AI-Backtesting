@@ -52,9 +52,6 @@ from edgelab.features.spec import FeatureSpec, all_defs, get_def
 from edgelab.instruments import contract_for, load_instruments
 
 
-COMBO_ENTRY_POINTS = ("combination_holdout", "combination_control")       # ADR-92: a combination's holdout test
-
-
 def _jsonable(x: Any) -> Any:
     if isinstance(x, dict):
         return {str(k): _jsonable(v) for k, v in x.items()}
@@ -287,8 +284,7 @@ class Services:
                         "currency": "USD", "chf_per_usd": None,                   # CHF = display conversion, user rate
                         "chart_cluster": True, "chart_cluster_distance": 1.0,     # field-chart grouping (1 = ADR-86)
                         "live_dd_limit_usd": 5000.0,                              # "Live 50K OK" drawdown limit
-                        "prop_discount": {"enabled": False, "pct": {}},           # paper fees: eval + reset, % per account
-                        "combo_tpw_cap": 5.0}                                     # ADR-92: combination score's trades/week limit
+                        "prop_discount": {"enabled": False, "pct": {}}}           # paper fees: eval + reset, % per account
 
     def ui_preferences(self) -> dict:
         """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
@@ -398,10 +394,6 @@ class Services:
                 v = float(v)
             elif k == "prop_discount":
                 v = self._check_prop_discount(v)
-            elif k == "combo_tpw_cap":
-                if not _num(v) or not 0.5 <= float(v) <= 100:
-                    raise ValueError("combo_tpw_cap must be between 0.5 and 100 trades per week")
-                v = float(v)
             elif k == "research_processes":
                 from edgelab.research.campaign import max_processes
                 if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= max_processes()):
@@ -1757,9 +1749,7 @@ class Services:
 
     def random_entry_control(self, src: Any, dataset_id: str, n_controls: int = 20, seed: int = 0,
                              period: tuple | None = None, sample_status: str = "IN_SAMPLE",
-                             holdout_access_id: str | None = None, *,
-                             candidate_entry_point: str = "random_control_candidate",
-                             trades_out: list | None = None) -> dict:
+                             holdout_access_id: str | None = None) -> dict:
         """Matched random-entry control for ONE fixed candidate (research/controls.py): the candidate
         runs once through the normal path; each seeded realization re-uses the candidate's compiled
         definition, costs, sizing and backtest config and randomizes only entry timing/direction
@@ -1779,7 +1769,7 @@ class Services:
             raise ValueError("sample_status must be IN_SAMPLE, OUT_OF_SAMPLE or WALK_FORWARD")
         frozen, fh = freeze_definition(self._definition(src))
         cell = self._run_cell(copy_frozen(frozen), dataset_id, False, period=period,
-                              entry_point=candidate_entry_point, holdout_access_id=holdout_access_id)
+                              entry_point="random_control_candidate", holdout_access_id=holdout_access_id)
         ds, cand, costs, res = cell["ds"], cell["strategy"], cell["costs"], cell["result"]
         csig = cell["bound"].generate_signals(ds.bars)
         n_sig = int((csig.direction != 0).sum())                          # after cooldown (reported)
@@ -1798,8 +1788,6 @@ class Services:
             ctrl.set_design(min(1.0, n_pre / eligible) if eligible else 0.0, p_long)
             r = run_backtest(ds, ctrl, costs, self.cfg["backtest"], sizing=cand.sizing,
                              contract=contract_for(self.cfg, cand.sizing))
-            if trades_out is not None:                     # ADR-92: a combination test merges the controls' trades
-                trades_out.append(r.trades)
             reals.append({"index": k, "seed": sd, "control_strategy_id": ctrl.strategy_id,
                           "eligible_bars": eligible, "signal_rate": ctrl.control["signal_rate"],
                           "pre_cooldown_signals": ctrl.pre_cooldown_fires(ds.bars), "signals": r.n_signals, "trades_hash": r.trades_hash,
@@ -1881,30 +1869,6 @@ class Services:
         key = self._scope_key(sc["instrument"], sc["provider"]) + FLIP_SCOPE_SUFFIX
         return [p for p in self.store.list_protocols(key)
                 if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
-
-    def _combo_protocols(self, parent: Mapping) -> list[dict]:
-        """Combination companion protocols of a parent (ADR-92), any status, oldest first."""
-        from edgelab.research.protocol import COMBO_SCOPE_SUFFIX
-        sc = parent["material"]["scope"]
-        key = self._scope_key(sc["instrument"], sc["provider"]) + COMBO_SCOPE_SUFFIX
-        return [p for p in self.store.list_protocols(key)
-                if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
-
-    def _combo_seen(self, parent: Mapping) -> dict[str, str]:
-        """{logic hash: combination id} of every strategy that already ran on the holdout inside a combination test
-        (ADR-92): a strategy's own holdout result is seen once, so its own test is refused afterwards."""
-        out: dict[str, str] = {}
-        try:
-            combos = self._combo_protocols(parent)
-        except Exception:                                    # noqa: BLE001 - a store without protocol tables
-            return out
-        for c in combos:
-            members = {x["combo_id"]: [m["logic_hash"] for m in x["members"]] for x in c["material"]["combo_set"]}
-            for a in self.store.list_holdout_access(c["protocol_id"]):
-                if a["status"] != "refused":
-                    for lh in members.get(a["strategy_id"], ()):
-                        out.setdefault(lh, a["strategy_id"])
-        return out
 
     def _flip_protocol_of(self, parent: Mapping, logic_hash: str) -> dict | None:
         from edgelab.research.protocol import verify_record
@@ -1998,7 +1962,7 @@ class Services:
             self.store.retire_protocol(supersedes)
         if replaces is not None:
             self.store.retire_protocol(replaces)
-            for c in self._flip_protocols(old) + self._combo_protocols(old):   # ADR-88/92: companions belong to it
+            for c in self._flip_protocols(old):              # ADR-88: its flip protocol belongs to the replaced study
                 self.store.retire_protocol(c["protocol_id"])
         created = self.store.save_protocol(rec, key)
         return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
@@ -2059,11 +2023,10 @@ class Services:
         also retires its flip companion (ADR-88), which only exists inside the parent's study."""
         p = self.store.get_protocol(protocol_id)
         self.store.retire_protocol(protocol_id)
-        from edgelab.research.protocol import is_companion
-        if not is_companion(p):
-            for c in self._flip_protocols(p) + self._combo_protocols(p):
-                if c["status"] == "ACTIVE":
-                    self.store.retire_protocol(c["protocol_id"])
+        from edgelab.research.protocol import is_flip
+        if not is_flip(p):
+            for c in self._flip_protocols(p):
+                self.store.retire_protocol(c["protocol_id"])
         return self.get_protocol(protocol_id)
 
     def protocol_status(self, protocol_id: str) -> dict:
@@ -2168,18 +2131,6 @@ class Services:
                 return ctx
             raise rp.ProtocolRefusal("HOLDOUT_ACCESS_INVALID", "the holdout access is not an open grant for this "
                                      "strategy", protocol_id=pid, access_id=holdout_access_id)
-        if stage == "holdout" and holdout_access_id and entry_point in COMBO_ENTRY_POINTS:        # ADR-92
-            for c in self._combo_protocols(p):
-                acc = [a for a in self.store.list_holdout_access(c["protocol_id"]) if a["access_id"] == holdout_access_id]
-                if not acc:
-                    continue
-                combo = next((x for x in c["material"]["combo_set"] if x["combo_id"] == acc[0]["strategy_id"]), None)
-                if (acc[0]["status"] == "granted" and c["status"] == "ACTIVE" and combo is not None
-                        and ident.logic_hash in {m["logic_hash"] for m in combo["members"]}):
-                    ctx.update(holdout_access_id=holdout_access_id, combo_protocol_id=c["protocol_id"])
-                    return ctx
-            raise rp.ProtocolRefusal("HOLDOUT_ACCESS_INVALID", "the holdout access is not an open combination grant "
-                                     "for this strategy", protocol_id=pid, access_id=holdout_access_id)
         raise rp.ProtocolRefusal(
             "HOLDOUT_LOCKED", "the evaluated bars touch the locked holdout (or lie outside the discovery window); "
             "only Services.evaluate_holdout may read the holdout", protocol_id=pid, entry_point=entry_point,
@@ -2314,9 +2265,9 @@ class Services:
             return
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        from edgelab.research.protocol import is_companion
+        from edgelab.research.protocol import is_flip
         for p in self.store.list_protocols(status="ACTIVE"):
-            if is_companion(p):                          # ADR-88/92: a companion only holds its registered set
+            if is_flip(p):                               # ADR-88: a flip protocol only holds its registered flips
                 continue
             for i, a in enumerate(rep.accepted):
                 sid = a.get("strategy_id") if isinstance(a, Mapping) else a
@@ -2347,74 +2298,6 @@ class Services:
 
     def holdout_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.holdout_status(job_id))
-
-    # ------------------------------------------------------------ combinations (ADR-92)
-    def combination_survivors(self, campaign_run: str | None = None) -> dict:
-        """The survivors that can be combined (flipped strategies excluded), each with its governing protocol."""
-        from edgelab.research import combos as CB
-        rows = CB.survivors(self, campaign_run or None)
-        return _jsonable({"rows": rows, "max_members": CB.MAX_MEMBERS, "tpw_cap": CB.tpw_cap(self),
-                          "criteria_profile": (CB.criteria_profile(self) or {}).get("profile_id"),
-                          "criteria": CB._criteria_rows(), "ranking_rule": CB.RANKING_RULE, "merge_note": CB.MERGE_NOTE})
-
-    def combination_panel(self, strategy_ids: list) -> dict:
-        """One combination (2..5 survivors): merged discovery results, prop speed, members, registration and holdout."""
-        from edgelab.research import combos as CB
-        try:
-            return _jsonable(CB.panel(self, strategy_ids))
-        except CB.ComboError as exc:
-            raise ValueError(f"{exc.code}: {exc}") from None
-
-    def combinations_saved(self) -> list[dict]:
-        from edgelab.research import combos as CB
-        return _jsonable(CB.saved(self.data_root))
-
-    def save_combination(self, name: Any, strategy_ids: list) -> list[dict]:
-        from edgelab.research import combos as CB
-        if not isinstance(name, str) or not name.strip() or len(name) > 80:
-            raise ValueError("name must be 1..80 characters")
-        try:
-            rows, _ = CB.pick(self, strategy_ids)
-        except CB.ComboError as exc:
-            raise ValueError(f"{exc.code}: {exc}") from None
-        return _jsonable(CB.save_named(self.data_root, name.strip(), [r["strategy_id"] for r in rows]))
-
-    def delete_combination(self, strategy_ids: list) -> list[dict]:
-        from edgelab.research import combos as CB
-        if not isinstance(strategy_ids, list):
-            raise ValueError("strategy_ids must be a list")
-        return _jsonable(CB.delete_named(self.data_root, strategy_ids))
-
-    def start_combination_search(self, campaign_run: str | None = None) -> dict:
-        """The combination search in the background (read-only; several CPU cores unless a research job is running)."""
-        if campaign_run:
-            from edgelab.research import overview as ov
-            ov.campaign_run_scope(self, campaign_run)                     # ValueError: malformed reference
-        return _jsonable(self.jobs.start_combo_search(campaign_run or None, self.research_processes()["processes"]))
-
-    def combination_job(self, job_id: str) -> dict:
-        return _jsonable(self.jobs.combo_status(job_id))
-
-    def latest_combination_search(self, campaign_run: str | None = None) -> dict:
-        from edgelab.research import combos as CB
-        return _jsonable({"search": CB.latest_search(self.data_root, campaign_run or ""),
-                          "job": self.jobs.active_combo_search()})
-
-    def combination_registration(self) -> dict:
-        from edgelab.research import combos as CB
-        return _jsonable(CB.registration(self))
-
-    def register_combinations(self, sets: list, confirm: str | None) -> dict:
-        """Freeze combinations for holdout tests (one combination protocol per research protocol; typed confirmation)."""
-        from edgelab.research import combos as CB
-        try:
-            return _jsonable(CB.register(self, sets, confirm))
-        except CB.ComboError as exc:
-            raise ValueError(f"{exc.code}: {exc}") from None
-
-    def start_combination_holdout(self, protocol_id: str, combo_id: str) -> dict:
-        """One registered combination's holdout test in the background (one research job at a time)."""
-        return _jsonable(self.jobs.start_combo_holdout(protocol_id, combo_id))
 
     # ------------------------------------------------------------ flip scan (ADR-88)
     def flip_scan(self, protocol_id: str | None = None, cap: int | None = None) -> dict:
@@ -2540,10 +2423,6 @@ class Services:
         prior = self.store.list_holdout_access(protocol_id)
         if any(a["logic_hash"] == doc["logic_hash"] and a["status"] != "refused" for a in prior):
             refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate's logic was already evaluated on the holdout")
-        seen = {} if rp.is_companion(p) else self._combo_seen(p)
-        if doc["logic_hash"] in seen:                                            # ADR-92: ran inside a combination test
-            refuse("HOLDOUT_ALREADY_EVALUATED", f"this candidate already ran on the holdout inside combination "
-                   f"{seen[doc['logic_hash']]}")
         if strategy_id in rp.holdout_exposed(p):                                  # ADR-87: looked at under an earlier protocol
             refuse("HOLDOUT_ALREADY_EVALUATED", "this candidate was already evaluated on the holdout under an earlier "
                    "protocol (listed in this protocol's prior exposure)")
@@ -2588,123 +2467,6 @@ class Services:
                "holdout_looks_used": used + 1,
                "holdout_looks_budget": mat["holdout_budget"]["max_unique_candidate_evaluations"]}
         self.store.update_holdout_access(aid, status="completed", run_id=cell["run_id"], completed_at=now(),
-                                         result_json=_json.dumps(_jsonable(out), sort_keys=True))
-        return _jsonable(out)
-
-    def evaluate_combination_holdout(self, protocol_id: str, combo_id: str) -> dict:
-        """THE holdout test of one registered combination (ADR-92), within its companion protocol's tests: every member
-        runs on exactly the locked holdout bars (run status OUT_OF_SAMPLE, labelled Holdout, never a member's own
-        holdout result), with its matched random-entry controls; the results are merged one position at a time (the
-        registered merge rule) and the parent's pre-registered criteria are applied to the merged trades with the
-        companion's Bonferroni family. Every check runs BEFORE the test is spent (refusals are recorded). Never
-        'accepted'."""
-        import json as _json
-        from datetime import datetime, timezone
-        from edgelab.analytics.metrics import compute_metrics, cost_sensitivity
-        from edgelab.core.identity import hash_obj
-        from edgelab.research import combos as CB
-        from edgelab.research import protocol as rp
-        from edgelab.research.validation import copy_frozen, freeze_definition
-        from edgelab.strategy.compiler import compile_definition
-        now = lambda: datetime.now(timezone.utc).isoformat()                          # noqa: E731
-        p = self.store.get_protocol(protocol_id)                                    # KeyError: unknown protocol
-        rp.verify_record(p)
-        if not rp.is_combo(p):
-            raise rp.ProtocolRefusal("PROTOCOL_INVALID", "not a combination protocol", protocol_id=protocol_id)
-        mat = p["material"]
-        parent = self.store.get_protocol(mat["parent"]["protocol_id"])
-        rp.verify_record(parent)
-        entry = next((c for c in mat["combo_set"] if c["combo_id"] == combo_id), None)
-        members = entry["members"] if entry else []
-        aid = "HA_" + hash_obj({"protocol_id": protocol_id, "strategy_id": combo_id, "at": now()}, 12).upper()
-        base = {"access_id": aid, "protocol_id": protocol_id, "strategy_id": combo_id, "logic_hash": combo_id,
-                "definition_hash": hash_obj(sorted(m["definition_hash"] for m in members)) if members else None,
-                "frozen_hash": None, "search_id": None, "created_at": now()}
-
-        def refuse(code: str, msg: str, **detail):
-            self.store.add_holdout_access({**base, "status": "refused", "reason_code": code, "reason": msg})
-            raise rp.ProtocolRefusal(code, msg, protocol_id=protocol_id, combo_id=combo_id, access_id=aid, **detail)
-
-        if entry is None:
-            refuse("COMBO_NOT_REGISTERED", "this combination is not registered in the combination protocol")
-        if p["status"] != "ACTIVE" or parent["status"] != "ACTIVE":
-            refuse("PROTOCOL_NOT_ACTIVE", "the combination protocol or its research protocol is retired")
-        if self._config_hash() != mat["config_hash"]:
-            refuse("PROTOCOL_CONFIG_CHANGED", "the research config differs from the protocol's")
-        prior = self.store.list_holdout_access(protocol_id)
-        if any(a["strategy_id"] == combo_id and a["status"] != "refused" for a in prior):
-            refuse("COMBO_ALREADY_EVALUATED", "this combination was already tested on the holdout")
-        used = sum(1 for a in prior if a["status"] != "refused")
-        if used >= mat["holdout_budget"]["max_unique_candidate_evaluations"]:
-            refuse("HOLDOUT_BUDGET_EXHAUSTED", f"all {used} combination holdout tests are used")
-        plan = []
-        for m in members:                                                         # before the test is spent
-            doc = self.library.load(m["strategy_id"])
-            frozen, fh = freeze_definition(doc["definition"])
-            ident = compile_definition(copy_frozen(frozen), self.sessions, self._config_hash()).identity
-            if (ident.strategy_id, ident.logic_hash) != (m["strategy_id"], m["logic_hash"]):
-                refuse("HOLDOUT_DEFINITION_CHANGED", "a member's stored definition no longer compiles to its registered "
-                       "identity", strategy_id=m["strategy_id"], compiled_strategy_id=ident.strategy_id)
-            src, period = self._holdout_dataset(parent, frozen, refuse)
-            plan.append((m, frozen, fh, src, period))
-        self.store.add_holdout_access({**base, "frozen_hash": hash_obj([x[2] for x in plan]), "status": "granted"})
-        h = mat["windows"]["holdout"]
-        rc = mat["acceptance_criteria"]["random_control"]
-        try:
-            runs, ctrl_trades = [], []
-            for m, frozen, fh, src, period in plan:                               # the test is spent from here on
-                cell = self._run_cell(copy_frozen(frozen), src, True, period=period, status="OUT_OF_SAMPLE",
-                                      notes=f"protocol {protocol_id} combination holdout {aid} ({combo_id})",
-                                      entry_point="combination_holdout", holdout_access_id=aid)
-                runs.append((m, cell))
-                self.store.update_holdout_access(aid, result_json=_json.dumps(        # member runs are holdout runs now
-                    {"members": [{"strategy_id": x["strategy_id"], "run_id": c["run_id"]} for x, c in runs]}))
-                tr: list = []
-                self.random_entry_control(copy_frozen(frozen), src, n_controls=rc["n_controls"], seed=rc["seed"],
-                                          period=period, sample_status="OUT_OF_SAMPLE", holdout_access_id=aid,
-                                          candidate_entry_point="combination_control", trades_out=tr)
-                ctrl_trades.append(tr)
-                if freeze_definition(frozen)[1] != fh:
-                    raise RuntimeError("frozen strategy definition changed during the combination holdout test")
-            ms = []
-            for m, cell in runs:
-                rec, t = self.store.load_run(cell["run_id"])
-                ms.append(CB.member_from({"strategy_id": m["strategy_id"], "run_id": cell["run_id"]}, rec, t))
-            order = sorted(range(len(ms)), key=lambda i: ms[i].strategy_id)
-            ms = [ms[i] for i in order]
-            ctrl_trades = [ctrl_trades[i] for i in order]
-            mids, rows = CB.merge_select(ms)
-            frame = CB.merged_frame(ms, mids, rows)
-            win = CB.window_of(ms)
-            metrics = compute_metrics(frame, sample_thresholds=self.cfg.get("sample_size"), span=win) if len(frame) \
-                else compute_metrics(frame, sample_thresholds=self.cfg.get("sample_size"))
-            costs = (cost_sensitivity(frame, mat["acceptance_criteria"]["cost_stress"]["multipliers"]).to_dict("records")
-                     if len(frame) else [])
-            ctrl_exp = []
-            for k in range(rc["n_controls"]):                                    # control k of every member, merged
-                cms = [CB.member_from({"strategy_id": x.strategy_id, "run_id": f"control-{k}"},
-                                      {"dataset": {"start": x.start, "end": x.end}}, ctrl_trades[i][k])
-                       for i, x in enumerate(ms)]
-                cmids, crows = CB.merge_select(cms)
-                r = np.array([cms[i].net_r[j] for i, j in zip(cmids.tolist(), crows.tolist())], float)
-                ctrl_exp.append(float(r.mean()) if len(r) else None)
-            verdict = rp.assess_holdout(mat, metrics, costs, ctrl_exp, len(mat["combo_set"]),
-                                        trade_r=frame["net_r"].to_numpy(float) if len(frame) else [],
-                                        seed=rp.derive_seed(protocol_id, combo_id))
-        except Exception as exc:
-            self.store.update_holdout_access(aid, status="failed", completed_at=now(),
-                                             reason=f"{type(exc).__name__}: {exc}")
-            raise
-        skipped = CB.skipped_by_member(ms, mids)
-        out = {"access_id": aid, "protocol_id": protocol_id, "combo_id": combo_id, "merge_rule": mat.get("merge_rule"),
-               "members": [{"strategy_id": x.strategy_id, "run_id": x.run_id, "trades": int(len(x.entry)),
-                            "skipped": skipped[x.strategy_id]} for x in ms],
-               "window": {"trading_dates": h["trading_dates"], "first_bar": h["first_bar"], "last_bar": h["last_bar"]},
-               "trade_count": int(len(frame)), "net_r": float(frame["net_r"].sum()) if len(frame) else 0.0,
-               "merged_trades_hash": hash_obj(frame[["member", "member_trade_no"]].to_dict("records")) if len(frame) else None,
-               **verdict, "holdout_looks_used": used + 1,
-               "holdout_looks_budget": mat["holdout_budget"]["max_unique_candidate_evaluations"]}
-        self.store.update_holdout_access(aid, status="completed", completed_at=now(),
                                          result_json=_json.dumps(_jsonable(out), sort_keys=True))
         return _jsonable(out)
 
