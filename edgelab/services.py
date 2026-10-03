@@ -2265,9 +2265,9 @@ class Services:
             return
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        from edgelab.research.protocol import is_flip
+        from edgelab.research.protocol import is_companion
         for p in self.store.list_protocols(status="ACTIVE"):
-            if is_flip(p):                               # ADR-88: a flip protocol only holds its registered flips
+            if is_companion(p):                          # ADR-88/93: a companion protocol only holds its own strategies
                 continue
             for i, a in enumerate(rep.accepted):
                 sid = a.get("strategy_id") if isinstance(a, Mapping) else a
@@ -2571,3 +2571,106 @@ class Services:
         """random_entry_control (unchanged method) on the OOS window of an evaluate_oos split."""
         from edgelab.research import lab
         return _jsonable(lab.oos_control(self, src, dataset_id, split_at, n_controls, seed))
+
+    # ------------------------------------------------------------------ My strategy (ADR-93)
+    def my_strategy_overview(self) -> dict:
+        from edgelab.mystrategy import github as G, params as P, review as RV, runner as R
+        ov = R.load_overrides(self)
+        try:
+            h = P.settings_hash(ov)
+        except P.SettingsError:
+            h = None
+        st = RV.current(self)
+        return _jsonable({"protocol": R.protocol_info(self), "settings_hash": h, "settings_changed": ov,
+                          "backtests": R.list_backtests(self)[:20], "holdout_reports": R.list_backtests(self, "holdout"),
+                          "plans": R.list_plan_results(self)[:20], "latest_report_id": R.latest_report_id(self),
+                          "review": None if st is None else {k: st.get(k) for k in ("id", "status", "created_at",
+                                                                                     "settings_hash", "mechanical_report",
+                                                                                     "final_report")},
+                          "github": G.status(), "job": R.jobs_of(self).active()})
+
+    def my_strategy_settings(self) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable(R.settings_payload(self))
+
+    def my_strategy_save_settings(self, overrides: Mapping) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable(R.save_overrides(self, dict(overrides)))
+
+    def my_strategy_start_backtest(self, overrides: Mapping | None, start: Any = None, end: Any = None,
+                                   label: str = "") -> dict:
+        from edgelab.mystrategy import params as P, runner as R
+        ov = dict(overrides) if overrides is not None else R.load_overrides(self)
+        P.resolve(ov)                                          # refuse bad settings before a job starts
+        return R.jobs_of(self).start("backtest", lambda step: R.backtest(self, ov, start, end, label=label,
+                                                                         lock=self.lock, progress=step))
+
+    def my_strategy_job(self, job_id: str) -> dict:
+        from edgelab.mystrategy import runner as R
+        return R.jobs_of(self).get(job_id)
+
+    def my_strategy_backtest(self, bt_id: str) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable(R.get_backtest(self, bt_id))
+
+    def my_strategy_trade(self, bt_id: str, trade_no: int) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable(R.get_trade(self, bt_id, trade_no))
+
+    def my_strategy_review(self) -> dict:
+        from edgelab.mystrategy import review as RV
+        return _jsonable(RV.view(self, self.lock))
+
+    def my_strategy_start_review(self, overrides: Mapping | None) -> dict:
+        from edgelab.mystrategy import review as RV, runner as R
+        ov = dict(overrides) if overrides is not None else R.load_overrides(self)
+        return R.jobs_of(self).start("holdout", lambda step: RV.start(self, ov, lock=self.lock, progress=step))
+
+    def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
+        from edgelab.mystrategy import review as RV
+        return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock))
+
+    def my_strategy_github(self) -> dict:
+        from edgelab.mystrategy import github as G
+        return G.status()
+
+    def my_strategy_set_token(self, token: str | None) -> dict:
+        from edgelab.mystrategy import github as G
+        return G.clear_token() if not token else G.set_token(token)
+
+    def my_strategy_upload(self, report_id: str | None, include_candles: bool = True) -> dict:
+        from edgelab.mystrategy import runner as R
+        from edgelab.mystrategy import github as G
+        G._token()                                             # no token -> refused before a job starts
+        rid = report_id or R.latest_report_id(self)
+        if not rid:
+            raise R.MyStrategyError("NOTHING_TO_UPLOAD", "There is no report to upload yet.")
+        return R.jobs_of(self).start("upload", lambda step: (step("Uploading to GitHub"),
+                                                            R.upload(self, rid, include_candles))[1],
+                                     {"report_id": rid})
+
+    def my_strategy_plans(self) -> dict:
+        from edgelab.mystrategy import github as G, runner as R
+        return _jsonable({"available": G.list_plans(), "results": R.list_plan_results(self)})
+
+    def my_strategy_plan(self, name: str) -> dict:
+        from edgelab.mystrategy import github as G, runner as R
+        plan = G.get_plan(name)
+        return _jsonable({"name": name, "plan": plan, "variants": R.check_plan(plan)})
+
+    def my_strategy_plan_result(self, pl_id: str) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable(R.plan_result(self, pl_id))
+
+    def my_strategy_run_plan(self, name: str, auto_upload: bool = False) -> dict:
+        from edgelab.mystrategy import github as G, runner as R
+        plan = G.get_plan(name)
+        R.check_plan(plan)
+
+        def work(step):
+            res = R.run_plan(self, {**plan, "name": plan.get("name") or name}, lock=self.lock, progress=step)
+            if auto_upload:
+                step("Uploading the results to GitHub")
+                res["upload"] = R.upload(self, res["id"], include_candles=False)
+            return res
+        return R.jobs_of(self).start("plan", work, {"plan": name})

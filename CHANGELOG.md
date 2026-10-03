@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy: BP Blake's model with every rule as a setting (ADR-93)
+
+| Item | Status |
+|---|---|
+| New tab "My strategy": Overview (full summary of the strategy from the transcripts), Settings (137 settings), Backtest, Trades, Holdout review | IMPLEMENTED, TESTED (screenshots) |
+| Mechanical rules: bias (gaps respected / disrespected, structure), draw on liquidity, premium/discount, key levels (FVG, swept inside low/high, CISD, rejection block, BPR), manipulation leg, inversion gap (highest timeframe / single gap), entry, stop, liquidity targets 1-3R, breakeven, trailing, daily limits, 1% risk | IMPLEMENTED, TESTED (known-answer day long + mirrored short; lookahead check on every rule family) |
+| Backtests through the same engine, BID/ASK costs and MNQ sizing, recorded as runs; own protocol with 300 tries and one holdout look | IMPLEMENTED, TESTED |
+| Every trade documented: checklist, levels, explanation, 1m candles of the day and the candles of each timeframe it used; charts with entry / stop / target | IMPLEMENTED, TESTED |
+| Holdout review: one look, chart stops at the entry, Take / Skip, result after each decision, mechanical and "with your decisions" results side by side | IMPLEMENTED, TESTED |
+| Upload of the latest report to GitHub (branch strategy-reports) and test plans from Claude | IMPLEMENTED, TESTED (simulated GitHub) |
+| 15s / 30s confirmations, SMT with ES, Asia and London models | NOT IMPLEMENTED (documented; 1m data only, no ES data) |
+| Results on the real NQ data, real GitHub upload | REQUIRES REAL DATA (runs on your PC) |
+| Backtests of every other strategy, fills, costs, sizing, prop rules, configs, existing protocols | UNCHANGED |
+
 ## Strategy combinations removed (ADR-92 withdrawn)
 
 | Item | Status |

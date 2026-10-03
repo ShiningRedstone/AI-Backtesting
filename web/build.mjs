@@ -48,7 +48,7 @@ const APP_VERSION = appVersion();
 const options = {
   entryPoints: [path.join(here, "src/main.tsx")],
   bundle: true, minify: true, sourcemap: false, format: "esm", target: ["es2020"],
-  jsx: "automatic", outfile: path.join(out, "app.js"), nodePaths: searchPaths,
+  jsx: "automatic", outfile: path.join(out, "app.js"), nodePaths: searchPaths, loader: { ".md": "text" },
   define: { "process.env.NODE_ENV": '"production"', __EDGELAB_VERSION__: JSON.stringify(APP_VERSION) }, logLevel: "info", legalComments: "none",
 };
 

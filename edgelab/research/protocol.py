@@ -153,6 +153,18 @@ def is_flip(rec: Mapping) -> bool:
     return mat.get("role") == FLIP_ROLE
 
 
+# ADR-93: the separate protocol of the hand-built "My strategy" (its own trials and holdout look; same data, windows,
+# execution and config as its parent). Like a flip protocol it is a COMPANION: never the governing research protocol.
+MY_STRATEGY_ROLE = "my_strategy"
+MY_STRATEGY_SCOPE_SUFFIX = "#my_strategy"
+
+
+def is_companion(rec: Mapping) -> bool:
+    """True for a companion protocol (flip or My strategy): it never governs library strategies or campaigns."""
+    mat = rec.get("material", rec)
+    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE)
+
+
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,
                         datasets_by_timeframe: Mapping, discovery_period: Mapping, parent_looks_used: int,
                         holdout_looks: int = DEFAULT_HOLDOUT_LOOKS, name: str = "") -> dict:

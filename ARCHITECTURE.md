@@ -2436,3 +2436,43 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 ### ADR-92 Strategy combinations: withdrawn
 - Added (commit 723b962) and then removed at the user's request (revert); the code is back to the ADR-91 state.
   The number stays used.
+
+### ADR-93 My strategy: BP Blake's model as settings, its own protocol, documented trades, holdout review, uploads
+- **Request (user):** rebuild BP Blake's strategy from his video transcripts in a new tab, with every part a setting;
+  backtest it, document every trade (all 1-minute candles and the context levels), show each trade as charts per
+  timeframe with entry / stop / target and a true/false checklist, test the holdout with the user's own yes/no per
+  trade, and upload reports so Claude can tune the settings later (toward his win rate / R:R and the user's goals of
+  3-5 trades a week and few losing months) without overfitting.
+- **Summary:** `web/src/content/my_strategy.md` (bundled, shown on the tab's Overview): the four steps, Judas swing,
+  Asia/London (documented, not built), red flags, the recap trades, and how each idea became a rule.
+- **Rules:** `edgelab/mystrategy/` - `params.py` (one schema of 137 settings: validation, defaults, `settings_hash` =
+  the strategy's identity), `frames.py` (higher-timeframe candles from 1m bars with a COMPLETION index, swings, FVGs,
+  range queries), `logic.py` (bias -> draw -> key levels -> manipulation leg -> inversion gap -> orders; a short is the
+  same code in a mirrored price world), `strategy.py` (`MyStrategy`, an `engine.signals.Strategy`; `ReplayStrategy`).
+  - Causality: everything reads only objects whose completion index is <= the decision bar; a truncated history never
+    completes its partial last candle. Every backtest runs the engine's unchanged empirical lookahead check.
+  - Execution is the ONE engine (`run_backtest`): canonical Dukascopy BID/ASK costs, MNQ whole-contract sizing
+    (`equity_risk` 1% default or fixed $), session flatten. Breakeven / trailing are per-bar stop CANDIDATES handed to the
+    existing `TrailSpec(mode="level")`; the engine owns the ratchet. Daily limits use the existing `max_trades_per_day`
+    / `block_after`; the force-exit time uses signal exits. Planned risk/target use the entry-side close (ASK for longs).
+  - Data limits, stated in the summary: 1-minute data only (no 15s/30s: the user chose 1m and up); SMT needs ES data
+    (setting present, refused when switched on).
+- **Protocol:** a COMPANION of the active research protocol (`research/protocol.py` `MY_STRATEGY_ROLE`, scope
+  `<inst>@<prov>#my_strategy`, `is_companion` now filters flips AND this role wherever "the" active protocol is looked
+  up). Same source data, windows, execution and config hash; own budget (300 settings combinations x windows) and ONE
+  holdout look. Discovery windows only (`HOLDOUT_LOCKED` otherwise); earlier discovery bars are warm-up (never traded).
+  Backtests are recorded runs (IN_SAMPLE) plus ledger trials.
+- **Records:** `<data>/my_strategy/backtests/<BT_id>/` summary.json, trades.json.gz (trade + explanation + checklist),
+  candles.jsonl.gz (the 1m candles of the trading day and the candles of every timeframe the trade used), days.json.gz.
+- **Holdout review** (`mystrategy/review.py`): needs a counted discovery trial of the same settings; spends the look
+  (holdout_access), records the mechanical run (OUT_OF_SAMPLE, Holdout), then walks the setups in time order showing
+  only data up to the signal; declined signals are removed (`MyStrategy(skip=)`) and the engine replays the rest
+  (`ReplayStrategy`, causality check done on the mechanical run). The "with your decisions" result is a report, never a
+  run or trial. The mechanical result stays hidden until every setup is decided.
+- **Uploads / plans** (`mystrategy/github.py`): token per user next to the app settings file (outside every workspace,
+  never returned), Git Data API commit to branch `strategy-reports` (`my_strategy/reports/<date>/<id>/`,
+  `my_strategy/latest.json`); test plans `my_strategy/plans/*.json` (validated before anything runs; every variant is a
+  normal counted backtest).
+- **UI:** tab "My strategy" (Overview, Settings, Backtest, Trades, Holdout review); SVG candlestick chart
+  (`components/candles.tsx`); routes `/api/my/*`.
+- **Unchanged:** engine, fills, costs, sizing, compiler, prop rules, configs, the causality check, every existing protocol.

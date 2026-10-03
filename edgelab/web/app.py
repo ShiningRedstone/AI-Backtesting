@@ -44,6 +44,9 @@ CONTROL_ID = re.compile(r"^CTRL_[0-9A-F]{12}$")
 BT_JOB_ID = re.compile(r"^BTJ_[0-9A-F]{12}$")
 FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
+MY_REPORT_ID = re.compile(r"^(BT|HO|HD|PL)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")       # ADR-93
+MY_JOB_ID = re.compile(r"^MSJ_[0-9a-f]{12}$")
+MY_PLAN_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
 
 class ApiError(Exception):
@@ -169,6 +172,18 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, FlipError):                         # ADR-88: flip scan refusals (machine-readable code)
             return jsonify({"error": {"kind": "flip_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409 if e.code in ("FLIP_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
+        from edgelab.mystrategy.github import UploadError
+        from edgelab.mystrategy.params import SettingsError
+        from edgelab.mystrategy.runner import MyStrategyError
+        if isinstance(e, SettingsError):                     # ADR-93
+            return jsonify({"error": {"kind": "my_strategy_settings", "message": "Some settings are not valid.",
+                                      "issues": [{"severity": "error", "message": m} for m in e.issues]}}), 422
+        if isinstance(e, MyStrategyError):
+            return jsonify({"error": {"kind": "my_strategy", "code": e.code, "message": e.message}}), \
+                409 if e.code in ("JOB_RUNNING", "REVIEW_OPEN", "HOLDOUT_LOOKS_USED", "NOT_CURRENT") else 422
+        if isinstance(e, UploadError):
+            return jsonify({"error": {"kind": "upload", "code": e.code, "message": e.message}}), \
+                502 if e.code in ("OFFLINE", "HTTP_ERROR") else 422
         if isinstance(e, SearchSpecError):
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],
@@ -1083,6 +1098,108 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         """ADR-89: rewrites the WORKSPACE's config files to the protocol's recorded settings (verified, backed up).
         The protocol record itself is never edited."""
         return jsonify(call(svc.restore_protocol_config, _id(pid, PROTOCOL_ID, "protocol id"), body().get("confirm")))
+
+    # ------------------------------------------------------------------ My strategy (ADR-93)
+    @app.get("/api/my")
+    def my_overview():
+        return jsonify(call(svc.my_strategy_overview))
+
+    @app.get("/api/my/settings")
+    def my_settings():
+        return jsonify(call(svc.my_strategy_settings))
+
+    @app.post("/api/my/settings")
+    def my_settings_save():
+        ov = body().get("overrides")
+        if not isinstance(ov, dict):
+            raise _bad("overrides must be an object")
+        return jsonify(call(svc.my_strategy_save_settings, ov))
+
+    def _my_window(b: dict):
+        out = []
+        for k in ("start", "end"):
+            v = b.get(k)
+            if v is not None and (not isinstance(v, str) or len(v) > 40):
+                raise _bad(f"{k} must be a date string")
+            out.append(v or None)
+        return out
+
+    @app.post("/api/my/backtests")
+    def my_backtest_start():
+        b = body()
+        ov = b.get("overrides")
+        if ov is not None and not isinstance(ov, dict):
+            raise _bad("overrides must be an object")
+        start, end = _my_window(b)
+        label = str(b.get("label") or "")[:80]
+        return jsonify(call(svc.my_strategy_start_backtest, ov, start, end, label)), 202
+
+    @app.get("/api/my/jobs/<jid>")
+    def my_job(jid):
+        return jsonify(svc.my_strategy_job(_id(jid, MY_JOB_ID, "job id")))
+
+    @app.get("/api/my/reports/<rid>")
+    def my_report(rid):
+        return jsonify(call(svc.my_strategy_backtest, _id(rid, MY_REPORT_ID, "report id")))
+
+    @app.get("/api/my/reports/<rid>/trades/<int:n>")
+    def my_trade(rid, n):
+        return jsonify(call(svc.my_strategy_trade, _id(rid, MY_REPORT_ID, "report id"), n))
+
+    @app.get("/api/my/review")
+    def my_review():
+        return jsonify(call(svc.my_strategy_review))
+
+    @app.post("/api/my/review")
+    def my_review_start():
+        ov = body().get("overrides")
+        if ov is not None and not isinstance(ov, dict):
+            raise _bad("overrides must be an object")
+        return jsonify(call(svc.my_strategy_start_review, ov)), 202
+
+    @app.post("/api/my/review/decide")
+    def my_review_decide():
+        b = body()
+        sb, take = b.get("signal_bar"), b.get("take")
+        if not isinstance(sb, int) or isinstance(sb, bool) or not isinstance(take, bool):
+            raise _bad("signal_bar (integer) and take (true/false) are required")
+        return jsonify(svc.my_strategy_decide(sb, take))       # computes outside the service lock
+
+    @app.get("/api/my/github")
+    def my_github():
+        return jsonify(svc.my_strategy_github())
+
+    @app.post("/api/my/github/token")
+    def my_github_token():
+        t = body().get("token")
+        if t is not None and not isinstance(t, str):
+            raise _bad("token must be a string")
+        return jsonify(svc.my_strategy_set_token(t))
+
+    @app.post("/api/my/upload")
+    def my_upload():
+        b = body()
+        rid = b.get("report_id")
+        if rid is not None:
+            rid = _id(rid, MY_REPORT_ID, "report id")
+        return jsonify(svc.my_strategy_upload(rid, bool(b.get("include_candles", True)))), 202
+
+    @app.get("/api/my/plans")
+    def my_plans():
+        return jsonify(svc.my_strategy_plans())
+
+    @app.get("/api/my/plans/<name>")
+    def my_plan(name):
+        return jsonify(svc.my_strategy_plan(_id(name, MY_PLAN_NAME, "plan name")))
+
+    @app.get("/api/my/plan-results/<pid>")
+    def my_plan_result(pid):
+        return jsonify(svc.my_strategy_plan_result(_id(pid, MY_REPORT_ID, "plan result id")))
+
+    @app.post("/api/my/plans/<name>/run")
+    def my_plan_run(name):
+        return jsonify(svc.my_strategy_run_plan(_id(name, MY_PLAN_NAME, "plan name"),
+                                                bool(body().get("auto_upload", False)))), 202
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")

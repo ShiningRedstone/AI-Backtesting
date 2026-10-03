@@ -19,6 +19,7 @@ import { RunsPage } from "../pages/Runs";
 import { HoldoutPage } from "../pages/Holdout";
 import { FlipsPage } from "../pages/Flips";
 import { RunBacktestPage } from "../pages/RunBacktest";
+import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
@@ -26,7 +27,7 @@ import { useApi } from "./context";
 import { CAMPAIGN_JOB_FINAL, campaigns } from "../api/campaigns";
 import type { CampaignJob } from "../api/campaigns";
 
-/** The seven tabs. `heads` are the first route segments that belong to a tab (old routes stay valid). */
+/** The tabs (ADR-93 added "My strategy"). `heads` are the first route segments that belong to a tab (old routes stay valid). */
 interface NavItem { path: string; label: string; tid: string; icon: string; heads: string[]; planned?: boolean }
 const NAV: NavItem[] = [
   { path: "/", label: "Home", tid: "home", icon: "home", heads: [""] },
@@ -35,6 +36,7 @@ const NAV: NavItem[] = [
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
+  { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan"] },
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
@@ -50,6 +52,9 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
     { path: "/prop", label: "Backtest prop check", head: "prop" }],
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
+  my: [{ path: "/my", label: "Overview", head: "my" }, { path: "/my-settings", label: "Settings", head: "my-settings" },
+    { path: "/my-backtest", label: "Backtest", head: "my-backtest" }, { path: "/my-trades", label: "Trades", head: "my-trades" },
+    { path: "/my-holdout", label: "Holdout review", head: "my-holdout" }],
 };
 
 const tabOf = (head: string) => NAV.find((n) => n.heads.includes(head));
@@ -104,6 +109,12 @@ function Page() {
     case "paper": return <PaperPage />;
     case "discovery": return <DiscoveryPage />;
     case "settings": return <SettingsPage />;
+    case "my": return <MyOverviewPage />;                  // ADR-93: My strategy
+    case "my-settings": return <MySettingsPage />;
+    case "my-backtest": return <MyBacktestPage />;
+    case "my-trades": return route.parts[2] ? <MyTradePage key={`${route.parts[1]}/${route.parts[2]}`} /> : <MyTradesPage key={route.parts[1] ?? ""} />;
+    case "my-holdout": return <MyHoldoutPage />;
+    case "my-plan": return <MyPlanResultPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to Home</a></p></div>;
   }
 }

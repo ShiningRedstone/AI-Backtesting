@@ -851,3 +851,35 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .skel-filters { display: flex; flex-wrap: wrap; gap: 8px; }
 .skel-card .card-head { min-height: 44px; }
 .skel-card .card-head .skel-line { height: 12px; }
+/* My strategy (ADR-93) */
+.my-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 16px; align-items: start; }
+.my-setting { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.my-setting:last-child { border-bottom: 0; }
+.my-setting.changed .my-setting-label { color: var(--text); }
+.my-setting-label { font-weight: 600; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; color: var(--text-2); }
+.my-setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.my-setting-ctl { flex-shrink: 0; display: flex; align-items: center; }
+.my-setting-ctl .input { width: 150px; }
+.candle-chart { user-select: none; }
+.candle-chart svg { cursor: crosshair; }
+.candle-tools { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.candle-info { margin-top: 4px; color: var(--text-2); }
+.my-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+.my-check { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface-2); }
+.my-check.yes .my-check-mark { color: var(--ok); font-weight: 700; }
+.my-check.no .my-check-mark { color: var(--muted); font-weight: 700; }
+.my-check.na { opacity: .6; }
+.my-explain { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; line-height: 1.5; }
+.small-head { font-size: 13px; margin: 14px 0 6px; color: var(--text-2); }
+.my-plan ol { margin: 6px 0 10px; padding-left: 20px; }
+.markdown { line-height: 1.6; color: var(--text-2); max-width: 980px; }
+.markdown h1 { font-size: 22px; margin: 6px 0 10px; color: var(--text); }
+.markdown h2 { font-size: 18px; margin: 22px 0 8px; color: var(--text); }
+.markdown h3 { font-size: 15px; margin: 18px 0 6px; color: var(--text); }
+.markdown p { margin: 8px 0; }
+.markdown ul { margin: 6px 0 10px; padding-left: 20px; }
+.markdown li { margin: 3px 0; }
+.markdown blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid var(--warn); background: var(--surface-2); border-radius: 6px; }
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
+.markdown .md-table td, .markdown .md-table th { white-space: normal; vertical-align: top; }
