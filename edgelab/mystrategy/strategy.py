@@ -36,14 +36,19 @@ def sizing_of(s: dict) -> dict:
 class MyStrategy(Strategy):
     family = "my_strategy"
 
-    def __init__(self, settings: dict | None, calendar, skip: set | None = None, trade_from_td: int | None = None):
+    def __init__(self, settings: dict | None, calendar, skip: set | None = None, trade_from_td: int | None = None,
+                 es=None):
         s = P.resolve(settings)
+        if es is None and P.smt_used(s):
+            raise ValueError("these settings use SMT divergence, which needs the ES data")
         super().__init__(order_spec(s), params_version=P.PARAMS_VERSION, settings_hash=P.settings_hash(s),
-                         settings=P.changed(s))
+                         settings=P.changed(P.identity(s)), **({"es_content_hash": es.content_hash} if es is not None and
+                                                   P.smt_used(s) else {}))
         self.settings = s
         self.calendar = calendar
         self.skip = set(skip or ())
         self.trade_from_td = trade_from_td      # run window (warm-up before it), never part of the identity
+        self.es = es                            # ES reference prices for SMT (ADR-95); None = SMT unknown
         self.sizing = sizing_of(s)
         self.explanations: dict[int, dict] = {}
         self.stats: Counter = Counter()
@@ -51,7 +56,7 @@ class MyStrategy(Strategy):
         self.last_signals: SignalSet | None = None
 
     def generate_signals(self, bars) -> SignalSet:
-        r = Rules(bars, self.calendar, self.settings, self.skip, self.trade_from_td)
+        r = Rules(bars, self.calendar, self.settings, self.skip, self.trade_from_td, es=self.es)
         sig, expl, stats = r.run()
         self.explanations, self.stats, self.days, self.last_signals = expl, stats, r.days, sig
         return sig

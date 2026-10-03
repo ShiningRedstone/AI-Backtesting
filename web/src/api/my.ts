@@ -68,6 +68,14 @@ export interface Explanation {
   breakeven: { mode: string; level: number | null };
   chop: { gaps_created: number; gaps_closed_through: number; share: number; ok: boolean } | null;
   checklist: Record<string, boolean | null>; quality: number;
+  smt?: { divergence: boolean | null; reason: string; nq_took?: boolean; es_took?: boolean; tf?: string; ref_ts?: string;
+    nq_ref?: number; nq_extreme?: number; es_ref?: number; es_extreme?: number | null };
+}
+export interface EsStatus {
+  imported: boolean; es_id?: string; content_hash?: string; source_file?: string; source_sha256?: string; bars?: number;
+  first_bar_open_utc?: string; last_bar_open_utc?: string; imported_at?: string; identity_status?: string;
+  identity: { provider: string; instrument: string; feed: string; description: string; price_basis: string; timeframe: string;
+    timestamps: string; volume: string; role: string };
 }
 export interface TradeDoc extends TradeRow {
   explanation: Explanation; charts: string[]; candles: Record<string, Candle[]>; backtest_id: string; count: number;
@@ -82,7 +90,7 @@ export interface ExportResult { path: string; file: string; folder: string; byte
 export interface Overview {
   protocol: ProtocolInfo; settings_hash: string | null; settings_changed: Record<string, unknown>; backtests: ReportRow[];
   reports: ReportRow[]; plans: { id: string; name: string; created_at: string; variants: number; exported?: unknown }[];
-  job: MyJob | null;
+  job: MyJob | null; es?: EsStatus;
   review: { id: string; status: string; created_at: string; settings_hash: string; mechanical_report: string; final_report: string | null } | null;
 }
 
@@ -103,6 +111,8 @@ export interface PlanResult { id: string; name: string; note?: string; created_a
 export const my = {
   overviewUrl: "/api/my",
   settingsUrl: "/api/my/settings",
+  esUrl: "/api/my/es",
+  importEs: (path: string, identity_confirmed: boolean) => api.post<MyJob>("/api/my/es/import", { path, identity_confirmed }),
   reviewUrl: "/api/my/review",
   reportUrl: (id: string) => `/api/my/reports/${enc(id)}`,
   tradeUrl: (id: string, n: number) => `/api/my/reports/${enc(id)}/trades/${n}`,

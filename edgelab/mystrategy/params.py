@@ -133,10 +133,15 @@ SCHEMA: list[dict] = [
     _p("filters.chop_min_gaps", "Minimum gaps created", I, 2, "", min=0, max=50),
     _p("filters.chop_max_flip", "Maximum share of gaps closed through", F, 0.6, "", min=0, max=1),
     _p("filters.smt", "Require SMT divergence with ES", B, False,
-       "Needs ES data, which is not imported.", S_STRAT, unavailable="needs ES data (not imported)"),
+       "At the manipulation leg's extreme, exactly one of NQ / ES took out the prior swing low (longs; highs for shorts) "
+       "the other kept. Setups without it (or with ES minutes missing) are skipped. Needs the ES data (Settings -> ES "
+       "data for SMT).", S_STRAT),
+    _p("filters.smt_in_score", "SMT counts toward the confluence score", B, True,
+       "SMT divergence adds 1 to the confluence score below. Needs the ES data once the minimum score is above 0.",
+       S_STRAT),
     _p("filters.min_quality", "Minimum confluence score", I, 0,
        "Score = number of extra confluences true (liquidity swept, several key levels, displacement, "
-       "discount/premium, target at stacked liquidity, open manipulation).", min=0, max=6),
+       "discount/premium, target at stacked liquidity, open manipulation, SMT if counted).", min=0, max=7),
     # ---------------------------------------------------------------- key levels
     _p("key.tf_3m", "3m key levels", B, False, "", S_STRAT),
     _p("key.tf_5m", "5m key levels", B, True, "", S_STRAT),
@@ -355,11 +360,25 @@ def resolve(overrides: dict | None = None) -> dict:
 def changed(settings: dict) -> dict:
     """Only the values that differ from the defaults (compact display / upload)."""
     d = defaults()
-    return {k: v for k, v in settings.items() if d.get(k) != v}
+    return {k: v for k, v in settings.items() if k in d and d[k] != v}
+
+
+def smt_used(s: dict) -> bool:
+    """True when SMT can change which trades are taken (then the ES data is an input of the result)."""
+    return bool(s["filters.smt"] or (s["filters.smt_in_score"] and s["filters.min_quality"] > 0))
+
+
+def identity(s: dict) -> dict:
+    """The settings that define the strategy. ``filters.smt_in_score`` (ADR-95) only matters with a minimum score above 0;
+    otherwise it is left out, so settings from before it existed keep their hash (identical logic = identical id)."""
+    s = dict(s)
+    if not (s["filters.smt_in_score"] and s["filters.min_quality"] > 0):
+        s.pop("filters.smt_in_score")
+    return s
 
 
 def settings_hash(settings: dict) -> str:
-    return hash_obj({"my_strategy_params": PARAMS_VERSION, "settings": resolve(settings)}, 16)
+    return hash_obj({"my_strategy_params": PARAMS_VERSION, "settings": identity(resolve(settings))}, 16)
 
 
 def schema_payload() -> dict:

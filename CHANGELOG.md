@@ -3,6 +3,19 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy: SMT divergence with ES, scrolling backtest lists (ADR-95)
+
+| Item | Status |
+|---|---|
+| ES data for SMT: import of the Dukascopy S&P 500 index CFD file (1-minute BID, UTC) under Settings, checked and fingerprinted; never traded, not a research dataset, configs untouched | IMPLEMENTED, TESTED |
+| SMT divergence at the manipulation leg's swing (exactly one of NQ / ES takes the prior swing low; highs for shorts); missing ES minutes = unknown | IMPLEMENTED, TESTED |
+| "Require SMT divergence with ES" setting now available; new "SMT counts toward the confluence score" (on; maximum score 7) | IMPLEMENTED, TESTED |
+| SMT off: identical signals and identical settings fingerprints as before | TESTED (known answers; user's real data) |
+| Trade checklist and "Why it entered" show the SMT verdict and both markets' levels | IMPLEMENTED (browser test) |
+| Backtest lists: fixed-height box (about 8 rows) that scrolls inside, headers stay visible | IMPLEMENTED (browser test) |
+| SMT results on the real data | REQUIRES REAL DATA (user's workspace) |
+| Engine, fills, costs, sizing, prop rules, configs | UNCHANGED |
+
 ## My strategy: save for Claude, layout, trades list, stretchable charts (ADR-94)
 
 | Item | Status |

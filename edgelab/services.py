@@ -2574,7 +2574,7 @@ class Services:
 
     # ------------------------------------------------------------------ My strategy (ADR-93)
     def my_strategy_overview(self) -> dict:
-        from edgelab.mystrategy import params as P, review as RV, runner as R
+        from edgelab.mystrategy import es as ES, params as P, review as RV, runner as R
         ov = R.load_overrides(self)
         try:
             h = P.settings_hash(ov)
@@ -2583,11 +2583,31 @@ class Services:
         st = RV.current(self)
         return _jsonable({"protocol": R.protocol_info(self), "settings_hash": h, "settings_changed": ov,
                           "backtests": R.list_backtests(self), "reports": R.all_reports(self),
-                          "plans": R.list_plan_results(self)[:20],
+                          "plans": R.list_plan_results(self)[:20], "es": ES.status(self.data_root),
                           "review": None if st is None else {k: st.get(k) for k in ("id", "status", "created_at",
                                                                                      "settings_hash", "mechanical_report",
                                                                                      "final_report")},
                           "job": R.jobs_of(self).active()})
+
+    def my_strategy_es(self) -> dict:
+        from edgelab.mystrategy import es as ES
+        return _jsonable(ES.status(self.data_root))
+
+    def my_strategy_import_es(self, path: str, identity_confirmed: bool) -> dict:
+        """ES reference prices for SMT (ADR-95): validated, hashed, stored as a My strategy job (never a dataset)."""
+        from edgelab.mystrategy import es as ES, runner as R
+        if identity_confirmed is not True:
+            raise R.MyStrategyError("ES_IDENTITY_UNCONFIRMED", "Confirm what the file is before importing it.")
+        if not isinstance(path, str) or not path.strip():
+            raise R.MyStrategyError("ES_FILE_MISSING", "Enter the path of the ES .csv file.")
+
+        def work(step):
+            step("Reading and checking the ES file")
+            try:
+                return ES.import_csv(self.data_root, path.strip().strip('"'), identity_confirmed=True)
+            except ES.EsError as e:
+                raise R.MyStrategyError(e.code, e.message)
+        return R.jobs_of(self).start("es_import", work)
 
     def my_strategy_settings(self) -> dict:
         from edgelab.mystrategy import runner as R
@@ -2601,7 +2621,7 @@ class Services:
                                    label: str = "") -> dict:
         from edgelab.mystrategy import params as P, runner as R
         ov = dict(overrides) if overrides is not None else R.load_overrides(self)
-        P.resolve(ov)                                          # refuse bad settings before a job starts
+        R.es_for(self, P.resolve(ov))                          # refuse bad settings / missing ES before a job starts
         return R.jobs_of(self).start("backtest", lambda step: R.backtest(self, ov, start, end, label=label,
                                                                          lock=self.lock, progress=step))
 

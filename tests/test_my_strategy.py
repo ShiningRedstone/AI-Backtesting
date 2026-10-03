@@ -1,6 +1,8 @@
 """My strategy (ADR-93): BP Blake's model as settings, its own protocol, trade records, holdout review, uploads.
 
-Guarantees tested: settings are validated (unknown / unavailable refused) and their hash is the identity; higher-timeframe
+Guarantees tested: settings are validated (unknown / unavailable refused) and their hash is the identity (SMT settings
+keep pre-SMT hashes while SMT cannot change the trades); SMT with ES: off = identical signals, identical markets never
+diverge, a hand-made divergence is found, a missing ES minute = unknown, SMT stays causal; the ES import refuses bad files; higher-timeframe
 candles are causal (a partial candle is never complete); a hand-built known-answer day gives exactly the expected long
 signal and its mirror the expected short; every rule set passes the engine's empirical lookahead check; the replay
 used by the holdout review reproduces the engine's trades; the companion protocol counts trials, refuses the holdout
@@ -105,8 +107,9 @@ class TestSettings(unittest.TestCase):
         with self.assertRaises(P.SettingsError) as e:
             P.resolve({"nope": 1, "risk.pct": 99, "entry.type": "teleport", "session.entry_until": "25:00"})
         self.assertEqual(len(e.exception.issues), 4)
-        with self.assertRaises(P.SettingsError):                 # needs ES data: cannot be switched on
-            P.resolve({"filters.smt": True})
+        self.assertTrue(P.resolve({"filters.smt": True})["filters.smt"])          # ADR-95: available (needs ES to run)
+        with self.assertRaises(ValueError):
+            MyStrategy({"filters.smt": True}, CAL)                                  # refused without the ES data
         with self.assertRaises(P.SettingsError):
             P.resolve({"session.entry_from": "11:00", "session.entry_until": "10:00"})
 
@@ -115,6 +118,17 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(a, P.settings_hash({}))
         self.assertNotEqual(a, P.settings_hash({"target.min_r": 1.5}))
         self.assertEqual(P.changed(P.resolve({"target.min_r": 1.5})), {"target.min_r": 1.5})
+
+    def test_smt_settings_keep_old_identities(self):
+        """ADR-95 known answers: hashes recorded with the code before SMT existed stay the same while SMT cannot change
+        the trades (filter off, and the score setting irrelevant because the minimum score is 0 or it is off)."""
+        self.assertEqual(P.settings_hash({}), "83a7d49ee4f9d441")
+        self.assertEqual(P.settings_hash({"filters.smt_in_score": False}), "83a7d49ee4f9d441")
+        q2 = P.settings_hash({"filters.min_quality": 2, "filters.smt_in_score": False})
+        self.assertNotEqual(q2, P.settings_hash({"filters.min_quality": 2}))       # SMT in the score: another strategy
+        self.assertFalse(P.smt_used(P.resolve({})))
+        self.assertTrue(P.smt_used(P.resolve({"filters.min_quality": 1})))
+        self.assertTrue(P.smt_used(P.resolve({"filters.smt": True, "filters.smt_in_score": False})))
 
 
 class TestFrames(unittest.TestCase):
@@ -211,6 +225,132 @@ class TestCausalityAndEngine(unittest.TestCase):
         s2 = skipped.generate_signals(self.ds.bars)
         self.assertEqual(s2.direction[first], 0)
         self.assertEqual(skipped.stats["signals_declined_in_review"], 1)
+
+
+# ------------------------------------------------------------------------------------------------ SMT with ES (ADR-95)
+def es_like(ds, scale=0.28, drop=(), lift=None, cap=None):
+    """A SYNTHETIC ES series built from the NQ bars (a monotonic copy: it takes exactly the lows / highs NQ takes).
+    ``drop`` removes minutes; ``lift`` = (a, b, level) keeps ES lows in bars a..b at or above ``level``; ``cap`` = (a, b,
+    level) keeps ES highs in bars a..b at or below ``level`` (ES 'holds')."""
+    from edgelab.mystrategy.es import EsSeries, content_hash
+    b = ds.bars
+    keep = np.ones(len(b), bool)
+    keep[list(drop)] = False
+    o, h, lo, c = (np.asarray(x, float) * scale for x in (b.open, b.high, b.low, b.close))
+    if lift is not None:
+        a, z, level = lift
+        lo[a:z + 1] = np.maximum(lo[a:z + 1], level)
+        h[a:z + 1] = np.maximum(h[a:z + 1], lo[a:z + 1])
+    if cap is not None:
+        a, z, level = cap
+        h[a:z + 1] = np.minimum(h[a:z + 1], level)
+        lo[a:z + 1] = np.minimum(lo[a:z + 1], h[a:z + 1])
+    ts = b.ts_ns[keep]
+    return EsSeries(ts, h[keep], lo[keep], content_hash(ts, o[keep], h[keep], lo[keep], c[keep]), {"es_id": "ES_SYN"})
+
+
+class TestSmt(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ds = random_ds()
+        cls.base = {"eq.enabled": False, "ifg.displacement": False}
+
+    def _sig(self, over, es):
+        st = MyStrategy({**self.base, **over}, CAL, es=es)
+        sig = st.generate_signals(self.ds.bars)
+        return st, sig
+
+    def test_off_is_identical_with_or_without_es(self):
+        a, sa = self._sig({}, None)
+        b, sb = self._sig({}, es_like(self.ds))
+        for x, y in ((sa.direction, sb.direction), (sa.stop_price, sb.stop_price), (sa.target_price, sb.target_price),
+                     (sa.entry_price, sb.entry_price)):
+            np.testing.assert_array_equal(x, y)
+        self.assertEqual(a.strategy_id, b.strategy_id)
+        self.assertGreater(len(b.explanations), 3)
+        self.assertTrue(all(e["checklist"]["smt"] is None for e in a.explanations.values()))
+
+    def test_identical_markets_never_diverge(self):
+        st, _ = self._sig({}, es_like(self.ds))
+        self.assertNotIn(True, {e["checklist"]["smt"] for e in st.explanations.values()})   # ES takes what NQ takes
+        st2, sig2 = self._sig({"filters.smt": True}, es_like(self.ds))
+        self.assertEqual(int((sig2.direction != 0).sum()), 0)
+        self.assertGreater(st2.stats["setup_rejected_no_smt"], 0)
+
+    def test_known_divergence_and_missing_minutes(self):
+        st, _ = self._sig({}, es_like(self.ds))
+        bars = self.ds.bars
+        cases = [(i, e) for i, e in st.explanations.items() if e["smt"].get("nq_took")]
+        self.assertTrue(cases, "no signal whose leg took a prior swing")
+        i, e = cases[0]
+        m = int(np.searchsorted(bars.ts_ns, pd.Timestamp(e["leg"]["end_ts"]).value))
+        ref = int(np.searchsorted(bars.ts_ns, pd.Timestamp(e["smt"]["ref_ts"]).value))
+        k = ref + int(e["smt"]["tf"].rstrip("m"))          # first bar after the swing candle
+        d = e["direction"]
+        # ES holds its swing low (longs) / high (shorts) of that candle while NQ takes it -> divergence on this signal
+        if d > 0:
+            es = es_like(self.ds, lift=(k, m, float(np.min(bars.low[ref:k])) * 0.28))
+        else:
+            es = es_like(self.ds, cap=(k, m, float(np.max(bars.high[ref:k])) * 0.28))
+        st2, _ = self._sig({}, es)
+        self.assertIs(st2.explanations[i]["checklist"]["smt"], True)
+        self.assertIn("ES held", st2.explanations[i]["smt"]["reason"])
+        st3, sig3 = self._sig({"filters.smt": True}, es)
+        self.assertEqual(int(sig3.direction[i]), d)      # required SMT keeps exactly this signal
+        self.assertTrue(all(x["checklist"]["smt"] is True for x in st3.explanations.values()))
+        # one missing ES minute inside the compared span -> unknown, never "yes"
+        st4, _ = self._sig({}, es_like(self.ds, drop=[m]))
+        self.assertIsNone(st4.explanations[i]["checklist"]["smt"])
+        self.assertEqual(st4.explanations[i]["smt"]["reason"], "ES minutes missing")
+
+    def test_smt_in_score_and_causality(self):
+        es = es_like(self.ds, drop=range(500, 520))
+        st, _ = self._sig({}, es)
+        st_no, _ = self._sig({"filters.smt_in_score": False}, es)
+        for k, e in st.explanations.items():
+            self.assertEqual(e["quality"] - st_no.explanations[k]["quality"], int(e["checklist"]["smt"] is True))
+        for over in ({"filters.smt": True}, {"filters.min_quality": 3}):
+            rep = check_causality(MyStrategy({**self.base, **over}, CAL, es=es), self.ds.bars, n_cuts=12)
+            self.assertTrue(rep.passed, f"{over}: {rep.detail}")
+
+
+class TestEsImport(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _csv(self, rows, header="timestamp,open,high,low,close,volume"):
+        p = self.root / "es.csv"
+        p.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+        return p
+
+    def test_import_and_refusals(self):
+        from edgelab.mystrategy import es as ES
+        good = ["2024-01-02 14:30:00+00:00,4700.5,4701.25,4699.75,4700.0,0.1",
+                "2024-01-02 14:31:00+00:00,4700.0,4702.0,4699.5,4701.5,0.2",
+                "2024-01-02 14:33:00+00:00,4701.5,4701.5,4700.25,4700.75,0.1"]
+        with self.assertRaises(ES.EsError) as e:
+            ES.import_csv(self.root, self._csv(good), identity_confirmed=False)
+        self.assertEqual(e.exception.code, "ES_IDENTITY_UNCONFIRMED")
+        man = ES.import_csv(self.root, self._csv(good), identity_confirmed=True)
+        self.assertEqual(man["bars"], 3)
+        self.assertEqual(ES.import_csv(self.root, self._csv(good), identity_confirmed=True)["es_id"], man["es_id"])
+        es = ES.load(self.root)
+        h, lo = es.align(np.array([pd.Timestamp("2024-01-02 14:31", tz="UTC").value,
+                                   pd.Timestamp("2024-01-02 14:32", tz="UTC").value]))
+        self.assertEqual((h[0], lo[0]), (4702.0, 4699.5))
+        self.assertTrue(np.isnan(h[1]) and np.isnan(lo[1]))       # missing minute: NaN, never filled
+        bad = {"ES_BAD_HEADER": (good, "time,open,high,low,close,volume"),
+               "ES_TIMEZONE": ([good[0].replace("+00:00", "+01:00")] + good[1:], None),
+               "ES_ORDER": ([good[1], good[0]], None),
+               "ES_OHLC": (["2024-01-02 14:30:00+00:00,4700.5,4700.0,4699.75,4700.0,0.1"], None),
+               "ES_NOT_1M": (["2024-01-02 14:30:30+00:00,4700.5,4701.25,4699.75,4700.0,0.1"], None)}
+        for code, (rows, head) in bad.items():
+            with self.assertRaises(ES.EsError, msg=code) as e:
+                ES.read_csv(self._csv(rows, head) if head else self._csv(rows))
+            self.assertEqual(e.exception.code, code)
 
 
 # ------------------------------------------------------------------------------------------------ workspace
@@ -347,6 +487,9 @@ class TestApi(unittest.TestCase):
             self.assertEqual(r.status_code, 200)
             self.assertFalse(r.json["protocol"]["ready"])                     # no research protocol in an empty workspace
             self.assertEqual(c.get("/api/my/settings").status_code, 200)
+            self.assertFalse(c.get("/api/my/es").json["imported"])                  # ADR-95
+            self.assertEqual(c.post("/api/my/es/import", json={"path": "x.csv"}).status_code, 422)   # identity unconfirmed
+            self.assertEqual(c.post("/api/my/es/import", json={"path": 5}).status_code, 400)
             self.assertEqual(c.post("/api/my/settings", json={"overrides": {"x.y": 1}}).status_code, 422)
             self.assertEqual(c.get("/api/my/reports/BT_bad").status_code, 400)
             self.assertEqual(c.get("/api/my/reports/BT_20260101_000000_abcd").status_code, 404)

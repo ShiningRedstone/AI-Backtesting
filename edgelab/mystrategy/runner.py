@@ -243,6 +243,39 @@ def _trading_date_ord(calendar, ts: pd.Timestamp) -> int:
     return int(np.datetime64(d, "D").astype(np.int64))
 
 
+def es_for(svc, s: dict, ds=None, win=None):
+    """The ES series for these settings (ADR-95). Required (refused otherwise) when SMT can change the trades; when it
+    cannot, it is still used if imported (the trade checklist shows SMT) but never part of the result's identity."""
+    from edgelab.mystrategy import es as ES
+    try:
+        es = ES.load(svc.data_root)
+    except ES.EsError as e:
+        raise MyStrategyError(e.code, e.message)
+    used = P.smt_used(s)
+    if es is None:
+        if used:
+            raise MyStrategyError("ES_DATA_REQUIRED", "These settings use SMT divergence, which needs the ES data. Import it "
+                                                      "under My strategy -> Settings -> ES data for SMT, or switch SMT off.")
+        return None
+    if ds is not None and win is not None and len(ds.bars):
+        lo = max(int(win[0].value), int(ds.bars.ts_ns[0]))
+        hi = min(int(win[1].value), int(ds.bars.ts_ns[-1]))
+        if not es.covers(lo, hi - 3 * 86_400_000_000_000):
+            if used:
+                raise MyStrategyError("ES_DATA_RANGE", f"The ES data ({es.manifest['first_bar_open_utc'][:10]} - "
+                                                       f"{es.manifest['last_bar_open_utc'][:10]}) does not cover this "
+                                                       "backtest's dates.")
+    return es
+
+
+def evaluated_hash(ds, s: dict, es) -> str:
+    """Content of what was evaluated: the NQ bars, plus the ES data when SMT can change the trades."""
+    if es is None or not P.smt_used(s):
+        return ds.manifest.content_hash
+    from edgelab.core.identity import hash_obj
+    return hash_obj({"bars": ds.manifest.content_hash, "es": es.content_hash})
+
+
 def run_window(svc, s: dict, start, end, *, stage: str, lock=None, skip=None, progress: Callable | None = None):
     """Run the strategy on [start, end] of the protocol's source dataset with warm-up history before ``start``.
     Returns (strategy, result, ds, trade_window). No recording."""
@@ -267,16 +300,17 @@ def run_window(svc, s: dict, start, end, *, stage: str, lock=None, skip=None, pr
     ds = svc._cell_dataset(did, (data_start, end), lock)
     if not ds.bars.has_ask_ohlc:
         raise MyStrategyError("ASK_OHLC_REQUIRED", "The dataset has no ASK prices; BID/ASK execution needs them.")
+    es = es_for(svc, s, ds, (start, end))
     if stage == "discovery":                 # refuse BEFORE computing when the budget is used (a new trial)
         from edgelab.research import protocol as rp
-        key = rp.trial_key(mine["protocol_id"], P.settings_hash(s), ds.manifest.content_hash, mat["config_hash"])
+        key = rp.trial_key(mine["protocol_id"], P.settings_hash(s), evaluated_hash(ds, s, es), mat["config_hash"])
         guard = lock if lock is not None else nullcontext()
         with guard:
             if not svc.store.trial_counted(mine["protocol_id"], key) and \
                     svc.store.count_trials(mine["protocol_id"]) >= mat["trial_budget"]["max_unique_trials"]:
                 raise MyStrategyError("TRIAL_BUDGET_EXHAUSTED", "All tries of the My strategy protocol are used.")
     td_from = _trading_date_ord(ds.calendar, start)
-    strat = MyStrategy(s, ds.calendar, skip=skip, trade_from_td=td_from)
+    strat = MyStrategy(s, ds.calendar, skip=skip, trade_from_td=td_from, es=es)
     costs, contract = _engine_inputs(svc, ds, strat)
     if progress:
         progress("Running the strategy with the lookahead check and the engine")
@@ -295,7 +329,7 @@ def _record(svc, s: dict, strat, res, ds, win, mine, *, status: str, notes: str,
     guard = lock if lock is not None else nullcontext()
     h = P.settings_hash(s)
     pid, mat = mine["protocol_id"], mine["material"]
-    key = rp.trial_key(pid, h, ds.manifest.content_hash, mat["config_hash"])
+    key = rp.trial_key(pid, h, evaluated_hash(ds, s, strat.es), mat["config_hash"])
     with guard:
         if count and not svc.store.trial_counted(pid, key) and \
                 svc.store.count_trials(pid) >= mat["trial_budget"]["max_unique_trials"]:
@@ -309,7 +343,7 @@ def _record(svc, s: dict, strat, res, ds, win, mine, *, status: str, notes: str,
                 "entry_point": ENTRY_POINT, "strategy_id": res.strategy_id, "logic_hash": h, "definition_hash": h,
                 "family": "my_strategy", "dataset_id": d.get("dataset_id"),
                 "source_dataset_id": d.get("parent_dataset_id") or d.get("dataset_id"),
-                "evaluated_content_hash": d.get("content_hash"), "window_start": str(win[0]), "window_end": str(win[1]),
+                "evaluated_content_hash": evaluated_hash(ds, s, strat.es), "window_start": str(win[0]), "window_end": str(win[1]),
                 "config_hash": mat["config_hash"], "cost_scenario": mat["execution"].get("cost_scenario"),
                 "proposal_id": None, "search_id": None, "run_id": run_id, "error": None, "created_at": _now()})
     return {"run_id": run_id, "trial_id": "TR_" + key[:12].upper(), "trial_counted": counted, "prop": prop, **met}
@@ -348,6 +382,11 @@ def build_report(folder: Path, s: dict, strat, res, ds, win, rec: dict, *, kind:
         "causality_passed": None if res.causality is None else bool(res.causality.passed),
         "metrics": rec["metrics"], "monthly": rec["monthly"], "prop": _prop_brief(rec.get("prop") or {}),
         "rule_stats": dict(strat.stats), "trade_count": len(rows),
+        "es_data": None if strat.es is None else {"es_id": strat.es.manifest.get("es_id"),
+                                                  "content_hash": strat.es.content_hash,
+                                                  "instrument": strat.es.manifest["identity"]["instrument"],
+                                                  "price_basis": strat.es.manifest["identity"]["price_basis"],
+                                                  "smt_affects_trades": P.smt_used(s)},
         "assumptions": {k: res.assumptions.get(k) for k in ("quote_model", "same_bar_policy_effective", "sizing",
                                                             "costs", "trailing_stop", "max_trades_per_day",
                                                             "strategy_trade_management")},

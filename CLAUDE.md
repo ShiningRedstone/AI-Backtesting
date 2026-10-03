@@ -143,12 +143,17 @@ ADR-93: "My strategy" tab (`edgelab/mystrategy/`): BP Blake's model from the use
 completion indices, `logic.py`, shorts = mirrored longs) run by the one engine; companion protocol (`MY_STRATEGY_ROLE`,
 `is_companion`; 300 tries, ONE holdout look); trade records + candles in `<data>/my_strategy/`; holdout review with the
 user's take/skip (`review.py`, decisions never runs); reports leave the app only as a ZIP the user attaches (ADR-94).
-1m data only; SMT needs ES (refused).
+1m data only; SMT with ES since ADR-95.
 ADR-94: My strategy has NO GitHub upload any more (user's choice): "Save selected for Claude" writes one ZIP to
 `<Downloads>/MunyunLab for Claude/` (`runner.export`, green check = `exported`); test plans are pasted as JSON; Trades tab
 lists all reports first (`runner.all_reports`); charts stretch by dragging the price / time scale.
+ADR-95: SMT divergence with ES in My strategy: ES = Dukascopy USA500.IDX/USD 1m BID as a READ-ONLY reference series
+(`mystrategy/es.py`, `<data>/my_strategy/es/`, never a dataset, configs untouched; import under Settings with a stated identity);
+`Rules._smt` at the leg's swing (exactly one market takes the prior swing low; missing ES minute = unknown); `filters.smt`
+(require) + `filters.smt_in_score`; `params.smt_used` puts the ES content hash into the trial key / strategy id; pre-ADR-95
+settings hashes unchanged. Backtest lists scroll inside a fixed-height box.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-94.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-95.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -202,7 +207,7 @@ remains. Do not rely on this file alone.
     pipeline removed in ADR-90; run-detail links `/results/<id>` still work). Pool picker: All | Pool 1 | Pool 2.
   - Prop Trading: Paper accounts, Start paper trading (batch; Passed the holdout | Survivors | All tested), Backtest
     prop check (the old simulator)
-  - My strategy (ADR-93/94): Overview (strategy summary), Settings (137 rule settings), Backtest (backtest list with "Save
+  - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
     Holdout review (take / skip).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -429,4 +434,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-94). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-95). Update `README.md` status for phases.

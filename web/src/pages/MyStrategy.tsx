@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
-import type { Candle, Decision, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
+import type { Candle, Decision, EsStatus, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
   SettingDef, SettingsPayload, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
@@ -47,6 +47,7 @@ const STAT_LABEL: Record<string, string> = {
   signal_rejected_target: "No acceptable target", signal_rejected_quality: "Confluence score too low",
   signals: "Entry signals", signals_not_filled_in_own_tracking: "Limit order not filled",
   signals_declined_in_review: "Declined in the holdout review",
+  setup_rejected_no_smt: "No SMT divergence with ES", setup_rejected_smt_unknown: "SMT unknown (ES minutes missing)",
 };
 const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step" : m ?? "–");
 
@@ -115,6 +116,48 @@ function StatusKpis({ data, latest }: { data: Overview; latest?: ReportRow }) {
 }
 
 // =============================================================================================== settings
+/** ES reference prices for SMT divergence (ADR-95): status, and import of the Dukascopy ES file (never a dataset). */
+function EsDataCard() {
+  const { data, error, reload } = useApi<EsStatus>(my.esUrl);
+  const { toast } = useApp();
+  const [path, setPath] = useState(String.raw`C:\NQ_DATA\es_1min_5years.csv`);
+  const [confirmed, setConfirmed] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [job, setJob] = useJob((j) => { if (j.state === "completed") { toast("ok", "ES data imported"); setConfirmed(false); } reload(); });
+  const start = async () => {
+    setErr(null);
+    try { setJob(await my.importEs(path, confirmed)); } catch (e) { setErr(e as ApiError); }
+  };
+  const running = job?.state === "running";
+  return (
+    <Card title="ES data for SMT" testId="my-es" actions={data?.imported ? <Badge tone="ok">imported</Badge> : <Badge tone="warn">not imported</Badge>}>
+      {error && <ErrorPanel error={error} />}
+      {data?.imported && (
+        <dl className="kv" data-testid="my-es-status">
+          <div className="kv-row"><dt>Market</dt><dd>{data.identity.instrument} · {data.identity.description} · {data.identity.timeframe} {data.identity.price_basis.toUpperCase()}</dd></div>
+          <div className="kv-row"><dt>Period</dt><dd>{day(data.first_bar_open_utc)} – {day(data.last_bar_open_utc)} · {(data.bars ?? 0).toLocaleString("en-US")} one-minute bars</dd></div>
+          <div className="kv-row"><dt>File</dt><dd className="mono small">{data.source_file}</dd></div>
+          <div className="kv-row"><dt>Imported</dt><dd>{nyTime(sec(data.imported_at))}{data.es_id ? ` · ${data.es_id}` : ""}</dd></div>
+        </dl>)}
+      <p className="muted small">Used only to compare highs and lows with NQ for SMT divergence; it is never traded and is not a
+        research dataset. Each check uses ES prices up to the bar being decided, never later ones. If ES has no bar for a minute
+        the check needs, SMT counts as unknown, never as yes.</p>
+      <div className="inline">
+        <Field label={data?.imported ? "Import a new file (replaces the current one)" : "ES file (Dukascopy download)"}>
+          <TextInput value={path} onChange={setPath} mono ariaLabel="ES file path" testId="my-es-path" /></Field>
+      </div>
+      <Checkbox checked={confirmed} onChange={setConfirmed} testId="my-es-confirm"
+        label="This file is Dukascopy USA500.IDX/USD (S&P 500 index CFD), 1-minute BID candles, timestamps in UTC at the bar open" />
+      <div className="inline" style={{ marginTop: 8 }}>
+        <Button kind={data?.imported ? "secondary" : "primary"} onClick={start} busy={running} busyLabel="Importing…"
+          disabled={!confirmed || !path.trim()} testId="my-es-import">Import ES data</Button>
+      </div>
+      <JobLine job={job} />
+      <ErrorPanel error={err} />
+    </Card>
+  );
+}
+
 export function MySettingsPage() {
   const { data, error, reload } = useApi<SettingsPayload>(my.settingsUrl);
   const { toast } = useApp();
@@ -153,6 +196,7 @@ export function MySettingsPage() {
         settings. {defs.length} settings in {data.schema.groups.length} groups.</p>
       {data.problems.length > 0 && <Banner tone="warn">The saved settings file has problems: {data.problems.join("; ")}</Banner>}
       <ErrorPanel error={err} />
+      <EsDataCard />
       <div className="filterbar">
         <TextInput value={filter} onChange={setFilter} placeholder="Find a setting…" ariaLabel="Find a setting" />
         <Checkbox checked={onlyChanged} onChange={setOnlyChanged} label="Only changed from default" />
@@ -367,7 +411,7 @@ function ReportList({ rows, selected, onOpen, title, testId }: {
           chat with Claude. <Button small kind="ghost" onClick={open}>Open folder</Button></Banner>)}
       <ErrorPanel error={err} />
       {!rows.length ? <Empty>No backtest yet.</Empty> : (
-        <TableWrap><table className="dense" data-testid={`${testId}-table`}>
+        <TableWrap className="my-report-scroll" testId={`${testId}-scroll`}><table className="dense" data-testid={`${testId}-table`}>
           <thead><tr>
             <th style={{ width: 32 }}><input type="checkbox" aria-label="Select all" checked={all}
               onChange={() => setTicked(all ? new Set() : new Set(rows.map((b) => b.id)))} /></th>
@@ -567,6 +611,15 @@ export function MyTradePage() {
 }
 
 /** Why the strategy entered, in plain words (built from the recorded explanation; nothing recomputed). */
+function smtText(s: NonNullable<Explanation["smt"]>, up: boolean): string {
+  const w = up ? "low" : "high";
+  if (s.divergence === null) return `SMT with ES: unknown (${s.reason}).`;
+  if (s.nq_ref === undefined) return `SMT with ES: no (${s.reason}).`;
+  const ref = s.ref_ts ? ` of ${nyTime(sec(s.ref_ts))} (${s.tf})` : "";
+  return `SMT with ES: ${s.divergence ? "yes" : "no"}, ${s.reason}. Swing ${w}${ref}: NQ ${px(s.nq_ref)} → extreme ${px(s.nq_extreme)}; `
+    + `ES ${px(s.es_ref)} → ${s.es_extreme === null || s.es_extreme === undefined ? "no later bar" : `${up ? "lowest" : "highest"} since ${px(s.es_extreme)}`}.`;
+}
+
 export function explainText(e: Explanation): string[] {
   const up = e.direction > 0;
   const out: string[] = [];
@@ -581,6 +634,7 @@ export function explainText(e: Explanation): string[] {
   const c = e.confirmation;
   out.push(`Confirmation: a ${c.tf} candle closed ${up ? "above" : "below"} ${px(c.level)}, through the ${c.gaps.length} ${up ? "bearish" : "bullish"} gap(s) of the leg (rule: ${c.rule} timeframe; gaps per timeframe ${Object.entries(c.gaps_per_tf).map(([k, v]) => `${k}: ${v}`).join(", ")}). Body ${pct(c.displacement.body_ratio, 0)} of the candle, range ${n(c.displacement.range_x_avg, 2)}× average.`);
   out.push(`Entry ${e.entry.type === "market" ? "at the next 1-minute open" : "with a limit order"} (planned ${px(e.entry.reference_price)}), stop ${px(e.stop.price)} (${e.stop.mode.replace(/_/g, " ")}${e.stop.widened_to_minimum ? ", widened to the minimum" : ""}, ${n(e.stop.risk_points, 1)} points), target ${px(e.target.price)} = ${n(e.target.r_planned, 2)} R (${e.target.source ?? ""}).`);
+  if (e.smt) out.push(smtText(e.smt, up));
   if (e.breakeven.level !== null) out.push(`Breakeven once price reaches ${px(e.breakeven.level)} (the leg's swing point).`);
   else if (e.breakeven.mode !== "off") out.push(`Breakeven rule: ${e.breakeven.mode.replace(/_/g, " ")}.`);
   return out;

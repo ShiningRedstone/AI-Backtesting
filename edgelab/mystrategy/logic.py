@@ -84,7 +84,7 @@ class Setup:
 
 
 class Rules:
-    def __init__(self, bars, calendar, s: dict, skip: set | None = None, trade_from_td: int | None = None):
+    def __init__(self, bars, calendar, s: dict, skip: set | None = None, trade_from_td: int | None = None, es=None):
         self.s, self.cal = s, calendar
         self.trade_from_td = trade_from_td   # earlier trading dates are warm-up history only (no signals)
         self.skip = set(skip or ())          # signal bars the trader declined (holdout review): stay flat there
@@ -111,6 +111,12 @@ class Rules:
         }
         for v in self.views.values():
             v.rq_l, v.rq_h = RangeQ(v.l), RangeQ(v.h)
+        # ES (ADR-95): aligned to these bars by exact bar-open minute (NaN = no ES bar). Index i only ever holds the ES
+        # bar of the same minute, so a truncated history never sees later ES prices. Per view: the "low" side.
+        self.es_low = None
+        if es is not None:
+            es_h, es_l = es.align(bars.ts_ns)
+            self.es_low = {1: es_l, -1: -es_h}
         self.stats: Counter = Counter()
         self.explain: dict[int, dict] = {}
         self.days: list[dict] = []
@@ -526,6 +532,47 @@ class Rules:
                 equal = {"price": price, "tf": TF_LABEL[tf], "ts": int(t.t0[int(sw[0][jj])])}
         return {"swept": swept, "equal": equal}
 
+    def _smt(self, v: View, start: int, m: int) -> dict:
+        """SMT divergence at the manipulation leg's extreme ``m`` (view world: lows; shorts are mirrored).
+
+        Reference = the most recent prior swing low of the sweep timeframe that was still untaken at the leg start (the
+        same swings as the liquidity check, last two days). NQ took it if its extreme went below it; ES took its own
+        low of that same swing candle if any ES low from after that candle up to ``m`` went below it. Divergence =
+        exactly one of the two took its low. Unknown (None) without ES data or when ES has no bar for any minute from
+        the swing candle to ``m``. Reads bars <= m only."""
+        if self.es_low is None:
+            return {"divergence": None, "reason": "no ES data"}
+        tf = LBL[self.s["leg.sweep_tf"]]
+        t = v.tf[tf]
+        sw = swings(t, 2)["lo"]
+        sel = np.flatnonzero((sw[2] < start) & (t.end[sw[0]] >= start - 2880))
+        ref = None
+        for jj in sel[::-1][:30]:
+            k = int(sw[0][jj])
+            price, bar_end = float(sw[1][jj]), int(t.end[k])
+            if bar_end + 1 <= start - 1 and v.rq_l.min(bar_end + 1, start - 1) < price:
+                continue      # already taken before the leg
+            ref = (k, price)
+            break
+        if ref is None:
+            return {"divergence": False, "reason": "no untaken prior swing to compare"}
+        k, nq_ref = ref
+        a, b = int(t.start[k]), int(t.end[k])
+        el = self.es_low[v.d]
+        seg = el[a:m + 1]
+        if np.isnan(seg).any():
+            return {"divergence": None, "reason": "ES minutes missing", "ref_ts": int(t.t0[k])}
+        es_ref = float(seg[:b - a + 1].min())
+        es_ext = float(seg[b - a + 1:].min()) if m > b else math.inf
+        nq_ext = float(v.l[m])
+        nq_took, es_took = nq_ext < nq_ref, es_ext < es_ref
+        return {"divergence": bool(nq_took != es_took), "nq_took": bool(nq_took), "es_took": bool(es_took),
+                "tf": TF_LABEL[tf], "ref_ts": int(t.t0[k]), "nq_ref": nq_ref, "nq_extreme": nq_ext, "es_ref": es_ref,
+                "es_extreme": es_ext if es_ext != math.inf else None,
+                "reason": "NQ took its low, ES held" if nq_took and not es_took else
+                          "ES took its low, NQ held" if es_took and not nq_took else
+                          "both took their lows" if nq_took else "neither took its low"}
+
     def _eq(self, v: View, m: int, ds: int, mf: int) -> dict | None:
         s = self.s
         mode = s["eq.range"]
@@ -613,7 +660,11 @@ class Rules:
         if s["leg.no_equal_extremes"] and liq["swept"] is None and liq["equal"] is not None:
             st["setup_rejected_equal_extremes"] += 1
             return None
-        return Setup(model, m, start, float(v.l[m]), hits, {"eq": eq, "liq": liq, "leg_size": size})
+        smt = self._smt(v, start, m)
+        if s["filters.smt"] and smt["divergence"] is not True:
+            st["setup_rejected_smt_unknown" if smt["divergence"] is None else "setup_rejected_no_smt"] += 1
+            return None
+        return Setup(model, m, start, float(v.l[m]), hits, {"eq": eq, "liq": liq, "leg_size": size, "smt": smt})
 
     # ------------------------------------------------------------------ confirmation
     def _ifg(self, v: View, su: Setup, i: int) -> dict | None:
@@ -988,14 +1039,14 @@ class Rules:
             "inversion_gap": True,
             "highest_timeframe_gap": trg["tf"] == max(int(k.rstrip("m")) for k in trg["per_tf"]),
             "displacement": trg["displacement"]["ok"],
-            "smt": None,
+            "smt": su.info["smt"]["divergence"],
             "target_at_liquidity": "liquidity" in tinfo.get("source", ""),
             "stacked_liquidity_at_target": bool(tinfo.get("stacked_liquidity")),
             "not_choppy": None if chop is None else chop["ok"],
         }
-        quality = sum(bool(checklist[k]) for k in ("liquidity_swept", "several_key_levels", "displacement",
-                                                    "discount_premium", "stacked_liquidity_at_target",
-                                                    "open_manipulation"))
+        scored = ("liquidity_swept", "several_key_levels", "displacement", "discount_premium",
+                  "stacked_liquidity_at_target", "open_manipulation") + (("smt",) if s["filters.smt_in_score"] else ())
+        quality = sum(bool(checklist[k]) for k in scored)
         if quality < s["filters.min_quality"]:
             st["signal_rejected_quality"] += 1
             return None
@@ -1046,5 +1097,8 @@ class Rules:
                        "candidates": [lv(c) for c in tinfo.get("candidates", [])]},
             "breakeven": {"mode": s["manage.be"], "level": None if be_level != be_level else P(be_level)},
             "chop": chop, "checklist": checklist, "quality": quality,
+            "smt": {k: (P(x) if k in ("nq_ref", "nq_extreme", "es_ref", "es_extreme") and x is not None else
+                        x.replace("low", "high") if k == "reason" and v.d < 0 else x)
+                    for k, x in su.info["smt"].items()},
         }
         return entry_kind, entry, stop, target, be_level, expl

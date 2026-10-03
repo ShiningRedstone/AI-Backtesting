@@ -2491,3 +2491,38 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Charts:** drag the price scale (vertical stretch), the time scale (horizontal stretch, anchored at the right edge),
   double-click a scale to reset; a stretched price scale also pans vertically. Display only.
 - **Unchanged:** rules, engine, results, protocols, configs.
+
+### ADR-95 My strategy: SMT divergence with ES; scrolling backtest lists
+- **Request (user):** use the newly downloaded ES data for SMT divergence in My strategy; the backtest list must be a
+  fixed-size box that scrolls inside. Choices the user made: SMT is a confluence (counts toward the score) plus an
+  optional "required" filter; compared at the manipulation leg's swing; ES stored as a My strategy reference series
+  (NOT a research dataset, `configs/` untouched); list box about 8 rows.
+- **ES reference series** (`mystrategy/es.py`): Dukascopy USA500.IDX/USD (feed E_SandP-500, S&P 500 index CFD), 1-minute
+  BID, identity stated by the user on import (checkbox; `identity_status: user_specified`), never guessed. The import
+  refuses (never repairs): wrong header, a timestamp without the explicit `+00:00` offset, non-minute or non-increasing
+  timestamps, non-positive / non-finite prices, inconsistent OHLC. Stored as `<data>/my_strategy/es/ES_<hash16>.npz` +
+  `es.json` (content hash over timestamps and OHLC, source file SHA-256, range); re-hashed on first load per process
+  (mismatch refused). Volume ignored. Import runs as a My strategy job (`POST /api/my/es/import`, status `GET /api/my/es`;
+  Settings -> "ES data for SMT"). Why not a dataset: a new instrument in `configs/` changes the active protocol's
+  settings fingerprint (ADR-89).
+- **SMT rule** (`logic.Rules._smt`, view world so shorts are mirrored): ES is aligned to the NQ bars by exact bar-open
+  minute (NaN = no ES bar). Reference = the most recent prior swing low (`leg.sweep_tf`, strength 2, last two days) still
+  untaken at the leg start, the same swings as the liquidity check. NQ took it if the leg extreme went below it; ES took
+  ITS low of that same swing candle if any ES low from after the candle up to the extreme went below it. Divergence =
+  exactly one took its low. Unknown (None) without ES or when any ES minute from the swing candle to the extreme is missing;
+  unknown never counts as yes. Reads bars <= the extreme only; the causality check passes with SMT required / scored.
+- **Settings:** `filters.smt` (require; available now, default off), new `filters.smt_in_score` (default on), score max 7.
+  `params.smt_used(s)` = SMT can change the trades (required, or scored with a minimum score > 0). Identity:
+  `settings_hash` leaves `smt_in_score` out unless it is on AND the minimum score > 0, so every pre-ADR-95 settings hash
+  is unchanged (known answer: defaults = 83a7d49ee4f9d441). When `smt_used`, the trial key's evaluated content = hash(NQ
+  bars, ES content hash), the strategy id carries the ES content hash, and the report summary records `es_data`; a
+  backtest / review is refused without ES (`ES_DATA_REQUIRED`) or when ES does not cover the window (`ES_DATA_RANGE`); a
+  holdout review refuses if the ES data changed since it started (`ES_DATA_CHANGED`). Without `smt_used`, ES (when
+  imported) only fills the trade checklist / explanation.
+- **Verified on the user's real data (discovery window, no run recorded):** SMT off gives byte-identical signals, settings
+  hashes and strategy ids for the user's saved settings and the defaults (with and without ES); SMT required keeps 73 of
+  278 signals (saved settings); about 8% of signals are "unknown" (an ES minute missing in the compared span, mostly
+  overnight); one verdict re-checked by hand against the raw CSV.
+- **UI:** the My strategy backtest lists (Backtest tab and Trades tab, one component) sit in a fixed-height box (about 8
+  rows) that scrolls inside with sticky headers; "Why it entered" states the SMT verdict with both markets' levels.
+- **Unchanged:** engine, fills, costs, sizing, prop rules, configs, all other rules of My strategy.

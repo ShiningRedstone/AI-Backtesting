@@ -101,6 +101,7 @@ def start(svc, overrides: dict | None, *, lock=None, progress: Callable | None =
     st = {"id": rv_id, "created_at": R._now(), "status": "in_progress", "settings": s, "settings_hash": h,
           "protocol_id": pid, "access_id": access_id, "window": summary["window"],
           "dataset_id": summary["dataset"]["dataset_id"], "mechanical_report": ho_id, "decisions": {},
+          "es_content_hash": None if strat.es is None else strat.es.content_hash,
           "final_report": None}
     _save(svc, st)
     return st
@@ -124,7 +125,12 @@ def _run(svc, st: dict, lock=None):
     mat = mine["material"]
     data_start = max(R._ts(R.windows(mat)["discovery"]["start"]), start - pd.Timedelta(days=R.WARMUP_DAYS))
     ds = svc._cell_dataset(R.dataset_1m(svc, mine), (data_start, end), lock)
-    strat = MyStrategy(s, ds.calendar, skip=set(skip), trade_from_td=R._trading_date_ord(ds.calendar, start))
+    es = R.es_for(svc, P.resolve(s), ds, (start, end))
+    if P.smt_used(P.resolve(s)) and (es is None or es.content_hash != st.get("es_content_hash")):
+        raise R.MyStrategyError("ES_DATA_CHANGED", "The ES data changed since this holdout review started; the review "
+                                                   "needs the ES data it started with.")
+    strat = MyStrategy(s, ds.calendar, skip=set(skip), trade_from_td=R._trading_date_ord(ds.calendar, start),
+                       es=es if es is not None and es.content_hash == st.get("es_content_hash", es.content_hash) else None)
     sig = strat.generate_signals(ds.bars)
     replay = ReplayStrategy(strat, sig, set(), len(ds.bars))
     costs, contract = R._engine_inputs(svc, ds, strat)

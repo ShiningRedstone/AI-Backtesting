@@ -890,3 +890,5 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .candle-chart .scale-y { cursor: ns-resize; fill: transparent; }
 .candle-chart .scale-x { cursor: ew-resize; fill: transparent; }
 .candle-chart .scale-y:hover, .candle-chart .scale-x:hover { fill: var(--surface-2); fill-opacity: .5; }
+/* ADR-95: the My strategy backtest lists are a fixed-height box (about 8 rows) that scrolls inside; headers stay visible */
+.table-wrap.my-report-scroll { max-height: 296px; overflow-y: auto; }

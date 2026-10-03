@@ -222,7 +222,11 @@ Everything below is a setting. The defaults are the app's best reading of the vi
 - **Data:** 1-minute Dukascopy BID/ASK (the NQ stand-in, trades MNQ). Higher timeframes are built from it, aligned to
   New York time (4h candles start at 18:00, daily = 18:00-16:15). No 15s/30s data exists, so 1m is the lowest
   timeframe (you chose that). Where he uses 30s, the app uses 1m.
-- **SMT:** needs ES data, which is not imported; the setting exists but is off and marked "needs ES data".
+- **SMT:** compared with Dukascopy's S&P 500 index CFD (USA500.IDX/USD, 1-minute BID; the ES stand-in), imported
+  under Settings -> ES data for SMT. At the manipulation leg's extreme, the most recent prior swing low (5m by default;
+  highs for shorts) still untaken at the leg start is the reference: SMT = exactly one of NQ and ES took out its low of
+  that swing candle. An ES minute missing in between = "unknown", never "yes". It counts toward the confluence score
+  (on by default, no effect while the minimum score is 0) and can be required (off by default).
 - **Bias:** a score from FVGs respected/disrespected on daily/4h/1h (optionally 15m and swing structure), decided
   before 9:30. No bias = no trade. A draw on liquidity must exist in the bias direction.
 - **Key levels:** FVGs (fresh, or swept intermediate low inside), CISDs, rejection blocks (and optional BPRs) on the
@@ -235,5 +239,5 @@ Everything below is a setting. The defaults are the app's best reading of the vi
   extreme (or other choices), target at the nearest liquidity between 1R and 3R (or a fixed R), optional breakeven
   at the leg's swing point or at an R multiple, optional trailing, 1 win or 2 trades per day, 1% risk.
 - **Judgement calls** ("A+", "displacement", "chop") are numeric thresholds you can change.
-- **Not built (documented above):** Asia, London, SMT (no ES data), 15s/30s entries, intraday bias flips after a
+- **Not built (documented above):** Asia, London, 15s/30s entries, intraday bias flips after a
   failed trade, discretionary "A+" overrides.

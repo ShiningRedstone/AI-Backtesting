@@ -1129,6 +1129,18 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         label = str(b.get("label") or "")[:80]
         return jsonify(call(svc.my_strategy_start_backtest, ov, start, end, label)), 202
 
+    @app.get("/api/my/es")
+    def my_es():
+        return jsonify(call(svc.my_strategy_es))
+
+    @app.post("/api/my/es/import")
+    def my_es_import():
+        b = body()
+        path = b.get("path")
+        if not isinstance(path, str) or len(path) > 1000:
+            raise _bad("path must be a string")
+        return jsonify(call(svc.my_strategy_import_es, path, b.get("identity_confirmed") is True)), 202
+
     @app.get("/api/my/jobs/<jid>")
     def my_job(jid):
         return jsonify(svc.my_strategy_job(_id(jid, MY_JOB_ID, "job id")))
