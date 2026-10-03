@@ -124,7 +124,8 @@ def _run(svc, st: dict, lock=None):
     mat = mine["material"]
     data_start = max(R._ts(R.windows(mat)["discovery"]["start"]), start - pd.Timedelta(days=R.WARMUP_DAYS))
     ds = svc._cell_dataset(R.dataset_1m(svc, mine), (data_start, end), lock)
-    strat = MyStrategy(s, ds.calendar, skip=set(skip), trade_from_td=R._trading_date_ord(ds.calendar, start))
+    strat = MyStrategy(s, ds.calendar, skip=set(skip), trade_from_td=R._trading_date_ord(ds.calendar, start),
+                       es_bars=R.load_es(svc, s))
     sig = strat.generate_signals(ds.bars)
     replay = ReplayStrategy(strat, sig, set(), len(ds.bars))
     costs, contract = R._engine_inputs(svc, ds, strat)

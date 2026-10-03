@@ -105,8 +105,7 @@ class TestSettings(unittest.TestCase):
         with self.assertRaises(P.SettingsError) as e:
             P.resolve({"nope": 1, "risk.pct": 99, "entry.type": "teleport", "session.entry_until": "25:00"})
         self.assertEqual(len(e.exception.issues), 4)
-        with self.assertRaises(P.SettingsError):                 # needs ES data: cannot be switched on
-            P.resolve({"filters.smt": True})
+        self.assertTrue(P.resolve({"filters.smt": True})["filters.smt"])
         with self.assertRaises(P.SettingsError):
             P.resolve({"session.entry_from": "11:00", "session.entry_until": "10:00"})
 
@@ -177,6 +176,60 @@ class TestKnownAnswer(unittest.TestCase):
         self.assertEqual(len(self._run(ds, {"bias.override": "long", "session.entry_from": "09:45"})[2]), 0)
         self.assertEqual(len(self._run(ds, {"bias.override": "long", "stop.max_points": 3.0})[2]), 0)
         self.assertEqual(len(self._run(ds, {"bias.override": "long", "key.fvg": False, "key.bpr": True})[2]), 0)
+
+
+class FakeEs:
+    """ES 1m bars as the strategy sees them (timestamps + lows / highs)."""
+    def __init__(self, ts_ns, low, high):
+        self.ts_ns, self.low, self.high, self.has_ask_ohlc = ts_ns, low, high, False
+
+
+class TestSmt(unittest.TestCase):
+    def _signals(self, ds, over, es_low=None, mirror=False):
+        es = None
+        if es_low is not None:
+            es = FakeEs(ds.bars.ts_ns, es_low, es_low + 0.5)
+        st = MyStrategy({**KNOWN, **over}, CAL, es_bars=es)
+        return st, st.generate_signals(ds.bars)
+
+    def test_divergence_known_answer(self):
+        ds, hm = known_day()
+        k942 = np.flatnonzero(hm == 9 * 60 + 42)[-1]
+        base = {"bias.override": "long", "filters.smt": True}
+        both = ds.bars.low.copy()                                   # ES makes the same low as NQ: both swept
+        st, sig = self._signals(ds, base, both)
+        self.assertEqual(list(np.flatnonzero(sig.direction)), [k942])
+        self.assertIs(st.explanations[k942]["checklist"]["smt"], False)
+        only_nq = np.full(len(ds.bars), 105.5)                      # ES never trades below its reference: only NQ swept
+        st, sig = self._signals(ds, base, only_nq)
+        e = st.explanations[k942]
+        self.assertIs(e["checklist"]["smt"], True)
+        self.assertTrue(e["smt"]["nq_swept"] and not e["smt"]["es_swept"])
+        off = MyStrategy({**KNOWN, "bias.override": "long"}, CAL)
+        off.generate_signals(ds.bars)
+        self.assertIsNone(off.explanations[k942]["checklist"]["smt"])
+        self.assertEqual(st.explanations[k942]["quality"], off.explanations[k942]["quality"] + 1)
+        with self.assertRaises(ValueError):                          # switched on without ES data: refused, never guessed
+            MyStrategy({**KNOWN, **base}, CAL).generate_signals(ds.bars)
+
+    def test_mirror_and_missing_es_minutes(self):
+        ds, hm = known_day(mirror=True)
+        k942 = np.flatnonzero(hm == 9 * 60 + 42)[-1]
+        st, sig = self._signals(ds, {"bias.override": "short", "filters.smt": True}, np.full(len(ds.bars), 94.0))
+        self.assertIs(st.explanations[k942]["checklist"]["smt"], True)     # short: ES never exceeded its reference high
+        hole = np.full(len(ds.bars), 94.0)
+        hole[k942 - 5] = np.nan                                            # a missing ES minute inside the leg: unknown, not guessed
+        st, _ = self._signals(ds, {"bias.override": "short", "filters.smt": True}, hole)
+        self.assertIsNone(st.explanations[k942]["checklist"]["smt"])
+
+    def test_causal_with_es(self):
+        ds = random_ds(end="2024-02-20")
+        rng = np.random.default_rng(3)
+        es_low = ds.bars.low + rng.normal(0, 1.5, len(ds.bars))
+        st = MyStrategy({"filters.smt": True, "eq.enabled": False, "ifg.displacement": False, "filters.min_quality": 1},
+                        CAL, es_bars=FakeEs(ds.bars.ts_ns, es_low, es_low + 2))
+        rep = check_causality(st, ds.bars, n_cuts=10)
+        self.assertTrue(rep.passed, rep.detail)
 
 
 class TestCausalityAndEngine(unittest.TestCase):

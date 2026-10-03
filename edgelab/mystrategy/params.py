@@ -40,7 +40,7 @@ def _p(key, label, typ, default, help, source="", **kw) -> dict:
             "help": help, "source": source, **kw}
 
 
-B, I, F, C, T = "bool", "int", "float", "choice", "time"
+B, I, F, C, T, X = "bool", "int", "float", "choice", "time", "text"
 S_STRAT = "Updated strategy video"
 S_JUDAS = "Judas swing video"
 S_RECAP = "Trade recaps"
@@ -132,11 +132,18 @@ SCHEMA: list[dict] = [
     _p("filters.chop_minutes", "Look-back for the chop check (minutes)", I, 240, "", min=30, max=1440),
     _p("filters.chop_min_gaps", "Minimum gaps created", I, 2, "", min=0, max=50),
     _p("filters.chop_max_flip", "Maximum share of gaps closed through", F, 0.6, "", min=0, max=1),
-    _p("filters.smt", "Require SMT divergence with ES", B, False,
-       "Needs ES data, which is not imported.", S_STRAT, unavailable="needs ES data (not imported)"),
+    _p("filters.smt", "Check SMT divergence with ES", B, False,
+       "Adds SMT to the checklist and the confluence score: at the manipulation low/high exactly one of NQ and ES took out "
+       "the reference low/high ('ES swept it, NQ did not'). 'An added confluence, not make-or-break' - it only filters "
+       "trades if you raise the minimum confluence score. Needs an ES 1-minute dataset on the Data page.", S_STRAT),
+    _p("filters.smt_dataset_id", "ES dataset (leave empty = find automatically)", X, "",
+       "The id of the ES 1-minute dataset. Only needed if several ES datasets exist."),
+    _p("filters.smt_lookback", "SMT reference: minutes before the leg", I, 60,
+       "The reference low/high is the lowest low / highest high of this many minutes before the manipulation leg starts.",
+       min=5, max=600),
     _p("filters.min_quality", "Minimum confluence score", I, 0,
        "Score = number of extra confluences true (liquidity swept, several key levels, displacement, "
-       "discount/premium, target at stacked liquidity, open manipulation).", min=0, max=6),
+       "discount/premium, target at stacked liquidity, open manipulation, SMT if checked).", min=0, max=7),
     # ---------------------------------------------------------------- key levels
     _p("key.tf_3m", "3m key levels", B, False, "", S_STRAT),
     _p("key.tf_5m", "5m key levels", B, True, "", S_STRAT),
@@ -302,6 +309,8 @@ def _check(p: dict, v: Any) -> tuple[Any, str | None]:
         return v, None if v in p["options"] else f"must be one of {', '.join(p['options'])}"
     if t == T:
         return v, None if isinstance(v, str) and _TIME.match(v) else "must be a time HH:MM"
+    if t == X:
+        return v, None if isinstance(v, str) and len(v) <= 120 else "must be text (at most 120 characters)"
     return v, "unknown type"
 
 

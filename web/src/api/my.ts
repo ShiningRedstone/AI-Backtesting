@@ -6,7 +6,7 @@ const enc = encodeURIComponent;
 export type Candle = [number, number, number, number, number];   // [epoch seconds (UTC), open, high, low, close]
 
 export interface SettingDef {
-  key: string; group: string; label: string; type: "bool" | "int" | "float" | "choice" | "time";
+  key: string; group: string; label: string; type: "bool" | "int" | "float" | "choice" | "time" | "text";
   default: unknown; help: string; source: string; min?: number; max?: number; options?: string[]; unavailable?: string;
 }
 export interface SettingsPayload {

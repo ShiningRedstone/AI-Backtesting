@@ -229,6 +229,35 @@ def _ts(x) -> pd.Timestamp:
     return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
 
+ES_PATTERN = r"(^|[^A-Za-z])(ES|MES)([^A-Za-z]|$)|USA500|US500|SPX|SP500|S&P"
+
+
+def load_es(svc, s: dict):
+    """The ES 1-minute bars for the SMT check (None when SMT is off). Found among the Data page's datasets: the id in
+    ``filters.smt_dataset_id`` or the only 1-minute dataset that looks like ES / S&P 500."""
+    import re
+    if not s["filters.smt"]:
+        return None
+    rows = svc.list_datasets()
+    want = s["filters.smt_dataset_id"].strip()
+    if want:
+        hit = [d for d in rows if d["dataset_id"] == want]
+        if not hit:
+            raise MyStrategyError("ES_NOT_FOUND", f"The ES dataset {want!r} does not exist on the Data page.")
+    else:
+        hit = [d for d in rows if d.get("timeframe") == "1m" and re.search(
+            ES_PATTERN, f"{d.get('instrument')} {d.get('symbol')} {d.get('dataset_name')}", re.I)]
+        if not hit:
+            raise MyStrategyError("NO_ES_DATA", "SMT needs an ES (S&P 500) 1-minute dataset, and none was found on the "
+                                                "Data page. Import it, or put its id into the setting 'ES dataset'.")
+        if len(hit) > 1:
+            raise MyStrategyError("ES_AMBIGUOUS", "Several datasets look like ES: " + ", ".join(d["dataset_id"] for d in hit)
+                                  + ". Put the one to use into the setting 'ES dataset'.")
+    if hit[0].get("timeframe") != "1m":
+        raise MyStrategyError("ES_NOT_1M", "The ES dataset must be a 1-minute dataset.")
+    return svc._cell_dataset(hit[0]["dataset_id"]).bars
+
+
 def _engine_inputs(svc, ds, strat):
     from edgelab.engine.costs import cost_model_from_config
     from edgelab.instruments import check_identity, contract_for
@@ -276,7 +305,7 @@ def run_window(svc, s: dict, start, end, *, stage: str, lock=None, skip=None, pr
                     svc.store.count_trials(mine["protocol_id"]) >= mat["trial_budget"]["max_unique_trials"]:
                 raise MyStrategyError("TRIAL_BUDGET_EXHAUSTED", "All tries of the My strategy protocol are used.")
     td_from = _trading_date_ord(ds.calendar, start)
-    strat = MyStrategy(s, ds.calendar, skip=skip, trade_from_td=td_from)
+    strat = MyStrategy(s, ds.calendar, skip=skip, trade_from_td=td_from, es_bars=load_es(svc, s))
     costs, contract = _engine_inputs(svc, ds, strat)
     if progress:
         progress("Running the strategy with the lookahead check and the engine")

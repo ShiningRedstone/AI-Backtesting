@@ -2491,3 +2491,17 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Charts:** drag the price scale (vertical stretch), the time scale (horizontal stretch, anchored at the right edge),
   double-click a scale to reset; a stretched price scale also pans vertically. Display only.
 - **Unchanged:** rules, engine, results, protocols, configs.
+
+### ADR-95 My strategy: SMT divergence with ES (confluence)
+- **Request (user):** ES data was imported on the Data page; SMT is "an added confluence, not make-or-break" (Blake), so it
+  counts in the checklist and the confluence score only.
+- `filters.smt` (default off), `filters.smt_dataset_id` (text), `filters.smt_lookback` (minutes, default 60). The ES 1-minute
+  dataset is found among the Data page's datasets (instrument / symbol / name looks like ES, S&P 500, USA500, SPX; several
+  matches or none = a plain refusal naming them) and aligned to the NQ bars by timestamp (`MyStrategy._aligned_es`).
+- Rule (`Rules._smt`, mirrored for shorts like everything else): reference = lowest low (highest high) of the
+  `smt_lookback` minutes before the leg starts; divergence = exactly one of NQ and ES took the reference out between the leg
+  start and the manipulation extreme. A missing ES minute in these windows = unknown (checklist "not checked"), never guessed.
+  Reads only bars <= the extreme, so it is causal (tested with the lookahead check).
+- The score `filters.min_quality` (now 0-7) counts SMT when it is checked; trades are only filtered if the user raises it.
+- New settings change the settings hash of every strategy; trades of a run with SMT off are bit-identical (trades hash tested).
+- `settings_hash` includes the new keys, so the next backtest of the same settings is a new counted try once.

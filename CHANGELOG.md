@@ -3,6 +3,14 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy: SMT divergence with ES (ADR-95)
+
+| Item | Status |
+|---|---|
+| Setting "Check SMT divergence with ES": the checklist shows SMT True / False / not checked and the confluence score counts it; ES found automatically on the Data page (or by id) | IMPLEMENTED, TESTED (known-answer long and mirrored short, missing ES minute, lookahead check) |
+| Results with SMT off | UNCHANGED (trades hash identical) |
+| SMT results on your real ES data | REQUIRES REAL DATA (runs on your PC) |
+
 ## My strategy: save for Claude, layout, trades list, stretchable charts (ADR-94)
 
 | Item | Status |

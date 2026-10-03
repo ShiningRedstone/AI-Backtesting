@@ -36,13 +36,15 @@ def sizing_of(s: dict) -> dict:
 class MyStrategy(Strategy):
     family = "my_strategy"
 
-    def __init__(self, settings: dict | None, calendar, skip: set | None = None, trade_from_td: int | None = None):
+    def __init__(self, settings: dict | None, calendar, skip: set | None = None, trade_from_td: int | None = None,
+                 es_bars=None):
         s = P.resolve(settings)
         super().__init__(order_spec(s), params_version=P.PARAMS_VERSION, settings_hash=P.settings_hash(s),
                          settings=P.changed(s))
         self.settings = s
         self.calendar = calendar
         self.skip = set(skip or ())
+        self.es_bars = es_bars                  # ES 1m BarArrays (BID/ASK) for the SMT check; None when not used
         self.trade_from_td = trade_from_td      # run window (warm-up before it), never part of the identity
         self.sizing = sizing_of(s)
         self.explanations: dict[int, dict] = {}
@@ -51,10 +53,26 @@ class MyStrategy(Strategy):
         self.last_signals: SignalSet | None = None
 
     def generate_signals(self, bars) -> SignalSet:
-        r = Rules(bars, self.calendar, self.settings, self.skip, self.trade_from_td)
+        r = Rules(bars, self.calendar, self.settings, self.skip, self.trade_from_td,
+                  es=self._aligned_es(bars) if self.settings["filters.smt"] else None)
         sig, expl, stats = r.run()
         self.explanations, self.stats, self.days, self.last_signals = expl, stats, r.days, sig
         return sig
+
+    def _aligned_es(self, bars) -> dict:
+        """ES lows / highs on the NQ bars' timestamps (NaN where ES has no bar). The same series as the rules use."""
+        es = self.es_bars
+        if es is None:
+            raise ValueError("SMT is switched on but no ES dataset was supplied")
+        lo, hi = es.low, es.high
+        if self.settings["models.price_series"] == "mid":
+            if not es.has_ask_ohlc:
+                raise ValueError("price series 'mid' needs ASK prices in the ES dataset too")
+            lo, hi = (es.low + es.ask_low) / 2, (es.high + es.ask_high) / 2
+        idx = np.searchsorted(es.ts_ns, bars.ts_ns)
+        idx_c = np.minimum(idx, len(es.ts_ns) - 1)
+        ok = es.ts_ns[idx_c] == bars.ts_ns
+        return {"low": np.where(ok, lo[idx_c], np.nan), "high": np.where(ok, hi[idx_c], np.nan)}
 
 
 class ReplayStrategy(Strategy):

@@ -143,12 +143,14 @@ ADR-93: "My strategy" tab (`edgelab/mystrategy/`): BP Blake's model from the use
 completion indices, `logic.py`, shorts = mirrored longs) run by the one engine; companion protocol (`MY_STRATEGY_ROLE`,
 `is_companion`; 300 tries, ONE holdout look); trade records + candles in `<data>/my_strategy/`; holdout review with the
 user's take/skip (`review.py`, decisions never runs); reports leave the app only as a ZIP the user attaches (ADR-94).
-1m data only; SMT needs ES (refused).
+1m data only; SMT needs an ES 1m dataset (ADR-95).
 ADR-94: My strategy has NO GitHub upload any more (user's choice): "Save selected for Claude" writes one ZIP to
 `<Downloads>/MunyunLab for Claude/` (`runner.export`, green check = `exported`); test plans are pasted as JSON; Trades tab
 lists all reports first (`runner.all_reports`); charts stretch by dragging the price / time scale.
+ADR-95: My strategy SMT with ES (`filters.smt*`, `Rules._smt`, `runner.load_es`): confluence only (checklist + score, not a filter
+unless `filters.min_quality` is raised); ES 1m dataset found on the Data page; SMT off = bit-identical trades.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-94.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-95.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -429,4 +431,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-94). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-95). Update `README.md` status for phases.

@@ -183,6 +183,9 @@ function SettingRow({ d, value, changed, onChange }: { d: SettingDef; value: unk
   } else if (d.type === "choice") {
     ctl = <Select value={String(value)} onChange={(v) => onChange(v)} options={(d.options ?? []).map((o) => ({ value: o, label: o.replace(/_/g, " ") }))}
       ariaLabel={d.label} testId={`set-${d.key}`} />;
+  } else if (d.type === "text") {
+    ctl = <input className="input mono" value={String(value ?? "")} aria-label={d.label} data-testid={`set-${d.key}`}
+      onChange={(e: { target: HTMLInputElement }) => onChange(e.target.value)} />;
   } else if (d.type === "time") {
     ctl = <input className="input num" type="time" value={String(value)} aria-label={d.label} data-testid={`set-${d.key}`}
       onChange={(e: { target: HTMLInputElement }) => onChange(e.target.value)} />;

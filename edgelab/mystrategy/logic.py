@@ -51,6 +51,7 @@ class View:
     rq_l: RangeQ | None = None
     rq_h: RangeQ | None = None
     memo: dict = field(default_factory=dict)
+    es_l: np.ndarray | None = None   # ES lows in this direction's price world (None = no ES data)
 
     def px(self, v: float) -> float:
         return float(self.d * v) if v == v else v
@@ -84,7 +85,7 @@ class Setup:
 
 
 class Rules:
-    def __init__(self, bars, calendar, s: dict, skip: set | None = None, trade_from_td: int | None = None):
+    def __init__(self, bars, calendar, s: dict, skip: set | None = None, trade_from_td: int | None = None, es=None):
         self.s, self.cal = s, calendar
         self.trade_from_td = trade_from_td   # earlier trading dates are warm-up history only (no signals)
         self.skip = set(skip or ())          # signal bars the trader declined (holdout review): stay flat there
@@ -111,6 +112,8 @@ class Rules:
         }
         for v in self.views.values():
             v.rq_l, v.rq_h = RangeQ(v.l), RangeQ(v.h)
+        if es is not None:                      # ES lows / highs aligned to the NQ bars (NaN = no ES bar at that minute)
+            self.views[1].es_l, self.views[-1].es_l = es["low"], -es["high"]
         self.stats: Counter = Counter()
         self.explain: dict[int, dict] = {}
         self.days: list[dict] = []
@@ -554,6 +557,22 @@ class Rules:
         return {"high": hi, "low": lo, "eq": eq, "ok": bool(v.l[m] <= eq + s["eq.tolerance"] * (hi - lo)),
                 "position": round(float((v.l[m] - lo) / (hi - lo)), 3)}
 
+    def _smt(self, v: View, su: Setup) -> dict | None:
+        """SMT divergence at the manipulation extreme: exactly one of NQ and ES took out the reference low (mirrored for
+        shorts) that lies ``filters.smt_lookback`` minutes before the leg. None when ES data is missing there."""
+        if v.es_l is None:
+            return None
+        a, st, m = su.start - int(self.s["filters.smt_lookback"]), su.start, su.m
+        if a < 0 or st <= a:
+            return None
+        ref_es, leg_es = v.es_l[a:st], v.es_l[st:m + 1]
+        if not (np.isfinite(ref_es).all() and np.isfinite(leg_es).all()):
+            return None
+        nq_ref, es_ref = float(v.rq_l.min(a, st - 1)), float(ref_es.min())
+        nq_swept, es_swept = bool(v.l[m] < nq_ref), bool(leg_es.min() < es_ref)
+        return {"nq_swept": nq_swept, "es_swept": es_swept, "divergence": nq_swept != es_swept,
+                "nq_reference": v.px(nq_ref), "es_reference": v.px(es_ref), "es_extreme": v.px(float(leg_es.min()))}
+
     def _zones_hit(self, v: View, zones: list, m: int, start: int, judas: bool) -> list:
         s = self.s
         low = float(v.l[m])
@@ -970,6 +989,7 @@ class Rules:
                 be_level = lvl_
         liq = su.info["liq"]
         eq = su.info["eq"]
+        smt = self._smt(v, su) if s["filters.smt"] else None
         kinds = {z.kind for z, _ in su.zones}
         judas_open = day["open_idx"] >= 0 and v.l[su.m] < v.o[day["open_idx"]]
         checklist = {
@@ -988,14 +1008,14 @@ class Rules:
             "inversion_gap": True,
             "highest_timeframe_gap": trg["tf"] == max(int(k.rstrip("m")) for k in trg["per_tf"]),
             "displacement": trg["displacement"]["ok"],
-            "smt": None,
+            "smt": None if smt is None else smt["divergence"],
             "target_at_liquidity": "liquidity" in tinfo.get("source", ""),
             "stacked_liquidity_at_target": bool(tinfo.get("stacked_liquidity")),
             "not_choppy": None if chop is None else chop["ok"],
         }
         quality = sum(bool(checklist[k]) for k in ("liquidity_swept", "several_key_levels", "displacement",
                                                     "discount_premium", "stacked_liquidity_at_target",
-                                                    "open_manipulation"))
+                                                    "open_manipulation") + (("smt",) if s["filters.smt"] else ()))
         if quality < s["filters.min_quality"]:
             st["signal_rejected_quality"] += 1
             return None
@@ -1045,6 +1065,6 @@ class Rules:
                        "source": tinfo.get("source"), "level": lv(tinfo.get("level")),
                        "candidates": [lv(c) for c in tinfo.get("candidates", [])]},
             "breakeven": {"mode": s["manage.be"], "level": None if be_level != be_level else P(be_level)},
-            "chop": chop, "checklist": checklist, "quality": quality,
+            "chop": chop, "smt": smt, "checklist": checklist, "quality": quality,
         }
         return entry_kind, entry, stop, target, be_level, expl
