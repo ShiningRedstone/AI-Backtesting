@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
 import type { Candle, Decision, EsStatus, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
-  SettingDef, SettingsPayload, TradeDoc, TradeRow } from "../api/my";
+  SettingDef, SettingsPayload, SetupReviews, SetupStats, SetupView, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
 import { useMoney } from "../app/money";
@@ -811,5 +811,180 @@ export function MyHoldoutPage() {
       {rv?.status === "in_progress" && <p className="muted small">The mechanical holdout result stays hidden until you have decided
         every setup, so it cannot influence your decisions.</p>}
     </div>
+  );
+}
+
+// =============================================================================================== setup review (ADR-96)
+/** Blind take / skip on a fixed sample of a DISCOVERY backtest's setups; outcomes revealed at the end. No holdout, no try. */
+export function MySetupReviewPage() {
+  const route = useRoute();
+  const id = route.parts[1];
+  return id ? <SetupReviewRun key={id} id={id} /> : <SetupReviewStart />;
+}
+
+function SetupReviewStart() {
+  const { data, error } = useApi<SetupReviews>(my.setupReviewsUrl);
+  const [base, setBase] = useState<string | null>(null);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pick = base ?? data?.backtests?.[0]?.id ?? null;
+  const chosen = data?.backtests.find((b) => b.id === pick);
+  const start = async () => {
+    if (!pick) return;
+    setBusy(true); setErr(null);
+    try { const st = await my.startSetupReview(pick); viewCache.clear(); go(`/my-setup/${st.id}`); }
+    catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  return (
+    <div className="page" data-testid="my-setup-start-page">
+      <PageHead title="Setup review" />
+      {error && <ErrorPanel error={error} />}
+      {data?.open && <Banner tone="info">A setup review is in progress ({data.open.decided} of {data.open.size} decided).{" "}
+        <a href={href(`/my-setup/${data.open.id}`)} data-testid="my-setup-continue">Continue it</a></Banner>}
+      {data && !data.open && (
+        <Card title="Judge the strategy's setups yourself" testId="my-setup-new">
+          <p>You see {data.sample_size} setups, picked at random from a discovery backtest (always the same ones for the same backtest).
+            Each chart stops at the entry signal. Decide <b>Take</b> or <b>Skip</b>; for a skip, tick why. The results stay hidden until
+            you have decided every setup, so they cannot steer your decisions. Then Claude can compare your skips with the outcomes and
+            turn them into rules.</p>
+          <p className="muted small">This uses the discovery period only: no holdout look, no try, not a backtest run. Please don't open
+            this backtest's trades while you review.</p>
+          {!data.backtests.length ? <Empty>Run a backtest first (Backtest tab).</Empty> : (
+            <div className="inline">
+              <Field label="Backtest to review">
+                <Select value={pick} onChange={setBase} ariaLabel="Backtest to review" testId="my-setup-base"
+                  options={data.backtests.map((b) => ({ value: b.id, label: `${b.label || "Backtest"} · ${nyTime(sec(b.created_at))} · ${b.trade_count} trades · ${pct(b.metrics.win_rate)} · ${n(b.metrics.trades_per_week, 2)} / week` }))} />
+              </Field>
+              <Button kind="primary" onClick={start} busy={busy} busyLabel="Starting…" disabled={!pick || !chosen?.trade_count} testId="my-setup-go">
+                Start the review ({Math.min(data.sample_size, chosen?.trade_count ?? 0)} setups)</Button>
+            </div>)}
+          <ErrorPanel error={err} />
+        </Card>)}
+      {data && data.reviews.length > 0 && (
+        <Card title="Setup reviews" testId="my-setup-list">
+          <TableWrap><table className="dense"><thead><tr><th title="Saved for Claude">Saved</th><th>Started</th><th>Backtest</th>
+            <th className="num">Decided</th><th>Status</th><th /></tr></thead>
+            <tbody>{data.reviews.map((v) => (
+              <tr key={v.id} onClick={() => go(`/my-setup/${v.id}`)} style={{ cursor: "pointer" }}>
+                <td>{v.exported ? <span className="my-saved-check" title={`Saved · ${v.exported.file}`}>✓</span> : ""}</td>
+                <td>{nyTime(sec(v.created_at))}</td><td>{v.base_label || v.base_report}</td>
+                <td className="num">{v.decided} / {v.size}</td>
+                <td>{v.status === "complete" ? <Badge tone="ok">Finished</Badge> : <Badge tone="info">In progress</Badge>}</td>
+                <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>
+                  {v.status === "complete" && <SaveOne id={v.id} done={!!v.exported} />}</td>
+              </tr>))}</tbody></table></TableWrap>
+        </Card>)}
+    </div>
+  );
+}
+
+function SetupReviewRun({ id }: { id: string }) {
+  const { data, error, reload } = useApi<SetupView>(my.setupReviewUrl(id), [id]);
+  const [skipping, setSkipping] = useState(false);
+  const [reasons, setReasons] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const c = data?.candidate;
+  const rv = data?.review;
+  const reset = () => { setSkipping(false); setReasons(new Set()); setNote(""); };
+  const decide = async (take: boolean) => {
+    if (!c) return;
+    setBusy(true); setErr(null);
+    try { await my.setupDecide(id, c.trade_no, take, take ? [] : [...reasons], take ? "" : note); reset(); reload(); window.scrollTo(0, 0); }
+    catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  const undo = async () => {
+    setBusy(true); setErr(null);
+    try { await my.setupUndo(id); reset(); reload(); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  const toggle = (k: string) => { const t = new Set(reasons); if (t.has(k)) t.delete(k); else t.add(k); setReasons(t); };
+  const pr = data?.progress;
+  return (
+    <div className="page" data-testid="my-setup-page">
+      <PageHead title="Setup review">
+        {rv?.status === "complete" && <SaveOne id={id} done={!!rv.exported} />}
+        <a className="btn btn-secondary" href={href("/my-setup")}>All setup reviews</a>
+      </PageHead>
+      {error && <ErrorPanel error={error} />}
+      <ErrorPanel error={err} />
+      {!data && !error && <PageSkeleton layout="overview" label="Loading the setup (the first one takes a moment)" />}
+      {rv && pr && rv.status === "in_progress" && (
+        <div className="kpis">
+          <Kpi label="Decided" value={`${pr.decided} of ${pr.size}`} meter={pr.decided / (pr.size || 1)} sub={`${pr.taken} taken · ${pr.skipped} skipped`} />
+          <Kpi label="Backtest" value={rv.base_label || "Backtest"} sub={`${rv.sample.size} of its ${rv.sample.of} trades, at random`} />
+        </div>)}
+      {rv?.status === "in_progress" && c && (
+        <>
+          <Card title={`Setup ${c.position} of ${pr?.size}: ${dirWord(c.explanation.direction)} · ${MODEL(c.explanation.model)} · ${nyTime(sec(c.signal_ts) + 60)}`}
+            testId="my-setup-candidate" actions={<div className="inline">
+              <Button small kind="ghost" onClick={undo} disabled={busy || !pr?.decided} testId="my-setup-undo">Undo last</Button>
+              <Button kind="primary" onClick={() => decide(true)} busy={busy && !skipping} disabled={busy} testId="my-setup-take">Take</Button>
+              <Button onClick={() => setSkipping(!skipping)} disabled={busy} testId="my-setup-skip">Skip…</Button></div>}>
+            <p className="muted">Planned: entry about {px(c.explanation.entry.reference_price)}, stop {px(c.explanation.stop.price)},
+              target {px(c.explanation.target.price)} ({n(c.explanation.target.r_planned, 2)} R). Score {c.explanation.quality}.</p>
+            {skipping && (
+              <div className="my-skip-box" data-testid="my-setup-reasons">
+                <p><b>Why skip it?</b> Tick one or more.</p>
+                <div className="my-reason-chips">{Object.entries(data.reasons).map(([k, label]) => (
+                  <button key={k} type="button" className={`my-chip${reasons.has(k) ? " on" : ""}`} onClick={() => toggle(k)}
+                    data-testid={`my-reason-${k}`}>{label}</button>))}</div>
+                <TextInput value={note} onChange={setNote} placeholder="Note (optional)" ariaLabel="Note" testId="my-setup-note" />
+                <div className="inline"><Button kind="primary" onClick={() => decide(false)} busy={busy} disabled={!reasons.size}
+                  testId="my-setup-confirm-skip">Skip this setup</Button>
+                  <Button kind="ghost" onClick={reset}>Cancel</Button></div>
+              </div>)}
+          </Card>
+          <TradeCharts key={c.trade_no} doc={c} until />
+          <TradeExplain e={c.explanation} />
+          <p className="muted small">Results stay hidden until you have decided all {pr?.size} setups.</p>
+        </>)}
+      {rv?.status === "complete" && data?.results && <SetupResults data={data} />}
+    </div>
+  );
+}
+
+function SetupResults({ data }: { data: SetupView }) {
+  const res = data.results!;
+  const rv = data.review;
+  const [side, setSide] = useState<"all" | "take" | "skip">("all");
+  const rows = res.rows.filter((x) => side === "all" || (side === "take" ? x.take : !x.take));
+  const stat = (label: string, s: SetupStats, accent?: boolean) => (
+    <Kpi label={label} value={pct(s.win_rate)} tone={signCls(s.net_r)} accent={accent}
+      sub={`${s.trades} trades · ${s.wins} wins · ${r(s.net_r, 1)} net · ${r(s.avg_r, 2)} / trade`} />);
+  return (
+    <>
+      <Banner tone="ok" testId="my-setup-done">Review finished: the outcomes are shown below. Save it for Claude to turn your skips into rules.</Banner>
+      <div className="kpis" data-testid="my-setup-kpis">
+        {stat("Every reviewed setup", res.all)}
+        {stat("The setups you took", res.taken, true)}
+        {stat("The setups you skipped", res.skipped)}
+      </div>
+      <Card title="By skip reason" testId="my-setup-by-reason">
+        {!res.by_reason.length ? <Empty>You took every setup.</Empty> : (
+          <TableWrap><table className="dense"><thead><tr><th>Reason</th><th className="num">Skipped</th><th className="num">Would have won</th>
+            <th className="num">Win rate</th><th className="num">Net R of these</th></tr></thead>
+            <tbody>{res.by_reason.map((b) => (
+              <tr key={b.reason}><td>{b.label}</td><td className="num">{b.trades}</td><td className="num">{b.wins}</td>
+                <td className="num">{pct(b.win_rate)}</td><td className={`num ${signCls(b.net_r)}`}>{r(b.net_r, 1)}</td></tr>))}</tbody></table></TableWrap>)}
+        <p className="muted small">A negative net R means skipping those setups helped. {res.note}</p>
+      </Card>
+      <Card title={`Reviewed setups · ${rv.base_label || "Backtest"}`} testId="my-setup-rows" actions={
+        <div className="segmented small" role="group">
+          {(["all", "take", "skip"] as const).map((k) => <button key={k} className={side === k ? "on" : ""} onClick={() => setSide(k)}>
+            {k === "all" ? "All" : k === "take" ? "Taken" : "Skipped"}</button>)}
+        </div>}>
+        <p className="muted small">Click a setup to open the full trade.</p>
+        <TableWrap className="my-setup-scroll"><table className="dense"><thead><tr><th className="num">#</th><th>Entry (New York)</th><th>Side</th>
+          <th>Model</th><th>You</th><th>Why</th><th className="num">Score</th><th>Exit</th><th className="num">Result R</th></tr></thead>
+          <tbody>{rows.map((x) => (
+            <tr key={x.trade_no} onClick={() => go(`/my-trades/${rv.base_report}/${x.trade_no}`)} style={{ cursor: "pointer" }}>
+              <td className="num">{x.trade_no}</td><td>{nyTime(sec(x.entry_ts))}</td><td>{dirWord(x.direction)}</td><td>{MODEL(x.model)}</td>
+              <td>{x.take ? <Badge tone="ok">Took</Badge> : <Badge>Skipped</Badge>}</td>
+              <td>{x.reasons.map((k) => data.reasons[k] ?? k).join(", ")}{x.note ? ` · ${x.note}` : ""}</td>
+              <td className="num">{x.quality ?? "–"}</td><td>{exitWord(x.exit_reason ?? "")}</td>
+              <td className={`num ${signCls(x.net_r)}`}>{r(x.net_r, 2)}</td></tr>))}</tbody></table></TableWrap>
+      </Card>
+    </>
   );
 }

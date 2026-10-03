@@ -45,6 +45,8 @@ BT_JOB_ID = re.compile(r"^BTJ_[0-9A-F]{12}$")
 FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 MY_REPORT_ID = re.compile(r"^(BT|HO|HD|PL)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")       # ADR-93
+MY_EXPORT_ID = re.compile(r"^(BT|HO|HD|PL|SR)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")      # ADR-96: + setup reviews
+MY_SETUP_ID = re.compile(r"^SR_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")
 MY_JOB_ID = re.compile(r"^MSJ_[0-9a-f]{12}$")
 
 
@@ -178,7 +180,8 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
                                       "issues": [{"severity": "error", "message": m} for m in e.issues]}}), 422
         if isinstance(e, MyStrategyError):
             return jsonify({"error": {"kind": "my_strategy", "code": e.code, "message": e.message}}), \
-                409 if e.code in ("JOB_RUNNING", "REVIEW_OPEN", "HOLDOUT_LOOKS_USED", "NOT_CURRENT") else 422
+                409 if e.code in ("JOB_RUNNING", "REVIEW_OPEN", "HOLDOUT_LOOKS_USED", "NOT_CURRENT",
+                              "SETUP_REVIEW_OPEN") else 422
         if isinstance(e, SearchSpecError):
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],
@@ -1178,8 +1181,41 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         ids = b.get("report_ids")
         if not isinstance(ids, list) or not ids or len(ids) > 200:
             raise _bad("report_ids must be a non-empty list")
-        ids = [_id(x, MY_REPORT_ID, "report id") for x in ids]
+        ids = [_id(x, MY_EXPORT_ID, "report id") for x in ids]
         return jsonify(call(svc.my_strategy_export, ids, bool(b.get("include_candles", False))))
+
+    @app.get("/api/my/setup-reviews")
+    def my_setup_reviews():
+        return jsonify(call(svc.my_strategy_setup_reviews))
+
+    @app.post("/api/my/setup-reviews")
+    def my_setup_review_start():
+        b = body()
+        size = b.get("size")
+        if size is not None and (not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 2000):
+            raise _bad("size must be an integer between 1 and 2000")
+        return jsonify(call(svc.my_strategy_start_setup_review, _id(b.get("report_id"), MY_REPORT_ID, "report id"), size))
+
+    @app.get("/api/my/setup-reviews/<sid>")
+    def my_setup_review(sid):
+        return jsonify(call(svc.my_strategy_setup_review, _id(sid, MY_SETUP_ID, "setup review id")))
+
+    @app.post("/api/my/setup-reviews/<sid>/decide")
+    def my_setup_decide(sid):
+        b = body()
+        n, take, reasons, note = b.get("trade_no"), b.get("take"), b.get("reasons", []), b.get("note", "")
+        if not isinstance(n, int) or isinstance(n, bool) or not isinstance(take, bool):
+            raise _bad("trade_no (integer) and take (true/false) are required")
+        if not isinstance(reasons, list) or len(reasons) > 20 or not all(isinstance(x, str) for x in reasons):
+            raise _bad("reasons must be a list of strings")
+        if not isinstance(note, str):
+            raise _bad("note must be a string")
+        return jsonify(call(svc.my_strategy_setup_decide, _id(sid, MY_SETUP_ID, "setup review id"), n, take, reasons,
+                            note))
+
+    @app.post("/api/my/setup-reviews/<sid>/undo")
+    def my_setup_undo(sid):
+        return jsonify(call(svc.my_strategy_setup_undo, _id(sid, MY_SETUP_ID, "setup review id")))
 
     @app.post("/api/my/exports/open")
     def my_open_exports():

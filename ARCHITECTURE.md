@@ -2526,3 +2526,29 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **UI:** the My strategy backtest lists (Backtest tab and Trades tab, one component) sit in a fixed-height box (about 8
   rows) that scrolls inside with sticky headers; "Why it entered" states the SMT verdict with both markets' levels.
 - **Unchanged:** engine, fills, costs, sizing, prop rules, configs, all other rules of My strategy.
+
+### ADR-96 My strategy: setup review on the discovery period
+- **Request (user):** after single-setting tuning stopped improving the win rate, the user reviews the strategy's setups
+  themselves on the DISCOVERY period, so Claude can turn the setups they would skip into rules (Blake's discretion made
+  mechanical) before the one holdout look. Choices the user made: a random sample of 150 setups; outcomes hidden until
+  every setup is decided; a reason picked from a list for every skip; deliver to main.
+- **Module** `mystrategy/setup_review.py`; state in `<data>/my_strategy/setup_reviews/SR_<id>/state.json`. Base = one
+  finished discovery backtest report (holdout reports refused, `DISCOVERY_ONLY`). Sample = `sample_of`: a numpy
+  permutation seeded by sha256("setup-review:" + report id) (same report -> same sample), shown in time order. One review
+  in progress at a time (`SETUP_REVIEW_OPEN`).
+- **Before the decision** the setup shows only data up to the signal bar: the charts are rebuilt from the report's
+  dataset (`Charts.for_trade(..., until=signal_bar)`, the same function as the holdout review; the candle containing the
+  signal is rebuilt from 1-minute bars up to it). The dataset is re-loaded through the validation gate and must carry the
+  report's content hash, and the signal bar's time must match the recorded explanation (`DATA_CHANGED` otherwise). The
+  payload holds no outcome fields. Take, or Skip with >= 1 of eight reason tags (+ an optional note of up to 300
+  characters); "Undo last" removes the most recent decision while the review is open.
+- **After the last decision** the outcomes are revealed: every reviewed setup / taken / skipped (trades, wins, win rate,
+  net R, R per trade) and per reason tag, plus every row with its decision. The outcomes are the base report's engine
+  results. Each setup is judged on its own: skipping one does not create other trades (unlike the holdout review, which
+  replays the day).
+- **Not research evidence:** no engine run, no run record, no trial, no holdout look; human decisions are kept apart from
+  automated results. "Save for Claude" (`runner.export` with an `SR_` id; finished reviews only) writes
+  `<SR id>/setup_review.json` (state, reason labels, results) into the ZIP, and the list shows the green check.
+- **API:** `GET/POST /api/my/setup-reviews`, `GET /api/my/setup-reviews/<SR>`, `POST .../<SR>/decide`, `POST .../<SR>/undo`;
+  `/api/my/export` accepts `SR_` ids. **UI:** My strategy -> "Setup review" (`/my-setup`, `/my-setup/<SR>`).
+- **Unchanged:** engine, fills, costs, sizing, prop rules, configs, strategy rules, the protocol and its holdout look.

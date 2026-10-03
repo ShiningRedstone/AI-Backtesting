@@ -152,8 +152,10 @@ ADR-95: SMT divergence with ES in My strategy: ES = Dukascopy USA500.IDX/USD 1m 
 `Rules._smt` at the leg's swing (exactly one market takes the prior swing low; missing ES minute = unknown); `filters.smt`
 (require) + `filters.smt_in_score`; `params.smt_used` puts the ES content hash into the trial key / strategy id; pre-ADR-95
 settings hashes unchanged. Backtest lists scroll inside a fixed-height box.
+ADR-96: My strategy "Setup review" (`mystrategy/setup_review.py`): blind take / skip (skip reasons from a list) on a fixed-seed
+sample (150) of a DISCOVERY backtest's trades, charts stop at the signal, outcomes revealed at the end; never a run, trial or holdout look.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-95.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-96.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -209,7 +211,7 @@ remains. Do not rely on this file alone.
     prop check (the old simulator)
   - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
-    Holdout review (take / skip).
+    Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (take / skip).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
     then about/updates, workspace, pass-criteria account + Live 50K drawdown limit, CPU cores, prop account fees +
     discounts, delete-all.
@@ -434,4 +436,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-95). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-96). Update `README.md` status for phases.

@@ -629,7 +629,7 @@ def export(svc, report_ids: list[str], include_candles: bool = False) -> dict:
             ids += [v["backtest_id"] for v in plan_result(svc, rid)["variants"] if v.get("backtest_id")]
     folders = []
     for rid in dict.fromkeys(ids):
-        if rid.startswith("PL_"):
+        if rid.startswith(("PL_", "SR_")):
             folders.append((rid, None))
         else:
             folders.append((rid, _bt_folder(svc, rid)))
@@ -638,6 +638,12 @@ def export(svc, report_ids: list[str], include_candles: bool = False) -> dict:
     index = {"exported_at": _now(), "app_version": _code_version(), "include_candles": include_candles, "reports": []}
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for rid, folder in folders:
+            if folder is None and rid.startswith("SR_"):           # a finished setup review (ADR-96)
+                from edgelab.mystrategy import setup_review as SR
+                for n, text in SR.export_files(svc, rid).items():
+                    z.writestr(f"{rid}/{n}", text)
+                index["reports"].append({"id": rid, "kind": "setup_review"})
+                continue
             if folder is None:
                 res = plan_result(svc, rid)
                 z.writestr(f"{rid}/plan_result.json", json.dumps(res, indent=1))
@@ -657,7 +663,10 @@ def export(svc, report_ids: list[str], include_candles: bool = False) -> dict:
         z.writestr("index.json", json.dumps(index, indent=1))
     mark = {"at": _now(), "file": target.name}
     for rid, folder in folders:
-        if folder is None:
+        if folder is None and rid.startswith("SR_"):
+            from edgelab.mystrategy import setup_review as SR
+            SR.mark_exported(svc, rid, mark)
+        elif folder is None:
             res = plan_result(svc, rid)
             res["exported"] = mark
             _write_json(home(svc) / "plans" / f"{rid}.json", res)

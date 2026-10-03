@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy: setup review on the discovery period (ADR-96)
+
+| Item | Status |
+|---|---|
+| New "Setup review" tab: a fixed random sample (150) of a discovery backtest's setups, each chart stopping at the entry signal; Take, or Skip with one or more reasons from a list (+ optional note); "Undo last" | IMPLEMENTED, TESTED |
+| Outcomes hidden until every setup is decided, then shown: taken vs skipped and per skip reason, every setup with its decision | IMPLEMENTED, TESTED |
+| "Save for Claude" for finished setup reviews (green check) | IMPLEMENTED, TESTED |
+| No run, no try, no holdout look; outcomes are the backtest's own engine results | TESTED |
+| Engine, fills, costs, sizing, prop rules, configs, strategy rules | UNCHANGED |
+
 ## My strategy: SMT divergence with ES, scrolling backtest lists (ADR-95)
 
 | Item | Status |

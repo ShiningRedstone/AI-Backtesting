@@ -2650,6 +2650,28 @@ class Services:
         from edgelab.mystrategy import review as RV
         return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock))
 
+    def my_strategy_setup_reviews(self) -> dict:
+        """Setup reviews on the discovery period (ADR-96): list, the open one, the reason tags, the backtests to start from."""
+        from edgelab.mystrategy import runner as R, setup_review as SR
+        return _jsonable({"reviews": SR.list_reviews(self), "open": SR.in_progress(self), "reasons": SR.REASONS,
+                          "sample_size": SR.SAMPLE_SIZE, "backtests": R.list_backtests(self)})
+
+    def my_strategy_start_setup_review(self, report_id: str, size: int | None = None) -> dict:
+        from edgelab.mystrategy import setup_review as SR
+        return _jsonable(SR.start(self, report_id, SR.SAMPLE_SIZE if size is None else int(size)))
+
+    def my_strategy_setup_review(self, sr_id: str) -> dict:
+        from edgelab.mystrategy import setup_review as SR
+        return SR.view(self, sr_id, self.lock)
+
+    def my_strategy_setup_decide(self, sr_id: str, trade_no: int, take: bool, reasons: list, note: str = "") -> dict:
+        from edgelab.mystrategy import setup_review as SR
+        return _jsonable(SR.decide(self, sr_id, int(trade_no), bool(take), reasons, note))
+
+    def my_strategy_setup_undo(self, sr_id: str) -> dict:
+        from edgelab.mystrategy import setup_review as SR
+        return _jsonable(SR.undo(self, sr_id))
+
     def my_strategy_export(self, report_ids: list, include_candles: bool = False) -> dict:
         from edgelab.mystrategy import runner as R
         return _jsonable(R.export(self, [str(x) for x in report_ids], include_candles))

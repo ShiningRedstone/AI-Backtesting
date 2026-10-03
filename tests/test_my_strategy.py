@@ -468,6 +468,79 @@ class TestWorkspaceFlow(unittest.TestCase):
             self.assertIn(f"{sm['id']}/candles.jsonl.gz", z.namelist())
         svc.store.close()
 
+    def test_setup_review_on_discovery(self):
+        """ADR-96: blind take/skip on a fixed-seed sample of a discovery backtest; no trial, no run, no holdout look."""
+        import zipfile
+
+        from edgelab.mystrategy import runner as R
+        from edgelab.mystrategy import setup_review as SR
+        from edgelab.services import Services
+        svc = Services(root=self.root)
+        ov = {"bias.override": "long", "eq.enabled": False, "ifg.displacement": False}
+        sm = R.backtest(svc, ov, label="for review", lock=svc.lock)
+        self.assertGreater(sm["trade_count"], 2)
+        info0 = R.protocol_info(svc)
+        runs0 = len(svc.store.list_runs()) if hasattr(svc.store, "list_runs") else None
+        size = sm["trade_count"] - 1
+        all_nos = list(range(1, sm["trade_count"] + 1))
+        self.assertEqual(SR.sample_of(sm["id"], all_nos, size), SR.sample_of(sm["id"], all_nos, size))   # fixed seed
+        st = SR.start(svc, sm["id"], size=size)
+        self.assertEqual(st["order"], sorted(st["order"]))
+        self.assertEqual(len(st["order"]), size)
+        with self.assertRaises(R.MyStrategyError) as e:                    # one open review at a time
+            SR.start(svc, sm["id"])
+        self.assertEqual(e.exception.code, "SETUP_REVIEW_OPEN")
+        with self.assertRaises(R.MyStrategyError):                         # not finished: nothing to save yet
+            R.export(svc, [st["id"]])
+        trades = {t["trade_no"]: t for t in R.get_backtest(svc, sm["id"])["trades"]}
+        k = 0
+        while True:
+            v = SR.view(svc, st["id"], svc.lock)
+            c = v.get("candidate")
+            if not c:
+                break
+            self.assertNotIn("results", v)                                 # outcomes hidden until the end
+            self.assertNotIn("net_r", c)
+            for tf, rows in c["candles"].items():                          # nothing after the signal bar is shown
+                self.assertLessEqual(rows[-1][0], pd.Timestamp(c["signal_ts"]).value // 10**9, tf)
+            self.assertLess(pd.Timestamp(c["signal_ts"]), pd.Timestamp(trades[c["trade_no"]]["entry_ts"]))
+            if k == 0:
+                with self.assertRaises(R.MyStrategyError) as e:
+                    SR.decide(svc, st["id"], c["trade_no"], False, [])
+                self.assertEqual(e.exception.code, "REASON_REQUIRED")
+                with self.assertRaises(R.MyStrategyError):
+                    SR.decide(svc, st["id"], c["trade_no"], False, ["nope"])
+                SR.decide(svc, st["id"], c["trade_no"], True)
+                self.assertEqual(SR.undo(svc, st["id"])["trade_no"], c["trade_no"])   # undo the last decision
+            if k % 2:
+                SR.decide(svc, st["id"], c["trade_no"], False, ["choppy", "other"], "too slow")
+            else:
+                SR.decide(svc, st["id"], c["trade_no"], True, ["choppy"])  # reasons dropped for a take
+            k += 1
+        self.assertEqual(k, size)
+        res = v["results"]
+        self.assertEqual(v["review"]["status"], "complete")
+        self.assertEqual(res["taken"]["trades"] + res["skipped"]["trades"], size)
+        for row in res["rows"]:                                            # outcomes are the backtest's own
+            self.assertAlmostEqual(row["net_r"], trades[row["trade_no"]]["net_r"], places=4)
+            self.assertEqual(row["reasons"], [] if row["take"] else ["choppy", "other"])
+        self.assertAlmostEqual(res["all"]["net_r"], sum(trades[n]["net_r"] for n in st["order"]), places=3)
+        self.assertEqual({b["reason"] for b in res["by_reason"]}, {"choppy", "other"} if res["skipped"]["trades"] else set())
+        # no trial, no run, no holdout look
+        info1 = R.protocol_info(svc)
+        self.assertEqual((info1["trials_used"], info1["holdout_looks_used"]), (info0["trials_used"], info0["holdout_looks_used"]))
+        if runs0 is not None:
+            self.assertEqual(len(svc.store.list_runs()), runs0)
+        out = R.export(svc, [st["id"]])
+        with zipfile.ZipFile(out["path"]) as z:
+            doc = json.loads(z.read(f"{st['id']}/setup_review.json"))
+        self.assertEqual(len(doc["results"]["rows"]), size)
+        self.assertTrue(SR.list_reviews(svc)[0]["exported"])
+        with self.assertRaises(R.MyStrategyError) as e:                    # holdout reports are refused
+            SR.start(svc, "HO_20260101_000000_abcd")
+        self.assertEqual(e.exception.code, "NO_REPORT")
+        svc.store.close()
+
     def test_plans_are_checked_before_running(self):
         from edgelab.mystrategy import runner as R
         with self.assertRaises(R.MyStrategyError):
@@ -496,6 +569,15 @@ class TestApi(unittest.TestCase):
             self.assertEqual(c.post("/api/my/review/decide", json={"signal_bar": "x"}).status_code, 400)
             self.assertEqual(c.post("/api/my/export", json={"report_ids": ["../../etc"]}).status_code, 400)
             self.assertEqual(c.post("/api/my/export", json={"report_ids": []}).status_code, 400)
+            sr = c.get("/api/my/setup-reviews")                                    # ADR-96
+            self.assertEqual(sr.status_code, 200)
+            self.assertIn("choppy", sr.json["reasons"])
+            self.assertEqual(c.post("/api/my/setup-reviews", json={"report_id": "../x"}).status_code, 400)
+            self.assertEqual(c.post("/api/my/setup-reviews", json={"report_id": "BT_20260101_000000_abcd"}).status_code, 422)
+            self.assertEqual(c.get("/api/my/setup-reviews/SR_bad").status_code, 400)
+            self.assertEqual(c.get("/api/my/setup-reviews/SR_20260101_000000_abcd").status_code, 404)
+            self.assertEqual(c.post("/api/my/setup-reviews/SR_20260101_000000_abcd/decide",
+                                    json={"trade_no": "1", "take": True}).status_code, 400)
             bad = c.post("/api/my/plans/check", json={"plan": {"variants": [{"overrides": {"nope": 1}}]}})
             self.assertEqual(bad.status_code, 422)
             ok = c.post("/api/my/plans/check", json={"plan": {"name": "p", "variants": [{"label": "a"}]}})

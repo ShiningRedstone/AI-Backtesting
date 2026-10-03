@@ -108,6 +108,26 @@ export interface PlanResult { id: string; name: string; note?: string; created_a
   backtest_id?: string; trade_count?: number; metrics?: Metrics; prop?: PropBrief | null; error?: { kind: string; message: string } })[];
   exported?: { at: string; file: string } }
 
+/** Setup review on the discovery period (ADR-96). */
+export interface SetupReviewRow { id: string; status: "in_progress" | "complete"; created_at: string; finished_at: string | null;
+  base_report: string; base_label: string; settings_hash: string; exported: { at: string; file: string } | null; size: number; decided: number }
+export interface SetupReviews { reviews: SetupReviewRow[]; open: SetupReviewRow | null; reasons: Record<string, string>; sample_size: number;
+  backtests: ReportRow[] }
+export interface SetupStats { trades: number; wins: number; win_rate: number | null; net_r: number; avg_r: number | null }
+export interface SetupResultRow { trade_no: number; entry_ts: string; direction: number; model?: string; confirmation_tf?: string;
+  quality?: number; r_planned?: number; take: boolean; reasons: string[]; note: string; net_r: number; net_usd?: number; exit_reason?: string }
+export interface SetupProgress { size: number; decided: number; taken: number; skipped: number }
+export interface SetupView {
+  review: { id: string; status: "in_progress" | "complete"; created_at: string; finished_at: string | null; base_report: string;
+    base_label: string; settings_hash: string; settings_changed: Record<string, unknown>; window: { start: string; end: string };
+    sample: { size: number; of: number }; exported: { at: string; file: string } | null };
+  progress: SetupProgress; reasons: Record<string, string>;
+  candidate?: { trade_no: number; position: number; signal_bar: number; signal_ts: string; explanation: Explanation; charts: string[];
+    candles: Record<string, Candle[]> } | null;
+  results?: { all: SetupStats; taken: SetupStats; skipped: SetupStats; by_reason: (SetupStats & { reason: string; label: string })[];
+    rows: SetupResultRow[]; note: string };
+}
+
 export const my = {
   overviewUrl: "/api/my",
   settingsUrl: "/api/my/settings",
@@ -126,4 +146,10 @@ export const my = {
   openExports: () => api.post<{ folder: string }>("/api/my/exports/open", {}),
   checkPlan: (plan: unknown) => api.post<{ name?: string; note?: string; variants: PlanVariant[] }>("/api/my/plans/check", { plan }),
   runPlan: (plan: unknown) => api.post<MyJob>("/api/my/plans/run", { plan }),
+  setupReviewsUrl: "/api/my/setup-reviews",
+  setupReviewUrl: (id: string) => `/api/my/setup-reviews/${enc(id)}`,
+  startSetupReview: (report_id: string) => api.post<{ id: string }>("/api/my/setup-reviews", { report_id }),
+  setupDecide: (id: string, trade_no: number, take: boolean, reasons: string[], note: string) =>
+    api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/decide`, { trade_no, take, reasons, note }),
+  setupUndo: (id: string) => api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/undo`, {}),
 };

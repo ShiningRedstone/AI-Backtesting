@@ -892,3 +892,13 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .candle-chart .scale-y:hover, .candle-chart .scale-x:hover { fill: var(--surface-2); fill-opacity: .5; }
 /* ADR-95: the My strategy backtest lists are a fixed-height box (about 8 rows) that scrolls inside; headers stay visible */
 .table-wrap.my-report-scroll { max-height: 296px; overflow-y: auto; }
+/* ADR-96: setup review - skip reasons as toggle chips, a taller scrolling list of reviewed setups */
+.my-skip-box { margin-top: 12px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-2);
+  display: flex; flex-direction: column; gap: 10px; }
+.my-skip-box p { margin: 0; }
+.my-reason-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.my-chip { padding: 6px 12px; border-radius: var(--pill); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  cursor: pointer; font: inherit; font-size: 13px; }
+.my-chip:hover { border-color: var(--border-focus); }
+.my-chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.table-wrap.my-setup-scroll { max-height: 560px; overflow-y: auto; }
