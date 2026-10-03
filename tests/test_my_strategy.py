@@ -5,7 +5,7 @@ candles are causal (a partial candle is never complete); a hand-built known-answ
 signal and its mirror the expected short; every rule set passes the engine's empirical lookahead check; the replay
 used by the holdout review reproduces the engine's trades; the companion protocol counts trials, refuses the holdout
 before a discovery backtest and spends exactly one look; human decisions are never runs; uploads send the report to
-the reports branch with the token only in the Authorization header. All data is SYNTHETIC."""
+one ZIP for the user to attach in the chat. All data is SYNTHETIC."""
 import json
 import os
 import shutil
@@ -217,37 +217,13 @@ class TestCausalityAndEngine(unittest.TestCase):
 DISC, HOLD = ("2024-03-04", "2024-04-05"), ("2024-04-08", "2024-04-26")
 
 
-class FakeGitHub:
-    def __init__(self):
-        self.calls, self.ref = [], None
-
-    def request(self, method, url, token, body):
-        self.calls.append((method, url, token, body))
-        if url.endswith("/git/ref/heads/strategy-reports"):
-            return (200, {"object": {"sha": self.ref}}) if self.ref else (404, {"message": "Not Found"})
-        if "/git/commits/" in url and method == "GET":
-            return 200, {"tree": {"sha": "T0"}}
-        if url.endswith("/git/blobs"):
-            return 201, {"sha": f"B{len(self.calls)}"}
-        if url.endswith("/git/trees"):
-            return 201, {"sha": "T1"}
-        if url.endswith("/git/commits"):
-            return 201, {"sha": "C1"}
-        if url.endswith("/git/refs"):
-            self.ref = "C1"
-            return 201, {}
-        if "/git/refs/heads/" in url:
-            return 200, {}
-        return 404, None
-
-
 class TestWorkspaceFlow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from edgelab.services import Services
         cls.root = Path(tempfile.mkdtemp())
-        cls._env = os.environ.get("EDGELAB_SETTINGS")
-        os.environ["EDGELAB_SETTINGS"] = str(cls.root / "user" / "settings.json")
+        cls._env = os.environ.get("EDGELAB_EXPORT_DIR")
+        os.environ["EDGELAB_EXPORT_DIR"] = str(cls.root / "exports")
         shutil.copytree(REPO / "configs", cls.root / "configs")
         csv = cls.root / "combined.csv"
         write_fixture(csv, end="2024-04-27")
@@ -270,12 +246,13 @@ class TestWorkspaceFlow(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.root, ignore_errors=True)
         if cls._env is None:
-            os.environ.pop("EDGELAB_SETTINGS", None)
+            os.environ.pop("EDGELAB_EXPORT_DIR", None)
         else:
-            os.environ["EDGELAB_SETTINGS"] = cls._env
+            os.environ["EDGELAB_EXPORT_DIR"] = cls._env
 
     def test_flow(self):
-        from edgelab.mystrategy import github as G
+        import zipfile
+
         from edgelab.mystrategy import review as RV
         from edgelab.mystrategy import runner as R
         from edgelab.research import campaign
@@ -310,6 +287,9 @@ class TestWorkspaceFlow(unittest.TestCase):
         runs_before = len(svc.list_runs()) if hasattr(svc, "list_runs") else None
         st = RV.start(svc, ov, lock=svc.lock)
         self.assertEqual(R.protocol_info(svc)["holdout_looks_used"], 1)
+        listed = {r["id"] for r in R.all_reports(svc)}                       # mechanical result hidden while deciding
+        self.assertNotIn(st["mechanical_report"], listed)
+        self.assertIn(sm["id"], listed)
         k = 0
         while True:
             v = RV.view(svc, svc.lock)
@@ -328,20 +308,24 @@ class TestWorkspaceFlow(unittest.TestCase):
         self.assertIn(e.exception.code, ("HOLDOUT_LOOKS_USED",))
         hd = R.get_backtest(svc, RV.current(svc)["final_report"])
         self.assertIsNone(hd["run_id"])
-        # upload: token only in the header, report files + latest.json in one commit
-        G.set_token("github_pat_" + "a" * 40)
-        self.assertNotIn("token", json.dumps(G.status()).replace("token_present", ""))
-        self.assertFalse(str(G.token_path()).startswith(str(self.root / "data")))
-        fake = FakeGitHub()
-        out = R.upload(svc, sm["id"], include_candles=True, transport=fake)
-        self.assertEqual(out["commit"], "C1")
-        tree = next(b for m, u, t, b in fake.calls if u.endswith("/git/trees"))
-        paths = {x["path"] for x in tree["tree"]}
-        self.assertIn("my_strategy/latest.json", paths)
-        self.assertTrue(any(p.endswith(f"{sm['id']}/summary.json") for p in paths))
-        for m, u, t, b in fake.calls:
-            self.assertNotIn("github_pat_", json.dumps(b or {}))
-        G.clear_token()
+        self.assertIn(st["mechanical_report"], {r["id"] for r in R.all_reports(svc)})    # listed once finished
+        # export for Claude: one ZIP with the chosen reports, then marked as saved
+        with self.assertRaises(R.MyStrategyError):
+            R.export(svc, [])
+        out = R.export(svc, [sm["id"], st["mechanical_report"]], include_candles=False)
+        self.assertTrue(Path(out["path"]).is_file())
+        self.assertTrue(out["path"].startswith(str(self.root / "exports")))
+        with zipfile.ZipFile(out["path"]) as z:
+            names = set(z.namelist())
+            self.assertIn("index.json", names)
+            self.assertIn(f"{sm['id']}/summary.json", names)
+            self.assertIn(f"{sm['id']}/trades.json.gz", names)
+            self.assertNotIn(f"{sm['id']}/candles.jsonl.gz", names)
+            self.assertIn(f"{st['mechanical_report']}/review_state.json", names)
+        self.assertTrue(next(r for r in R.list_backtests(svc) if r["id"] == sm["id"])["exported"])
+        with_candles = R.export(svc, [sm["id"]], include_candles=True)
+        with zipfile.ZipFile(with_candles["path"]) as z:
+            self.assertIn(f"{sm['id']}/candles.jsonl.gz", z.namelist())
         svc.store.close()
 
     def test_plans_are_checked_before_running(self):
@@ -367,6 +351,12 @@ class TestApi(unittest.TestCase):
             self.assertEqual(c.get("/api/my/reports/BT_bad").status_code, 400)
             self.assertEqual(c.get("/api/my/reports/BT_20260101_000000_abcd").status_code, 404)
             self.assertEqual(c.post("/api/my/review/decide", json={"signal_bar": "x"}).status_code, 400)
+            self.assertEqual(c.post("/api/my/export", json={"report_ids": ["../../etc"]}).status_code, 400)
+            self.assertEqual(c.post("/api/my/export", json={"report_ids": []}).status_code, 400)
+            bad = c.post("/api/my/plans/check", json={"plan": {"variants": [{"overrides": {"nope": 1}}]}})
+            self.assertEqual(bad.status_code, 422)
+            ok = c.post("/api/my/plans/check", json={"plan": {"name": "p", "variants": [{"label": "a"}]}})
+            self.assertEqual(ok.json["variants"][0]["label"], "a")
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

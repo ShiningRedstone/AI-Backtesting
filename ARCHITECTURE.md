@@ -2476,3 +2476,18 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **UI:** tab "My strategy" (Overview, Settings, Backtest, Trades, Holdout review); SVG candlestick chart
   (`components/candles.tsx`); routes `/api/my/*`.
 - **Unchanged:** engine, fills, costs, sizing, compiler, prop rules, configs, the causality check, every existing protocol.
+
+### ADR-94 My strategy round 2: save for Claude instead of GitHub, layout, trades list, stretchable charts
+- **Request (user):** no tokens: pick backtests and save them for Claude with a green check when done; fixed-height,
+  scrollable settings boxes; backtest list and saving right under "Run a backtest"; the Trades tab starts with a list
+  of all backtests; TradingView-like stretching of the charts.
+- **GitHub removed:** `mystrategy/github.py`, the token file and the GitHub routes are gone (writing to GitHub always
+  needs a login; the user chose a file instead). `runner.export` writes ONE ZIP (`index.json` + per report
+  summary.json, trades.json.gz, days.json.gz, the review state for holdout reports, candles only when ticked; a plan
+  result brings its variants' backtests) to `<Downloads>/MunyunLab for Claude/` (env `EDGELAB_EXPORT_DIR`), and marks
+  each report `exported` (green check). `open_export_folder` opens only that folder. Test plans are pasted as JSON
+  (`/api/my/plans/check`, `/api/my/plans/run`), validated before anything runs.
+- **Trades tab:** `runner.all_reports` = backtests + holdout reports, never the holdout report of a review in progress.
+- **Charts:** drag the price scale (vertical stretch), the time scale (horizontal stretch, anchored at the right edge),
+  double-click a scale to reset; a stretched price scale also pans vertically. Display only.
+- **Unchanged:** rules, engine, results, protocols, configs.

@@ -2574,7 +2574,7 @@ class Services:
 
     # ------------------------------------------------------------------ My strategy (ADR-93)
     def my_strategy_overview(self) -> dict:
-        from edgelab.mystrategy import github as G, params as P, review as RV, runner as R
+        from edgelab.mystrategy import params as P, review as RV, runner as R
         ov = R.load_overrides(self)
         try:
             h = P.settings_hash(ov)
@@ -2582,12 +2582,12 @@ class Services:
             h = None
         st = RV.current(self)
         return _jsonable({"protocol": R.protocol_info(self), "settings_hash": h, "settings_changed": ov,
-                          "backtests": R.list_backtests(self)[:20], "holdout_reports": R.list_backtests(self, "holdout"),
-                          "plans": R.list_plan_results(self)[:20], "latest_report_id": R.latest_report_id(self),
+                          "backtests": R.list_backtests(self), "reports": R.all_reports(self),
+                          "plans": R.list_plan_results(self)[:20],
                           "review": None if st is None else {k: st.get(k) for k in ("id", "status", "created_at",
                                                                                      "settings_hash", "mechanical_report",
                                                                                      "final_report")},
-                          "github": G.status(), "job": R.jobs_of(self).active()})
+                          "job": R.jobs_of(self).active()})
 
     def my_strategy_settings(self) -> dict:
         from edgelab.mystrategy import runner as R
@@ -2630,47 +2630,26 @@ class Services:
         from edgelab.mystrategy import review as RV
         return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock))
 
-    def my_strategy_github(self) -> dict:
-        from edgelab.mystrategy import github as G
-        return G.status()
-
-    def my_strategy_set_token(self, token: str | None) -> dict:
-        from edgelab.mystrategy import github as G
-        return G.clear_token() if not token else G.set_token(token)
-
-    def my_strategy_upload(self, report_id: str | None, include_candles: bool = True) -> dict:
+    def my_strategy_export(self, report_ids: list, include_candles: bool = False) -> dict:
         from edgelab.mystrategy import runner as R
-        from edgelab.mystrategy import github as G
-        G._token()                                             # no token -> refused before a job starts
-        rid = report_id or R.latest_report_id(self)
-        if not rid:
-            raise R.MyStrategyError("NOTHING_TO_UPLOAD", "There is no report to upload yet.")
-        return R.jobs_of(self).start("upload", lambda step: (step("Uploading to GitHub"),
-                                                            R.upload(self, rid, include_candles))[1],
-                                     {"report_id": rid})
+        return _jsonable(R.export(self, [str(x) for x in report_ids], include_candles))
 
-    def my_strategy_plans(self) -> dict:
-        from edgelab.mystrategy import github as G, runner as R
-        return _jsonable({"available": G.list_plans(), "results": R.list_plan_results(self)})
+    def my_strategy_open_exports(self) -> dict:
+        from edgelab.mystrategy import runner as R
+        return R.open_export_folder()
 
-    def my_strategy_plan(self, name: str) -> dict:
-        from edgelab.mystrategy import github as G, runner as R
-        plan = G.get_plan(name)
-        return _jsonable({"name": name, "plan": plan, "variants": R.check_plan(plan)})
+    def my_strategy_check_plan(self, plan: Mapping) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable({"name": plan.get("name"), "note": plan.get("note"), "variants": R.check_plan(dict(plan))})
 
     def my_strategy_plan_result(self, pl_id: str) -> dict:
         from edgelab.mystrategy import runner as R
         return _jsonable(R.plan_result(self, pl_id))
 
-    def my_strategy_run_plan(self, name: str, auto_upload: bool = False) -> dict:
-        from edgelab.mystrategy import github as G, runner as R
-        plan = G.get_plan(name)
-        R.check_plan(plan)
-
-        def work(step):
-            res = R.run_plan(self, {**plan, "name": plan.get("name") or name}, lock=self.lock, progress=step)
-            if auto_upload:
-                step("Uploading the results to GitHub")
-                res["upload"] = R.upload(self, res["id"], include_candles=False)
-            return res
-        return R.jobs_of(self).start("plan", work, {"plan": name})
+    def my_strategy_run_plan(self, plan: Mapping) -> dict:
+        from edgelab.mystrategy import runner as R
+        plan = dict(plan)
+        R.check_plan(plan)                                      # refused before a job starts
+        return R.jobs_of(self).start("plan", lambda step: R.run_plan(self, {**plan, "name": plan.get("name") or "plan"},
+                                                                     lock=self.lock, progress=step),
+                                     {"plan": plan.get("name")})

@@ -2,9 +2,9 @@
    trade documented with charts, the holdout review with the trader's take / skip decisions, and GitHub uploads. */
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { ApiError, api, viewCache } from "../api/client";
+import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
-import type { Candle, Decision, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
+import type { Candle, Decision, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
   SettingDef, SettingsPayload, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
@@ -14,7 +14,7 @@ import type { Marker, PriceBox, PriceLine } from "../components/candles";
 import { StepTimeChart } from "../components/charts";
 import { Markdown } from "../components/markdown";
 import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, Field, Kpi, NumberInput, PageSkeleton, Select,
-  TableWrap, Tabs, TechDetails, TextInput, n, pct, r, signCls } from "../components/ui";
+  TableWrap, Tabs, TechDetails, TextInput, bytes, n, pct, r, signCls } from "../components/ui";
 import summaryText from "../content/my_strategy.md";
 
 const TF_MIN: Record<string, number> = { "1m": 1, "2m": 2, "3m": 3, "4m": 4, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1D": 1440 };
@@ -247,9 +247,9 @@ export function MyBacktestPage() {
         <JobLine job={job} />
         <ErrorPanel error={err} />
       </Card>
+      {data && <ReportList rows={data.backtests} selected={selected} onOpen={(id) => go(`/my-backtest?r=${id}`)}
+        title="Backtests" testId="my-reports" />}
       {selected ? <ReportView id={selected} /> : data && <Empty>No backtest yet. Run the first one above.</Empty>}
-      {data && <ReportsTable rows={data.backtests} selected={selected} />}
-      {data && <UploadCard data={data} onChange={reload} />}
       {data && <PlansCard data={data} onChange={reload} />}
     </div>
   );
@@ -331,124 +331,116 @@ export const exitWord = (k: string) => ({ TARGET: "Take profit", TARGET_GAP: "Ta
   TRAIL_STOP: "Moved stop (breakeven / trailing)", TRAIL_STOP_GAP: "Moved stop (gap)", SIGNAL: "Closed at the set time",
   SESSION_CLOSE: "Session close", END_OF_DATA: "End of data" } as Record<string, string>)[k] ?? k;
 
-function ReportsTable({ rows, selected }: { rows: ReportRow[]; selected: string | null }) {
-  if (!rows.length) return null;
-  return (
-    <Card title="Earlier backtests" testId="my-reports">
-      <TableWrap><table className="dense">
-        <thead><tr><th>When</th><th>Name</th><th>Period</th><th className="num">Trades</th><th className="num">Per week</th>
-          <th className="num">Win rate</th><th className="num">Net R</th><th className="num">Losing months</th><th>Prop</th><th>Uploaded</th></tr></thead>
-        <tbody>{rows.map((b) => (
-          <tr key={b.id} className={b.id === selected ? "selected" : ""} onClick={() => go(`/my-backtest?r=${b.id}`)} style={{ cursor: "pointer" }}>
-            <td>{nyTime(sec(b.created_at))}</td><td>{b.label || "–"}</td><td>{day(b.window.start)} – {day(b.window.end)}</td>
-            <td className="num">{b.trade_count}</td><td className="num">{n(b.metrics.trades_per_week, 2)}</td>
-            <td className="num">{pct(b.metrics.win_rate)}</td><td className={`num ${signCls(b.metrics.net_r)}`}>{r(b.metrics.net_r, 1)}</td>
-            <td className="num">{b.metrics.months_losing ?? 0} / {b.metrics.months_total ?? 0}</td>
-            <td>{b.prop?.evaluation ?? "–"}</td><td>{b.uploaded ? <Badge tone="ok">yes</Badge> : ""}</td>
-          </tr>))}</tbody></table></TableWrap>
-    </Card>
-  );
-}
-
-function UploadCard({ data, onChange }: { data: Overview; onChange: () => void }) {
+/** Backtests / reports as a table: tick boxes, a green check for reports already saved for Claude, one save button. */
+function ReportList({ rows, selected, onOpen, title, testId }: {
+  rows: ReportRow[]; selected?: string | null; onOpen: (id: string) => void; title: string; testId?: string;
+}) {
   const { toast } = useApp();
-  const [token, setToken] = useState("");
-  const [candles, setCandles] = useState(true);
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [candles, setCandles] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [job, setJob] = useJob((j) => {
-    onChange();
-    if (j.state === "completed") toast("ok", "Uploaded to GitHub");
-  });
-  const gh = data.github;
-  const saveToken = async (t: string | null) => {
-    setErr(null);
-    try { await my.setToken(t); setToken(""); onChange(); toast("ok", t ? "Token saved" : "Token removed"); } catch (e) { setErr(e as ApiError); }
+  const [saved, setSaved] = useState<ExportResult | null>(null);
+  const [savedNow, setSavedNow] = useState<Set<string>>(new Set());
+  const toggle = (id: string) => { const t = new Set(ticked); if (t.has(id)) t.delete(id); else t.add(id); setTicked(t); };
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const res = await my.exportReports([...ticked], candles);
+      setSaved(res);
+      setSavedNow(new Set([...savedNow, ...res.reports]));
+      setTicked(new Set());
+      toast("ok", `Saved ${res.file}`);
+    } catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
   };
-  const upload = async () => {
-    setErr(null);
-    try { setJob(await my.upload(null, candles)); } catch (e) { setErr(e as ApiError); }
-  };
-  const res = job?.state === "completed" ? job.result as { path?: string } : null;
+  const open = async () => { try { await my.openExports(); } catch (e) { setErr(e as ApiError); } };
+  const all = rows.length > 0 && rows.every((b) => ticked.has(b.id));
   return (
-    <Card title="Upload for Claude" testId="my-upload">
-      <p className="muted">Sends the most recent report (backtest, holdout or test plan result) to GitHub so Claude can read every
-        trade: repository {gh.repo}, branch <b>{gh.branch}</b>, folder <b>{gh.folder}/reports/</b> (the file{" "}
-        <b>{gh.folder}/latest.json</b> always names the newest upload). The branch holds only reports. The repository is public, so
-        anyone can read the uploads.</p>
-      {gh.token_present ? (
-        <div className="inline">
-          <Badge tone="ok">GitHub token saved</Badge>
-          <Checkbox checked={candles} onChange={setCandles} label="Include the candles of every trade (larger upload)" />
-          <Button kind="primary" onClick={upload} busy={job?.state === "running"} busyLabel="Uploading…" disabled={!data.latest_report_id}
-            testId="my-upload-btn">Upload latest report</Button>
-          <Button kind="ghost" onClick={() => saveToken(null)}>Remove token</Button>
-        </div>
-      ) : (
-        <div className="inline">
-          <Field label="GitHub token" hint="A fine-grained token with 'Contents: read and write' on this repository only. Stored on this computer
-            outside the workspace, never shown again.">
-            <input className="input mono" type="password" value={token} aria-label="GitHub token"
-              onChange={(e: { target: HTMLInputElement }) => setToken(e.target.value)} />
-          </Field>
-          <Button kind="primary" onClick={() => saveToken(token)} disabled={!token.trim()}>Save token</Button>
-        </div>
-      )}
-      <JobLine job={job} />
-      {res?.path && <Banner tone="ok">Uploaded to {res.path}</Banner>}
+    <Card title={title} testId={testId} actions={
+      <div className="inline">
+        <Checkbox checked={candles} onChange={setCandles} label="Include candles (bigger file)" />
+        <Button kind="primary" onClick={save} busy={busy} busyLabel="Saving…" disabled={!ticked.size} testId="my-save-selected">
+          Save selected for Claude{ticked.size ? ` (${ticked.size})` : ""}</Button>
+      </div>}>
+      {saved && (
+        <Banner tone="ok" testId="my-saved">Saved <b>{saved.file}</b> ({bytes(saved.bytes)}) in {saved.folder}. Attach this file in the
+          chat with Claude. <Button small kind="ghost" onClick={open}>Open folder</Button></Banner>)}
       <ErrorPanel error={err} />
+      {!rows.length ? <Empty>No backtest yet.</Empty> : (
+        <TableWrap><table className="dense" data-testid={`${testId}-table`}>
+          <thead><tr>
+            <th style={{ width: 32 }}><input type="checkbox" aria-label="Select all" checked={all}
+              onChange={() => setTicked(all ? new Set() : new Set(rows.map((b) => b.id)))} /></th>
+            <th title="Saved for Claude">Saved</th><th>When</th><th>Name</th><th>Period</th><th className="num">Trades</th>
+            <th className="num">Per week</th><th className="num">Win rate</th><th className="num">Net R</th>
+            <th className="num">Losing months</th><th>Prop</th></tr></thead>
+          <tbody>{rows.map((b) => {
+            const done = !!b.exported || savedNow.has(b.id);
+            return (
+              <tr key={b.id} className={b.id === selected ? "selected" : ""} onClick={() => onOpen(b.id)} style={{ cursor: "pointer" }}>
+                <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>
+                  <input type="checkbox" aria-label={`Select ${b.label || b.id}`} checked={ticked.has(b.id)} onChange={() => toggle(b.id)}
+                    data-testid={`my-tick-${b.id}`} /></td>
+                <td>{done ? <span className="my-saved-check" title={b.exported ? `Saved ${nyTime(sec(b.exported.at))} · ${b.exported.file}` : "Saved"}
+                  data-testid={`my-saved-${b.id}`}>✓</span> : ""}</td>
+                <td>{nyTime(sec(b.created_at))}</td>
+                <td>{b.label || (b.kind?.startsWith("holdout") ? (b.kind === "holdout_mechanical" ? "Holdout - every signal" : "Holdout - your decisions") : "–")}</td>
+                <td>{day(b.window.start)} – {day(b.window.end)}</td>
+                <td className="num">{b.trade_count}</td><td className="num">{n(b.metrics.trades_per_week, 2)}</td>
+                <td className="num">{pct(b.metrics.win_rate)}</td><td className={`num ${signCls(b.metrics.net_r)}`}>{r(b.metrics.net_r, 1)}</td>
+                <td className="num">{b.metrics.months_losing ?? 0} / {b.metrics.months_total ?? 0}</td>
+                <td>{b.prop?.evaluation ?? "–"}</td>
+              </tr>);
+          })}</tbody></table></TableWrap>)}
     </Card>
   );
 }
 
 function PlansCard({ data, onChange }: { data: Overview; onChange: () => void }) {
-  const [list, setList] = useState<{ name: string }[] | null>(null);
-  const [plan, setPlan] = useState<{ name: string; note?: string; variants: PlanVariant[] } | null>(null);
-  const [auto, setAuto] = useState(true);
+  const [text, setText] = useState("");
+  const [plan, setPlan] = useState<{ raw: unknown; name?: string; note?: string; variants: PlanVariant[] } | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [job, setJob] = useJob(() => onChange());
-  const load = async () => {
-    setErr(null);
-    try {
-      const d = await api.get<{ available: { name: string }[] }>(my.plansUrl);
-      setList(d.available);
-    } catch (e) { setErr(e as ApiError); }
-  };
-  const open = async (name: string) => {
-    setErr(null);
-    try { const d = await my.plan(name); setPlan({ name, note: d.plan.note, variants: d.variants }); } catch (e) { setErr(e as ApiError); }
+  const [job, setJob] = useJob((j) => {
+    onChange();
+    const id = (j.result as { id?: string } | null)?.id;
+    if (j.state === "completed" && id) go(`/my-plan/${id}`);
+  });
+  const check = async () => {
+    setErr(null); setPlan(null);
+    let raw: unknown;
+    try { raw = JSON.parse(text); } catch { setErr(new ApiError(0, "plan", "That is not a valid test plan (copy the whole block Claude gave you).")); return; }
+    try { const d = await my.checkPlan(raw); setPlan({ raw, ...d }); } catch (e) { setErr(e as ApiError); }
   };
   const run = async () => {
     if (!plan) return;
     setErr(null);
-    try { setJob(await my.runPlan(plan.name, auto)); } catch (e) { setErr(e as ApiError); }
+    try { setJob(await my.runPlan(plan.raw)); } catch (e) { setErr(e as ApiError); }
   };
   return (
     <Card title="Test plans from Claude" testId="my-plans">
-      <p className="muted">A test plan is a list of settings variations Claude prepared in the GitHub folder{" "}
-        <b>{data.github.folder}/plans/</b>. Running it backtests every variation on the discovery period (each one counts as a try)
-        and, if you tick it, uploads the results for Claude.</p>
-      <div className="inline">
-        <Button onClick={load} disabled={!data.github.token_present}>Look for test plans</Button>
-        {list && !list.length && <span className="muted">No test plans on GitHub yet.</span>}
-        {list?.map((p) => <Button key={p.name} small kind="ghost" onClick={() => open(p.name)}>{p.name}</Button>)}
+      <p className="muted">Claude can give you a test plan (a list of settings variations) in the chat. Paste it here, check it and run it:
+        every variation is backtested on the discovery period and counts as a try. Then tick the plan in the list and save it for Claude.</p>
+      <TextInput multiline mono value={text} onChange={(v) => { setText(v); setPlan(null); }} placeholder='{"name": "...", "variants": [...]}'
+        ariaLabel="Test plan" testId="my-plan-text" />
+      <div className="inline" style={{ marginTop: 8 }}>
+        <Button onClick={check} disabled={!text.trim()} testId="my-plan-check">Check plan</Button>
+        {plan && <Button kind="primary" onClick={run} busy={job?.state === "running"} busyLabel="Running…" testId="my-plan-run">
+          Run {plan.variants.length} backtests</Button>}
       </div>
       {plan && (
         <div className="my-plan">
-          <h3>{plan.name}</h3>
+          <h3>{plan.name ?? "Test plan"}</h3>
           {plan.note && <p className="muted">{plan.note}</p>}
           <ol>{plan.variants.map((v, k) => <li key={k}>{v.label}: {Object.entries(v.overrides).map(([a, b]) => `${a} = ${String(b)}`).join(", ") || "defaults"}</li>)}</ol>
-          <div className="inline">
-            <Checkbox checked={auto} onChange={setAuto} label="Upload the results when done" />
-            <Button kind="primary" onClick={run} busy={job?.state === "running"} busyLabel="Running…">Run {plan.variants.length} backtests</Button>
-          </div>
         </div>
       )}
       <JobLine job={job} />
       <ErrorPanel error={err} />
       {data.plans.length > 0 && (
-        <TableWrap><table className="dense"><thead><tr><th>Plan</th><th>When</th><th className="num">Variations</th><th>Uploaded</th></tr></thead>
+        <TableWrap><table className="dense"><thead><tr><th>Saved</th><th>Plan</th><th>When</th><th className="num">Variations</th></tr></thead>
           <tbody>{data.plans.map((p) => <tr key={p.id} onClick={() => go(`/my-plan/${p.id}`)} style={{ cursor: "pointer" }}>
-            <td>{p.name}</td><td>{nyTime(sec(p.created_at))}</td><td className="num">{p.variants}</td><td>{p.uploaded ? <Badge tone="ok">yes</Badge> : ""}</td></tr>)}</tbody>
+            <td>{p.exported ? <span className="my-saved-check">✓</span> : ""}</td><td>{p.name}</td><td>{nyTime(sec(p.created_at))}</td>
+            <td className="num">{p.variants}</td></tr>)}</tbody>
         </table></TableWrap>)}
     </Card>
   );
@@ -460,7 +452,9 @@ export function MyPlanResultPage() {
   const { data, error } = useApi<PlanResult>(id ? my.planResultUrl(id) : null, [id]);
   return (
     <div className="page" data-testid="my-plan-page">
-      <PageHead title={data ? `Test plan: ${data.name}` : "Test plan"}><a className="btn btn-secondary" href={href("/my-backtest")}>Back</a></PageHead>
+      <PageHead title={data ? `Test plan: ${data.name}` : "Test plan"}>
+        {data && <SaveOne id={data.id} done={!!data.exported} />}
+        <a className="btn btn-secondary" href={href("/my-backtest")}>Back</a></PageHead>
       {error && <ErrorPanel error={error} />}
       {data && <Card title="Variations">
         <TableWrap><table className="dense"><thead><tr><th>Variation</th><th className="num">Trades</th><th className="num">Per week</th>
@@ -477,19 +471,47 @@ export function MyPlanResultPage() {
   );
 }
 
+function SaveOne({ id, done }: { id: string; done: boolean }) {
+  const { toast } = useApp();
+  const [res, setRes] = useState<ExportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { const x = await my.exportReports([id], false); setRes(x); toast("ok", `Saved ${x.file} in ${x.folder}`); }
+    catch (e) { toast("error", (e as ApiError).message); } finally { setBusy(false); }
+  };
+  return <>{(done || res) && <span className="my-saved-check" title="Saved for Claude">✓</span>}
+    <Button onClick={save} busy={busy} busyLabel="Saving…">Save for Claude</Button></>;
+}
+
 // =============================================================================================== trades
 export function MyTradesPage() {
   const route = useRoute();
-  const { data: ov } = useApi<Overview>(route.parts[1] ? null : my.overviewUrl);
-  const id = route.parts[1] ?? ov?.backtests?.[0]?.id ?? null;
-  const { data, error } = useApi<Report>(id ? my.reportUrl(id) : null, [id]);
+  return route.parts[1] ? <MyTradeListPage id={route.parts[1]} /> : <MyReportsPage />;
+}
+
+function MyReportsPage() {
+  const { data, error } = useApi<Overview>(my.overviewUrl);
+  return (
+    <div className="page" data-testid="my-reports-page">
+      <PageHead title="Trades" />
+      <p className="muted">Pick a backtest to see all its trades. Holdout results appear here once the holdout review is finished.</p>
+      {error && <ErrorPanel error={error} />}
+      {!data ? <PageSkeleton layout="table" label="Loading backtests" /> :
+        <ReportList rows={data.reports} onOpen={(id) => go(`/my-trades/${id}`)} title="All backtests" testId="my-all-reports" />}
+    </div>
+  );
+}
+
+function MyTradeListPage({ id }: { id: string }) {
+  const { data, error } = useApi<Report>(my.reportUrl(id), [id]);
   const money = useMoney();
   const [side, setSide] = useState<"all" | "win" | "loss">("all");
-  if (!id && ov) return <div className="page"><PageHead title="Trades" /><Empty>No backtest yet.</Empty></div>;
   const rows = (data?.trades ?? []).filter((t) => side === "all" || (side === "win" ? t.net_r > 0 : t.net_r <= 0));
   return (
     <div className="page" data-testid="my-trades-page">
       <PageHead title={data ? `Trades: ${data.label || (data.kind.startsWith("holdout") ? "Holdout" : "Backtest")}` : "Trades"}>
+        <a className="btn btn-secondary" href={href("/my-trades")}>All backtests</a>
         <div className="segmented small" role="group">
           {(["all", "win", "loss"] as const).map((k) => <button key={k} className={side === k ? "on" : ""} onClick={() => setSide(k)}>
             {k === "all" ? "All" : k === "win" ? "Winners" : "Losers / breakeven"}</button>)}

@@ -46,7 +46,6 @@ FAMILY_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 MY_REPORT_ID = re.compile(r"^(BT|HO|HD|PL)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")       # ADR-93
 MY_JOB_ID = re.compile(r"^MSJ_[0-9a-f]{12}$")
-MY_PLAN_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
 
 class ApiError(Exception):
@@ -172,7 +171,6 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, FlipError):                         # ADR-88: flip scan refusals (machine-readable code)
             return jsonify({"error": {"kind": "flip_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409 if e.code in ("FLIP_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
-        from edgelab.mystrategy.github import UploadError
         from edgelab.mystrategy.params import SettingsError
         from edgelab.mystrategy.runner import MyStrategyError
         if isinstance(e, SettingsError):                     # ADR-93
@@ -181,9 +179,6 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, MyStrategyError):
             return jsonify({"error": {"kind": "my_strategy", "code": e.code, "message": e.message}}), \
                 409 if e.code in ("JOB_RUNNING", "REVIEW_OPEN", "HOLDOUT_LOOKS_USED", "NOT_CURRENT") else 422
-        if isinstance(e, UploadError):
-            return jsonify({"error": {"kind": "upload", "code": e.code, "message": e.message}}), \
-                502 if e.code in ("OFFLINE", "HTTP_ERROR") else 422
         if isinstance(e, SearchSpecError):
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],
@@ -1165,41 +1160,36 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("signal_bar (integer) and take (true/false) are required")
         return jsonify(svc.my_strategy_decide(sb, take))       # computes outside the service lock
 
-    @app.get("/api/my/github")
-    def my_github():
-        return jsonify(svc.my_strategy_github())
-
-    @app.post("/api/my/github/token")
-    def my_github_token():
-        t = body().get("token")
-        if t is not None and not isinstance(t, str):
-            raise _bad("token must be a string")
-        return jsonify(svc.my_strategy_set_token(t))
-
-    @app.post("/api/my/upload")
-    def my_upload():
+    @app.post("/api/my/export")
+    def my_export():
         b = body()
-        rid = b.get("report_id")
-        if rid is not None:
-            rid = _id(rid, MY_REPORT_ID, "report id")
-        return jsonify(svc.my_strategy_upload(rid, bool(b.get("include_candles", True)))), 202
+        ids = b.get("report_ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 200:
+            raise _bad("report_ids must be a non-empty list")
+        ids = [_id(x, MY_REPORT_ID, "report id") for x in ids]
+        return jsonify(call(svc.my_strategy_export, ids, bool(b.get("include_candles", False))))
 
-    @app.get("/api/my/plans")
-    def my_plans():
-        return jsonify(svc.my_strategy_plans())
+    @app.post("/api/my/exports/open")
+    def my_open_exports():
+        return jsonify(svc.my_strategy_open_exports())
 
-    @app.get("/api/my/plans/<name>")
-    def my_plan(name):
-        return jsonify(svc.my_strategy_plan(_id(name, MY_PLAN_NAME, "plan name")))
+    @app.post("/api/my/plans/check")
+    def my_plan_check():
+        plan = body().get("plan")
+        if not isinstance(plan, dict):
+            raise _bad("plan must be an object")
+        return jsonify(svc.my_strategy_check_plan(plan))
+
+    @app.post("/api/my/plans/run")
+    def my_plan_run():
+        plan = body().get("plan")
+        if not isinstance(plan, dict):
+            raise _bad("plan must be an object")
+        return jsonify(call(svc.my_strategy_run_plan, plan)), 202
 
     @app.get("/api/my/plan-results/<pid>")
     def my_plan_result(pid):
         return jsonify(svc.my_strategy_plan_result(_id(pid, MY_REPORT_ID, "plan result id")))
-
-    @app.post("/api/my/plans/<name>/run")
-    def my_plan_run(name):
-        return jsonify(svc.my_strategy_run_plan(_id(name, MY_PLAN_NAME, "plan name"),
-                                                bool(body().get("auto_upload", False)))), 202
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")

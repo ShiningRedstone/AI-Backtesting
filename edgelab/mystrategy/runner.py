@@ -388,7 +388,7 @@ def list_backtests(svc, kind: str = "backtests") -> list[dict]:
             if sm:
                 m = sm.get("metrics") or {}
                 out.append({k: sm.get(k) for k in ("id", "kind", "label", "created_at", "settings_hash", "window",
-                                                   "trade_count", "prop", "settings_changed", "uploaded")} | {
+                                                   "trade_count", "prop", "settings_changed", "exported")} | {
                     "metrics": {k: m.get(k) for k in ("win_rate", "expectancy_r", "net_r", "net_usd", "trades_per_week",
                                                       "profit_factor", "max_drawdown_r", "months_losing",
                                                       "months_total", "avg_planned_rr", "avg_win_r")}})
@@ -548,7 +548,7 @@ def list_plan_results(svc) -> list[dict]:
         for f in sorted(root.glob("PL_*.json"), reverse=True):
             d = _read_json(f) or {}
             out.append({"id": d.get("id"), "name": d.get("name"), "created_at": d.get("created_at"),
-                        "variants": len(d.get("variants") or []), "uploaded": d.get("uploaded")})
+                        "variants": len(d.get("variants") or []), "exported": d.get("exported")})
     return out
 
 
@@ -562,49 +562,95 @@ def plan_result(svc, pl_id: str) -> dict:
     return d
 
 
-# =============================================================================================== uploads
-def upload(svc, report_id: str, include_candles: bool = True, transport=None) -> dict:
-    from edgelab.mystrategy import github as G
-    if report_id.startswith("PL_"):
-        res = plan_result(svc, report_id)
-        files = {f"{G.ROOT}/plans_results/{report_id}/plan_result.json": json.dumps(res, indent=1).encode()}
-        for v in res["variants"]:
-            if v.get("backtest_id"):
-                f = _bt_folder(svc, v["backtest_id"])
-                for n, b in G.report_files(f, include_candles).items():
-                    files[f"{G.ROOT}/plans_results/{report_id}/{v['backtest_id']}/{n}"] = b
-        files[f"{G.ROOT}/latest.json"] = json.dumps({"report_id": report_id, "kind": "plan_result",
-                                                     "path": f"{G.ROOT}/plans_results/{report_id}",
-                                                     "uploaded_at": _now(), "name": res.get("name")}, indent=1).encode()
-        out = G.upload_files(files, f"My strategy plan result {report_id} [skip ci]", transport)
-        out["path"] = f"{G.ROOT}/plans_results/{report_id}"
-        res["uploaded"] = {"at": _now(), "path": out["path"], "commit": out["commit"]}
-        _write_json(home(svc) / "plans" / f"{report_id}.json", res)
-        return out
-    folder = _bt_folder(svc, report_id)
-    sm = _read_json(folder / "summary.json")
-    extra = {}
-    if sm.get("review_id"):
-        from edgelab.mystrategy import review as RV
-        st = _read_json(home(svc) / "reviews" / sm["review_id"] / "state.json")
-        if st:
-            extra["review_state.json"] = json.dumps(st, indent=1).encode()
-    out = G.upload_report(folder, sm.get("kind", "report"), include_candles, transport, extra)
-    sm["uploaded"] = {"at": _now(), "path": out["path"], "commit": out["commit"]}
-    _write_json(folder / "summary.json", sm)
-    return out
+# =============================================================================================== export for Claude
+def export_dir() -> Path:
+    """Where exports are saved: <Downloads>/MunyunLab for Claude (env EDGELAB_EXPORT_DIR overrides; tests)."""
+    import os
+    env = os.environ.get("EDGELAB_EXPORT_DIR")
+    if env:
+        p = Path(env)
+    else:
+        home_dir = Path(os.environ.get("USERPROFILE") or Path.home())
+        dl = home_dir / "Downloads"
+        p = (dl if dl.is_dir() else home_dir) / "MunyunLab for Claude"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
-def latest_report_id(svc) -> str | None:
-    cands = []
-    for kind in ("backtests", "holdout"):
-        root = home(svc) / kind
-        if root.exists():
-            for d in root.iterdir():
-                sm = _read_json(d / "summary.json")
-                if sm:
-                    cands.append((sm.get("created_at", ""), d.name))
-    for f in (home(svc) / "plans").glob("PL_*.json") if (home(svc) / "plans").exists() else []:
-        d = _read_json(f) or {}
-        cands.append((d.get("created_at", ""), d.get("id")))
-    return max(cands)[1] if cands else None
+def export(svc, report_ids: list[str], include_candles: bool = False) -> dict:
+    """One ZIP with the chosen reports (summary, every trade with its checklist / levels / explanation, day statistics,
+    optionally the candles) for the user to attach in the chat. Marks each report as exported."""
+    import zipfile
+    if not report_ids:
+        raise MyStrategyError("NOTHING_SELECTED", "Select at least one backtest.")
+    ids = []
+    for rid in report_ids:                       # a test-plan result brings its variants' backtests along
+        ids.append(rid)
+        if rid.startswith("PL_"):
+            ids += [v["backtest_id"] for v in plan_result(svc, rid)["variants"] if v.get("backtest_id")]
+    folders = []
+    for rid in dict.fromkeys(ids):
+        if rid.startswith("PL_"):
+            folders.append((rid, None))
+        else:
+            folders.append((rid, _bt_folder(svc, rid)))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    target = export_dir() / f"MunyunLab_my_strategy_{stamp}.zip"
+    index = {"exported_at": _now(), "app_version": _code_version(), "include_candles": include_candles, "reports": []}
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for rid, folder in folders:
+            if folder is None:
+                res = plan_result(svc, rid)
+                z.writestr(f"{rid}/plan_result.json", json.dumps(res, indent=1))
+                index["reports"].append({"id": rid, "kind": "plan_result", "name": res.get("name")})
+                continue
+            names = ["summary.json", "trades.json.gz", "days.json.gz"] + (["candles.jsonl.gz"] if include_candles else [])
+            for n in names:
+                if (folder / n).exists():
+                    z.write(folder / n, f"{rid}/{n}")
+            sm = _read_json(folder / "summary.json") or {}
+            if sm.get("review_id"):
+                st = _read_json(home(svc) / "reviews" / sm["review_id"] / "state.json")
+                if st:
+                    z.writestr(f"{rid}/review_state.json", json.dumps(st, indent=1))
+            index["reports"].append({"id": rid, "kind": sm.get("kind"), "label": sm.get("label"),
+                                     "trade_count": sm.get("trade_count"), "settings_hash": sm.get("settings_hash")})
+        z.writestr("index.json", json.dumps(index, indent=1))
+    mark = {"at": _now(), "file": target.name}
+    for rid, folder in folders:
+        if folder is None:
+            res = plan_result(svc, rid)
+            res["exported"] = mark
+            _write_json(home(svc) / "plans" / f"{rid}.json", res)
+        else:
+            sm = _read_json(folder / "summary.json")
+            sm["exported"] = mark
+            _write_json(folder / "summary.json", sm)
+    return {"path": str(target), "file": target.name, "folder": str(target.parent), "bytes": target.stat().st_size,
+            "reports": [r for r, _ in folders]}
+
+
+def open_export_folder() -> dict:
+    """Open THE export folder in the file manager (no other path is ever opened)."""
+    import os
+    import subprocess
+    import sys
+    p = export_dir()
+    if sys.platform == "win32":
+        os.startfile(str(p))                       # noqa: S606 - fixed folder only
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(p)])         # noqa: S603,S607
+    else:
+        subprocess.Popen(["xdg-open", str(p)])     # noqa: S603,S607
+    return {"folder": str(p)}
+
+
+def all_reports(svc) -> list[dict]:
+    """Every report for the Trades tab: backtests and finished holdout results (newest first). A holdout report of a
+    review still in progress is never listed (the mechanical result would bias the trader's decisions)."""
+    from edgelab.mystrategy import review as RV
+    st = RV.current(svc)
+    open_rv = st["id"] if st and st.get("status") == "in_progress" else None
+    rows = list_backtests(svc) + [r for r in list_backtests(svc, "holdout")
+                                  if not (open_rv and r["id"][3:] == open_rv[3:])]
+    return sorted(rows, key=lambda r: str(r.get("created_at")), reverse=True)

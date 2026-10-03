@@ -883,3 +883,10 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .markdown blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid var(--warn); background: var(--surface-2); border-radius: 6px; }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
 .markdown .md-table td, .markdown .md-table th { white-space: normal; vertical-align: top; }
+/* ADR-94: fixed-height settings boxes that scroll inside; saved-for-Claude check; chart scale handles */
+.my-settings-grid > .card { height: 460px; display: flex; flex-direction: column; }
+.my-settings-grid > .card > .card-body { flex: 1; min-height: 0; overflow-y: auto; }
+.my-saved-check { color: var(--ok); font-weight: 700; font-size: 15px; margin-right: 6px; }
+.candle-chart .scale-y { cursor: ns-resize; fill: transparent; }
+.candle-chart .scale-x { cursor: ew-resize; fill: transparent; }
+.candle-chart .scale-y:hover, .candle-chart .scale-x:hover { fill: var(--surface-2); fill-opacity: .5; }

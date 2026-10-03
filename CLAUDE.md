@@ -142,10 +142,13 @@ ADR-93: "My strategy" tab (`edgelab/mystrategy/`): BP Blake's model from the use
 `web/src/content/my_strategy.md`), 137 settings (`params.py`, `settings_hash` = identity), causal rules (`frames.py`
 completion indices, `logic.py`, shorts = mirrored longs) run by the one engine; companion protocol (`MY_STRATEGY_ROLE`,
 `is_companion`; 300 tries, ONE holdout look); trade records + candles in `<data>/my_strategy/`; holdout review with the
-user's take/skip (`review.py`, decisions never runs); GitHub upload to branch `strategy-reports` + test plans
-`my_strategy/plans/*.json` (`github.py`, token outside the workspace). 1m data only; SMT needs ES (refused).
+user's take/skip (`review.py`, decisions never runs); reports leave the app only as a ZIP the user attaches (ADR-94).
+1m data only; SMT needs ES (refused).
+ADR-94: My strategy has NO GitHub upload any more (user's choice): "Save selected for Claude" writes one ZIP to
+`<Downloads>/MunyunLab for Claude/` (`runner.export`, green check = `exported`); test plans are pasted as JSON; Trades tab
+lists all reports first (`runner.all_reports`); charts stretch by dragging the price / time scale.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-93.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-94.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -199,8 +202,9 @@ remains. Do not rely on this file alone.
     pipeline removed in ADR-90; run-detail links `/results/<id>` still work). Pool picker: All | Pool 1 | Pool 2.
   - Prop Trading: Paper accounts, Start paper trading (batch; Passed the holdout | Survivors | All tested), Backtest
     prop check (the old simulator)
-  - My strategy (ADR-93): Overview (strategy summary), Settings (137 rule settings), Backtest (+ upload for Claude, test
-    plans), Trades (charts per timeframe, checklist), Holdout review (take / skip).
+  - My strategy (ADR-93/94): Overview (strategy summary), Settings (137 rule settings), Backtest (backtest list with "Save
+    selected for Claude", pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
+    Holdout review (take / skip).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
     then about/updates, workspace, pass-criteria account + Live 50K drawdown limit, CPU cores, prop account fees +
     discounts, delete-all.
@@ -425,4 +429,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-93). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-94). Update `README.md` status for phases.

@@ -1,6 +1,8 @@
 /* Candlestick chart (SVG, no library) for My strategy trades: candles in New York time, horizontal price lines
    (entry / stop / target / breakeven / draw), level boxes (gaps, CISDs, rejection blocks) and point markers.
-   Zoom with the mouse wheel or the buttons, drag to pan, double-click to fit the trade again. Up candles use --c1,
+   Zoom with the mouse wheel or the buttons, drag to pan, double-click to fit the trade again. Like TradingView: drag
+   the price scale to stretch / squeeze vertically, drag the time scale to stretch / squeeze horizontally, double-click a
+   scale to reset it; once stretched vertically, dragging the chart also moves it up and down. Up candles use --c1,
    down candles a neutral grey: red stays reserved for losses (the stop line). */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Candle } from "../api/my";
@@ -69,7 +71,9 @@ export function CandleChart({ candles, tfMinutes, lines = [], boxes = [], marker
   const [view, setView] = useState<[number, number]>(fit);
   useEffect(() => setView(fit), [fit]);
   const [hover, setHover] = useState<number | null>(null);
-  const drag = useRef<{ x: number; v: [number, number] } | null>(null);
+  const [manualY, setManualY] = useState<[number, number] | null>(null);       // a stretched price scale (null = auto)
+  useEffect(() => setManualY(null), [fit]);
+  const drag = useRef<{ mode: "pan" | "y" | "x"; x: number; y: number; v: [number, number]; yr: [number, number] } | null>(null);
 
   const [lo, hi] = view;
   const vis = candles.slice(lo, hi + 1);
@@ -86,6 +90,7 @@ export function CandleChart({ candles, tfMinutes, lines = [], boxes = [], marker
   if (!Number.isFinite(yLo)) { yLo = 0; yHi = 1; }
   const padY = (yHi - yLo) * 0.06 || 1;
   yLo -= padY; yHi += padY;
+  if (manualY) [yLo, yHi] = manualY;
   const y = (p: number) => PAD.t + (1 - (p - yLo) / (yHi - yLo)) * plotH;
   const xIdx = (i: number) => PAD.l + (i - lo + 0.5) * cw;
   /** x of a time: interpolated inside the visible candles (also used for line / box start and end). */
@@ -98,6 +103,8 @@ export function CandleChart({ candles, tfMinutes, lines = [], boxes = [], marker
   };
   const clampX = (x: number) => Math.max(PAD.l, Math.min(PAD.l + plotW, x));
 
+  const where = (x: number, yy: number): "pan" | "y" | "x" =>
+    x > PAD.l + plotW ? "y" : yy > PAD.t + plotH ? "x" : "pan";
   const zoom = (factor: number, centre?: number) => {
     const c = centre ?? (lo + hi) / 2;
     const span = Math.max(15, Math.min(n, Math.round((hi - lo + 1) * factor)));
@@ -144,29 +151,53 @@ export function CandleChart({ candles, tfMinutes, lines = [], boxes = [], marker
         <button className="btn btn-ghost btn-sm" onClick={() => zoom(1.5)} title="Zoom out">−</button>
         <button className="btn btn-ghost btn-sm" onClick={() => pan(-Math.round((hi - lo) / 3))} title="Earlier">◀</button>
         <button className="btn btn-ghost btn-sm" onClick={() => pan(Math.round((hi - lo) / 3))} title="Later">▶</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => setView(fit)} title="Back to the trade">Fit trade</button>
-        <span className="muted small">{count} candles · New York time · wheel to zoom, drag to move</span>
+        <button className="btn btn-ghost btn-sm" onClick={() => { setView(fit); setManualY(null); }} title="Back to the trade">Fit trade</button>
+        <span className="muted small">{count} candles · New York time · wheel to zoom, drag to move · drag the price or time scale
+          to stretch, double-click it to reset</span>
       </div>
       <svg ref={svgRef} width={width} height={height} role="img" aria-label="candlestick chart"
-        onMouseMove={(e: { clientX: number; currentTarget: SVGSVGElement }) => {
+        onMouseMove={(e: { clientX: number; clientY: number; currentTarget: SVGSVGElement }) => {
           const rect = e.currentTarget.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          if (drag.current) {
-            const d = Math.round((drag.current.x - x) / cw);
-            const span = drag.current.v[1] - drag.current.v[0];
-            const a = Math.max(0, Math.min(n - 1 - span, drag.current.v[0] + d));
-            setView([a, a + span]);
+          const x = e.clientX - rect.left, yy = e.clientY - rect.top;
+          const d = drag.current;
+          if (d) {
+            const dx = x - d.x, dy = yy - d.y;
+            if (d.mode === "y") {                       // price scale: drag down squeezes, up stretches
+              const f = Math.exp(dy / 160);
+              const mid = (d.yr[0] + d.yr[1]) / 2, half = (d.yr[1] - d.yr[0]) / 2 * f;
+              setManualY([mid - half, mid + half]);
+            } else if (d.mode === "x") {                // time scale: drag right stretches, left squeezes
+              const span0 = d.v[1] - d.v[0] + 1;
+              const span = Math.max(10, Math.min(n, Math.round(span0 * Math.exp(-dx / 220))));
+              const b = d.v[1], a = Math.max(0, b - span + 1);
+              setView([a, Math.min(n - 1, a + span - 1)]);
+            } else {
+              const span = d.v[1] - d.v[0];
+              const a = Math.max(0, Math.min(n - 1 - span, d.v[0] + Math.round(-dx / cw)));
+              setView([a, a + span]);
+              if (manualY) {                            // a stretched price scale also pans vertically
+                const ppp = (d.yr[1] - d.yr[0]) / plotH;
+                setManualY([d.yr[0] + dy * ppp, d.yr[1] + dy * ppp]);
+              }
+            }
             return;
           }
           const i = Math.floor((x - PAD.l) / cw) + lo;
-          setHover(i >= lo && i <= hi ? i : null);
+          setHover(where(x, yy) === "pan" && i >= lo && i <= hi ? i : null);
         }}
-        onMouseDown={(e: { clientX: number; currentTarget: SVGSVGElement }) => {
-          drag.current = { x: e.clientX - e.currentTarget.getBoundingClientRect().left, v: view };
+        onMouseDown={(e: { clientX: number; clientY: number; currentTarget: SVGSVGElement }) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = e.clientX - rect.left, yy = e.clientY - rect.top;
+          drag.current = { mode: where(x, yy), x, y: yy, v: view, yr: [yLo, yHi] };
         }}
         onMouseUp={() => { drag.current = null; }}
         onMouseLeave={() => { drag.current = null; setHover(null); }}
-        onDoubleClick={() => setView(fit)}>
+        onDoubleClick={(e: { clientX: number; clientY: number; currentTarget: SVGSVGElement }) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const m = where(e.clientX - rect.left, e.clientY - rect.top);
+          if (m !== "x") setManualY(null);
+          if (m !== "y") setView(fit);
+        }}>
         <defs><clipPath id={`clip-${testId ?? "c"}`}><rect x={PAD.l} y={PAD.t} width={plotW} height={plotH} /></clipPath></defs>
         {ticks.map((v) => (
           <g key={v}>
@@ -176,6 +207,10 @@ export function CandleChart({ candles, tfMinutes, lines = [], boxes = [], marker
         ))}
         {timeTicks.map((t, k) => <text key={k} x={t.x} y={height - 8} textAnchor="middle">{t.label}</text>)}
         <line className="axis-line" x1={PAD.l} x2={PAD.l + plotW} y1={PAD.t + plotH} y2={PAD.t + plotH} />
+        <rect className="scale-y" x={PAD.l + plotW} y={PAD.t} width={PAD.r} height={plotH} data-testid={testId ? `${testId}-yscale` : undefined}>
+          <title>Drag to stretch the price scale, double-click to reset</title></rect>
+        <rect className="scale-x" x={PAD.l} y={PAD.t + plotH} width={plotW} height={PAD.b} data-testid={testId ? `${testId}-xscale` : undefined}>
+          <title>Drag to stretch the time scale, double-click to reset</title></rect>
         <g clipPath={`url(#clip-${testId ?? "c"})`}>
           {boxes.map((b, k) => {
             const x1 = clampX(xT(b.from)), x2 = clampX(b.to === undefined ? PAD.l + plotW : xT(b.to) + cw);

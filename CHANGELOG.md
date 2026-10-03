@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy: save for Claude, layout, trades list, stretchable charts (ADR-94)
+
+| Item | Status |
+|---|---|
+| GitHub upload and token removed; tick backtests and "Save selected for Claude" writes one ZIP to Downloads / MunyunLab for Claude, with a green check on saved backtests and "Open folder" | IMPLEMENTED, TESTED |
+| Test plans are pasted as text, checked, then run | IMPLEMENTED, TESTED |
+| Backtest page: Run a backtest, then the backtest list with saving, then the results | IMPLEMENTED (screenshots) |
+| Settings: every box the same height, scrolling inside | IMPLEMENTED (screenshots) |
+| Trades tab: list of all backtests first (holdout results once the review is finished) | IMPLEMENTED, TESTED |
+| Charts: drag the price / time scale to stretch, double-click to reset | IMPLEMENTED (browser test) |
+| Strategy rules, backtests, results | UNCHANGED |
+
 ## My strategy: BP Blake's model with every rule as a setting (ADR-93)
 
 | Item | Status |

@@ -33,7 +33,7 @@ export interface PropBrief { profile: string; status: string; evaluation: string
 export interface ReportRow {
   id: string; kind: string; label: string; created_at: string; settings_hash: string; window: { start: string; end: string };
   trade_count: number; prop: PropBrief | null; settings_changed: Record<string, unknown>; metrics: Metrics;
-  uploaded?: { at: string; path: string; commit: string } | null;
+  exported?: { at: string; file: string } | null;
 }
 export interface MonthRow { month: string; trades: number; wins: number; net_r: number; net_usd: number }
 export interface TradeRow {
@@ -78,11 +78,11 @@ export interface MyJob {
   job_id: string; kind: string; state: "running" | "completed" | "failed"; step: string; created_at: string;
   finished_at: string | null; result: unknown; error: { kind: string; message: string; trace?: string } | null;
 }
-export interface GithubStatus { token_present: boolean; repo: string; branch: string; folder: string; saved_at?: string | null }
+export interface ExportResult { path: string; file: string; folder: string; bytes: number; reports: string[] }
 export interface Overview {
   protocol: ProtocolInfo; settings_hash: string | null; settings_changed: Record<string, unknown>; backtests: ReportRow[];
-  holdout_reports: ReportRow[]; plans: { id: string; name: string; created_at: string; variants: number; uploaded?: unknown }[];
-  latest_report_id: string | null; github: GithubStatus; job: MyJob | null;
+  reports: ReportRow[]; plans: { id: string; name: string; created_at: string; variants: number; exported?: unknown }[];
+  job: MyJob | null;
   review: { id: string; status: string; created_at: string; settings_hash: string; mechanical_report: string; final_report: string | null } | null;
 }
 
@@ -98,14 +98,12 @@ export interface Decision { signal_bar: number; take: boolean; outcome?: TradeRo
 export interface PlanVariant { label: string; overrides: Record<string, unknown>; settings_hash: string }
 export interface PlanResult { id: string; name: string; note?: string; created_at: string; variants: (PlanVariant & {
   backtest_id?: string; trade_count?: number; metrics?: Metrics; prop?: PropBrief | null; error?: { kind: string; message: string } })[];
-  uploaded?: { at: string; path: string; commit: string } }
+  exported?: { at: string; file: string } }
 
 export const my = {
   overviewUrl: "/api/my",
   settingsUrl: "/api/my/settings",
   reviewUrl: "/api/my/review",
-  githubUrl: "/api/my/github",
-  plansUrl: "/api/my/plans",
   reportUrl: (id: string) => `/api/my/reports/${enc(id)}`,
   tradeUrl: (id: string, n: number) => `/api/my/reports/${enc(id)}/trades/${n}`,
   planResultUrl: (id: string) => `/api/my/plan-results/${enc(id)}`,
@@ -114,8 +112,8 @@ export const my = {
   job: (id: string) => api.get<MyJob>(`/api/my/jobs/${enc(id)}`),
   startReview: () => api.post<MyJob>("/api/my/review", {}),
   decide: (signal_bar: number, take: boolean) => api.post<Decision>("/api/my/review/decide", { signal_bar, take }),
-  setToken: (token: string | null) => api.post<GithubStatus>("/api/my/github/token", { token }),
-  upload: (report_id: string | null, include_candles: boolean) => api.post<MyJob>("/api/my/upload", { report_id, include_candles }),
-  plan: (name: string) => api.get<{ name: string; plan: { name?: string; note?: string }; variants: PlanVariant[] }>(`/api/my/plans/${enc(name)}`),
-  runPlan: (name: string, auto_upload: boolean) => api.post<MyJob>(`/api/my/plans/${enc(name)}/run`, { auto_upload }),
+  exportReports: (report_ids: string[], include_candles: boolean) => api.post<ExportResult>("/api/my/export", { report_ids, include_candles }),
+  openExports: () => api.post<{ folder: string }>("/api/my/exports/open", {}),
+  checkPlan: (plan: unknown) => api.post<{ name?: string; note?: string; variants: PlanVariant[] }>("/api/my/plans/check", { plan }),
+  runPlan: (plan: unknown) => api.post<MyJob>("/api/my/plans/run", { plan }),
 };
