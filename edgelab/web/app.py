@@ -181,7 +181,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, MyStrategyError):
             return jsonify({"error": {"kind": "my_strategy", "code": e.code, "message": e.message}}), \
                 409 if e.code in ("JOB_RUNNING", "REVIEW_OPEN", "HOLDOUT_LOOKS_USED", "NOT_CURRENT",
-                              "SETUP_REVIEW_OPEN") else 422
+                              "SETUP_REVIEW_OPEN", "AUTOTUNE_RUNNING") else 422
         if isinstance(e, SearchSpecError):
             return jsonify({"error": {"kind": "search_spec", "message": "The search was refused.",
                                       "reason": str(e), "issues": [i.to_dict() for i in e.issues],
@@ -1216,6 +1216,36 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.post("/api/my/setup-reviews/<sid>/undo")
     def my_setup_undo(sid):
         return jsonify(call(svc.my_strategy_setup_undo, _id(sid, MY_SETUP_ID, "setup review id")))
+
+    @app.get("/api/my/autotune")                       # ADR-97: Strategy autotuner
+    def my_autotune():
+        return jsonify(call(svc.my_autotune_status))
+
+    @app.get("/api/my/autotune/points")
+    def my_autotune_points():
+        prof = request.args.get("profile")
+        if prof is not None and not re.fullmatch(r"[A-Z0-9_]{1,80}", prof):
+            raise _bad("invalid profile")
+        return jsonify(call(svc.my_autotune_points, prof))
+
+    @app.get("/api/my/autotune/combos/<int:n>")
+    def my_autotune_detail(n):
+        return jsonify(call(svc.my_autotune_detail, n))
+
+    @app.post("/api/my/autotune/start")
+    def my_autotune_start():
+        p = body().get("processes")
+        if p is not None and (not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 256):
+            raise _bad("processes must be an integer between 1 and 256")
+        return jsonify(call(svc.my_autotune_start, p)), 202
+
+    @app.post("/api/my/autotune/stop")
+    def my_autotune_stop():
+        return jsonify(call(svc.my_autotune_stop))
+
+    @app.post("/api/my/autotune/combos/<int:n>/rerun")
+    def my_autotune_rerun(n):
+        return jsonify(call(svc.my_autotune_rerun, n)), 202
 
     @app.post("/api/my/exports/open")
     def my_open_exports():

@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Version 0.5.0: Strategy autotuner and flipped trades (ADR-97)
+
+| Item | Status |
+|---|---|
+| My strategy -> Strategy autotuner: 10,000 settings combinations of test 37, each change with a written reason (Blake's words, a close reading, a threshold calibration or your request), up to 4 changes, unique, no randomness | IMPLEMENTED, TESTED |
+| Own protocol (10,000 tries, 1 holdout look); My strategy's 300 tries untouched | IMPLEMENTED, TESTED |
+| Run on several CPU cores in the background, Start / Stop / Continue, the lookahead check on every combination, prop check of every combination | IMPLEMENTED, TESTED |
+| Overview scatter with any statistic on either axis, your goals highlighted (3+ trades / week, R:R >= 1, profit, prop evaluation passed with payouts), best for payouts, a combination's changes and reasons, re-run with trades and charts | IMPLEMENTED (browser test) |
+| New setting "Flip every trade" (the opposite side of every setup) | IMPLEMENTED, TESTED |
+| Faster rule code with byte-identical signals | TESTED |
+| Results of the 10,000 on the real data | REQUIRES REAL DATA (your PC, about 3 days on 7 cores) |
+| Version 0.5.0 | IMPLEMENTED |
+| Engine, fills, costs, sizing, prop rules, configs, earlier settings and their trades | UNCHANGED |
+
 ## My strategy: setup review on the discovery period (ADR-96)
 
 | Item | Status |

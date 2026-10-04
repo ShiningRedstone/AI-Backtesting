@@ -2552,3 +2552,53 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **API:** `GET/POST /api/my/setup-reviews`, `GET /api/my/setup-reviews/<SR>`, `POST .../<SR>/decide`, `POST .../<SR>/undo`;
   `/api/my/export` accepts `SR_` ids. **UI:** My strategy -> "Setup review" (`/my-setup`, `/my-setup/<SR>`).
 - **Unchanged:** engine, fills, costs, sizing, prop rules, configs, strategy rules, the protocol and its holdout look.
+
+### ADR-97 My strategy: Strategy autotuner (10,000 reasoned combinations), flip setting; version 0.5.0
+- **Request (user):** a "Strategy autotuner" tab under My strategy: 10,000 settings combinations of BP Blake's model
+  (including switching long / short), each change with a reason (not random), backtested, then viewed like the old
+  10,000-strategy results. Choices the user made: a new protocol of its own (10,000 tries, ONE holdout look; My strategy's
+  300 tries untouched); built around test 37 and Blake-grounded; up to 4 changes per combination; long / short = the
+  direction settings AND a fully flipped trade; SMT varied (ES data required); the lookahead check on every combination;
+  the "good" highlight = 3+ trades a week, planned R:R >= 1, net > 0, passed prop evaluation with payouts (as many as
+  possible); results only per combination with the option to re-run one with trades + candles; overview scatter;
+  version 0.5.0; build everything, then push.
+- **Flip** (`models.flip`, default off): the setup is found exactly as before, then traded the other way: direction
+  reversed, the setup's target becomes the stop and its stop the target, market entry at the next 1m open
+  (`Rules._scan_day` / `_flip_explain`; the strategy's own trade tracking simulates the flipped trade in the mirrored
+  view). Refused by name with limit entries, breakeven or trailing (no exact mirror). `identity()` leaves it out while
+  off, so every earlier settings hash is unchanged (known answer 83a7d49ee4f9d441). Causal (same information).
+- **Design** (`mystrategy/autotune_space.py`, pure, deterministic, no randomness): base = test 37 (`BASE`); 173 options
+  in 20 themes (each setting belongs to one theme), each = 1-3 setting changes with a written reason, a basis (Blake /
+  close reading / threshold calibration / your request) and a priority. A combination = base + 0-4 options of different
+  themes; refused when it does not resolve, contradicts itself (longs only + forced short bias) or contains an inert change
+  (`INERT_UNLESS`: e.g. a rejection-block setting while rejection blocks are off). Order: base (1), every single change
+  (173), pairs (3,600: every direction mode x every other change, then other cross-theme pairs by priority sum), groups of
+  3 (3,100) and 4 (3,126) by a covering design (a fixed coprime stride through all theme subsets, each theme's least-used
+  option weighted 3 / 2 / 1 by priority). Unique by settings hash; every target >= 1R; design fingerprint 8d25af78c52d731d
+  (known answer in tests/test_my_autotune.py).
+- **Protocol / run** (`mystrategy/autotune.py`): companion role `my_autotune`, scope `<inst>@<prov>#my_autotune`
+  (`research/protocol.is_companion` includes it, so it never governs research or campaigns); exposure statement says the
+  base was tuned on the discovery period. The design is frozen into `<data>/my_strategy/autotune/manifest.json` on the first
+  start (must equal the code's design to continue). Worker processes (spawn, `research/memory.plan` decides how many fit)
+  run each combination through the ONE engine (lookahead check on, BID/ASK costs, MNQ sizing) on the whole discovery
+  window and the prop audit; the parent alone writes one trial event per combination (entry point `my_autotune`) and one
+  line in `results.jsonl` (metrics, monthly, weekly counts, per-profile prop brief, trades fingerprint; no trades / candles
+  by the user's choice). Stop keeps the finished ones; Start continues; failed ones run again (same trial key, counted
+  once); a crashed worker pool restarts with half the workers. Refused up front: no active research protocol, config
+  changed, the budget cannot hold the run, or SMT combinations without ES data covering the discovery period. A combination
+  re-run (`rerun`) is a normal My strategy backtest under the autotuner protocol (`runner.backtest(protocol=)`: same trial
+  key, not a new try) with trade records and candles, listed under Trades. Not recorded as runs (the run registry would
+  otherwise hold 10,000 extra runs); the trial ledger holds every try.
+- **Speed without result changes:** `RangeQ.min/max` use ndarray methods, `_gap_at` tests its 40 candidates at once, the
+  recent swing lows (liquidity check, SMT) and the EQ swing use binary searches on the sorted swing arrays
+  (`_recent_swing_lows`); signals, explanations and rule counters of 80 design combinations are byte-identical before and
+  after (checked), plus unit tests against the earlier formulas. About 11% faster; the lookahead check's procedure is
+  unchanged. A full run takes roughly 10,000 x one discovery backtest / CPU cores (about 3 days on 7 cores on the user's PC).
+- **UI:** My strategy -> "Strategy autotuner" (`/my-autotune`, `web/src/pages/MyAutotune.tsx`): progress, CPU cores,
+  Start / Continue / Stop; "Your goals" (editable, per viewer) and the Settings pass-criteria account; the overview scatter
+  with free axes (`XYScatter` in components/charts.tsx: any metric on either axis, goal reference lines, grouped dots;
+  base white, goal-meeting amber, others blue); best combinations for prop payouts; a combination's panel (changes from
+  test 37 with reasons, numbers, monthly net R, prop accounts, re-run with trades and charts); the full design table.
+  Flipped trades say so in "Why it entered".
+- **Version 0.5.0** (`edgelab.__version__`, web/package.json, package-lock.json, bundle).
+- **Unchanged:** engine, fills, costs, sizing, prop rules, configs, every earlier settings hash and its trades.

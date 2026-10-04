@@ -276,11 +276,13 @@ def evaluated_hash(ds, s: dict, es) -> str:
     return hash_obj({"bars": ds.manifest.content_hash, "es": es.content_hash})
 
 
-def run_window(svc, s: dict, start, end, *, stage: str, lock=None, skip=None, progress: Callable | None = None):
+def run_window(svc, s: dict, start, end, *, stage: str, lock=None, skip=None, progress: Callable | None = None,
+               protocol: dict | None = None):
     """Run the strategy on [start, end] of the protocol's source dataset with warm-up history before ``start``.
-    Returns (strategy, result, ds, trade_window). No recording."""
+    Returns (strategy, result, ds, trade_window). No recording. ``protocol`` = another companion (the autotuner,
+    ADR-97) instead of My strategy's own."""
     from edgelab.engine.backtester import run_backtest
-    parent, mine = ensure_protocol(svc, lock)
+    mine = protocol if protocol is not None else ensure_protocol(svc, lock)[1]
     mat = mine["material"]
     if svc._config_hash() != mat["config_hash"]:
         raise MyStrategyError("PROTOCOL_CONFIG_CHANGED", "The research settings (costs, fills, sessions) differ from the "
@@ -406,16 +408,17 @@ def new_id(prefix: str) -> str:
 
 
 def backtest(svc, overrides: dict | None, start=None, end=None, *, label: str = "", lock=None,
-             progress: Callable | None = None) -> dict:
+             progress: Callable | None = None, protocol: dict | None = None, extra: dict | None = None) -> dict:
     s = P.resolve(overrides if overrides is not None else load_overrides(svc))
-    strat, res, ds, win, mine = run_window(svc, s, start, end, stage="discovery", lock=lock, progress=progress)
+    strat, res, ds, win, mine = run_window(svc, s, start, end, stage="discovery", lock=lock, progress=progress,
+                                           protocol=protocol)
     if progress:
         progress("Recording the run and writing the trade records")
     rec = _record(svc, s, strat, res, ds, win, mine, status="IN_SAMPLE",
                   notes=f"My strategy discovery backtest {label}".strip(), lock=lock)
     folder = home(svc) / "backtests" / new_id("BT")
     return build_report(folder, s, strat, res, ds, win, rec, kind="discovery_backtest", label=label,
-                        extra={"protocol_id": mine["protocol_id"]})
+                        extra={"protocol_id": mine["protocol_id"], **(extra or {})})
 
 
 def list_backtests(svc, kind: str = "backtests") -> list[dict]:

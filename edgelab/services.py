@@ -2672,6 +2672,37 @@ class Services:
         from edgelab.mystrategy import setup_review as SR
         return _jsonable(SR.undo(self, sr_id))
 
+    # ------------------------------------------------------------------ Strategy autotuner (ADR-97)
+    def my_autotune_status(self) -> dict:
+        from edgelab.mystrategy import autotune as AT
+        out = AT.status(self)
+        out["processes_default"] = self.research_processes()["processes"]
+        out["criteria_profile"] = self.ui_preferences().get("prop_criteria_profile")
+        return out
+
+    def my_autotune_points(self, profile: str | None = None) -> dict:
+        from edgelab.mystrategy import autotune as AT
+        return AT.points(self, profile or self.ui_preferences().get("prop_criteria_profile"))
+
+    def my_autotune_detail(self, n: int) -> dict:
+        from edgelab.mystrategy import autotune as AT
+        return AT.detail(self, int(n))
+
+    def my_autotune_start(self, processes: int | None = None) -> dict:
+        from edgelab.mystrategy import autotune as AT
+        n = self.research_processes()["processes"] if processes is None else int(processes)
+        AT.ensure_protocol(self, self.lock)                    # refuse without a research protocol before starting
+        return AT.run_of(self).start(self, max(1, n), self.lock)
+
+    def my_autotune_stop(self) -> dict:
+        from edgelab.mystrategy import autotune as AT
+        return AT.run_of(self).stop()
+
+    def my_autotune_rerun(self, n: int) -> dict:
+        from edgelab.mystrategy import autotune as AT, runner as R
+        return R.jobs_of(self).start("autotune_rerun", lambda step: AT.rerun(self, int(n), lock=self.lock, progress=step),
+                                     {"autotune_n": int(n)})
+
     def my_strategy_export(self, report_ids: list, include_candles: bool = False) -> dict:
         from edgelab.mystrategy import runner as R
         return _jsonable(R.export(self, [str(x) for x in report_ids], include_candles))

@@ -68,6 +68,7 @@ export interface Explanation {
   breakeven: { mode: string; level: number | null };
   chop: { gaps_created: number; gaps_closed_through: number; share: number; ok: boolean } | null;
   checklist: Record<string, boolean | null>; quality: number;
+  flip?: { setup_direction: number; setup_stop: number; setup_target: number; setup_r_planned: number };   // ADR-97
   smt?: { divergence: boolean | null; reason: string; nq_took?: boolean; es_took?: boolean; tf?: string; ref_ts?: string;
     nq_ref?: number; nq_extreme?: number; es_ref?: number; es_extreme?: number | null };
 }
@@ -128,6 +129,33 @@ export interface SetupView {
     rows: SetupResultRow[]; note: string };
 }
 
+/** Strategy autotuner (ADR-97). */
+export interface AutotuneOption { id: string; theme: string; label: string; changes: Record<string, unknown>; reason: string; priority: number; source: string }
+export interface AutotuneDesign { autotune_version: number; manifest_hash: string; total: number; base: Record<string, unknown>; base_label: string;
+  themes: { id: string; label: string }[]; options: AutotuneOption[]; counts: Record<string, number>; frozen: boolean; frozen_at?: string | null }
+export interface AutotuneRun { running: boolean; stopping?: boolean; step?: string; started_at?: string; finished_at?: string | null; processes?: number;
+  done_now?: number; failed_now?: number; error?: { kind: string; message: string; trace?: string } | null; memory_note?: string; total?: number;
+  last_duration_s?: number; restarts?: number }
+export interface AutotuneStatus {
+  protocol: { ready: boolean; problem?: string; protocol_id?: string | null; created?: boolean; discovery?: { start: string; end: string };
+    config_ok?: boolean; trial_budget?: number; holdout_looks?: number; trials_used?: number };
+  design: AutotuneDesign; done: number; failed: number; run: AutotuneRun; median_seconds: number | null; cpu_count: number;
+  processes_default: number; criteria_profile: string | null; es: { imported?: boolean; first?: string; last?: string } | null;
+}
+export interface AutotunePoint { n: number; label: string; stage: string; options: string[]; trade_count: number; win_rate: number | null;
+  expectancy_r: number | null; net_r: number | null; net_usd: number | null; trades_per_week: number | null; profit_factor: number | null;
+  max_drawdown_r: number | null; max_drawdown_usd: number | null; months_losing: number | null; months_total: number | null;
+  avg_planned_rr: number | null; avg_win_r: number | null; prop_evaluation: string | null; prop_payouts: number | null; prop_trader_payout: number | null }
+export interface AutotunePoints { profile: string | null; points: AutotunePoint[]; failed: { n: number; label: string; error: { kind: string; message: string } }[]; total: number }
+export interface AutotuneChange { option: string; theme: string; label: string; changes: Record<string, unknown>; reason: string; priority: number; source: string }
+export interface AutotuneDetail {
+  row: { n: number; stage: string; options: string[]; label: string; overrides: Record<string, unknown>; settings_hash: string; changes: AutotuneChange[] };
+  result: null | { error?: { kind: string; message: string }; metrics?: Metrics; monthly?: MonthRow[]; duration_s?: number; trades_hash?: string;
+    causality_passed?: boolean | null; strategy_id?: string; finished_at?: string; weekly?: Metrics["weekly"];
+    prop?: Record<string, { status: string; evaluation: string | null; payouts: number | null; trader_payout: number | null }> };
+  base: Record<string, unknown>; base_label: string; reruns: ReportRow[];
+}
+
 export const my = {
   overviewUrl: "/api/my",
   settingsUrl: "/api/my/settings",
@@ -151,5 +179,11 @@ export const my = {
   startSetupReview: (report_id: string) => api.post<{ id: string }>("/api/my/setup-reviews", { report_id }),
   setupDecide: (id: string, trade_no: number, take: boolean, reasons: string[], note: string) =>
     api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/decide`, { trade_no, take, reasons, note }),
+  autotuneUrl: "/api/my/autotune",
+  autotunePointsUrl: (profile?: string | null) => `/api/my/autotune/points${profile ? `?profile=${enc(profile)}` : ""}`,
+  autotuneComboUrl: (n: number) => `/api/my/autotune/combos/${n}`,
+  autotuneStart: (processes: number) => api.post<AutotuneRun>("/api/my/autotune/start", { processes }),
+  autotuneStop: () => api.post<AutotuneRun>("/api/my/autotune/stop", {}),
+  autotuneRerun: (n: number) => api.post<MyJob>(`/api/my/autotune/combos/${n}/rerun`, {}),
   setupUndo: (id: string) => api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/undo`, {}),
 };

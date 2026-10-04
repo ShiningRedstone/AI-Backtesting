@@ -130,6 +130,15 @@ class TestSettings(unittest.TestCase):
         self.assertTrue(P.smt_used(P.resolve({"filters.min_quality": 1})))
         self.assertTrue(P.smt_used(P.resolve({"filters.smt": True, "filters.smt_in_score": False})))
 
+    def test_flip_setting(self):
+        """ADR-97: off keeps every earlier hash; on is another strategy; refused where no exact mirror exists."""
+        self.assertEqual(P.settings_hash({"models.flip": False}), "83a7d49ee4f9d441")
+        self.assertNotEqual(P.settings_hash({"models.flip": True, "manage.be": "off"}), P.settings_hash({"manage.be": "off"}))
+        for bad in ({"models.flip": True}, {"models.flip": True, "manage.be": "off", "entry.type": "limit_gap"},
+                    {"models.flip": True, "manage.be": "off", "manage.trail": "swing_1m"}):
+            with self.assertRaises(P.SettingsError):
+                P.resolve(bad)
+
 
 class TestFrames(unittest.TestCase):
     def test_partial_candle_is_never_complete(self):
@@ -184,6 +193,25 @@ class TestKnownAnswer(unittest.TestCase):
         self.assertAlmostEqual(sig.stop_price[k942], 99.0)
         self.assertAlmostEqual(sig.target_price[k942], 90.0)
 
+    def test_flip_takes_the_opposite_trade(self):
+        """ADR-97: the long setup becomes a short with the setup's target as its stop and its stop as its target."""
+        ds, hm = known_day()
+        st, sig, idx = self._run(ds, {"bias.override": "long", "models.flip": True})
+        k942 = np.flatnonzero(hm == 9 * 60 + 42)[-1]
+        self.assertEqual(list(idx), [k942])
+        self.assertEqual(sig.direction[k942], -1)
+        self.assertAlmostEqual(sig.stop_price[k942], 110.0)
+        self.assertAlmostEqual(sig.target_price[k942], 101.0)
+        e = st.explanations[k942]
+        self.assertEqual((e["direction"], e["flip"]["setup_direction"]), (-1, 1))
+        self.assertAlmostEqual(e["stop"]["price"], 110.0)
+        self.assertAlmostEqual(e["target"]["price"], 101.0)
+        dm, _ = known_day(mirror=True)                                   # the mirrored day flips to the long
+        _, sig2, idx2 = self._run(dm, {"bias.override": "short", "models.flip": True})
+        self.assertEqual((list(idx2), sig2.direction[k942]), ([k942], 1))
+        self.assertAlmostEqual(sig2.stop_price[k942], 90.0)
+        self.assertAlmostEqual(sig2.target_price[k942], 99.0)
+
     def test_rules_refuse_by_setting(self):
         ds, _ = known_day()
         self.assertEqual(len(self._run(ds, {"bias.override": "short"})[2]), 0)        # bias the other way
@@ -206,7 +234,8 @@ class TestCausalityAndEngine(unittest.TestCase):
                      {"bias.override": "short", "ifg.displacement": False, "eq.enabled": False, "leg.start_tf": "5m",
                       "target.below_min": "next", "manage.trail": "swing_5m"},
                      {"models.judas": False, "ifg.rule_ny": "single", "bias.method": "structure", "eq.range": "previous_day",
-                      "models.price_series": "mid"}):
+                      "models.price_series": "mid"},
+                     {"models.flip": True, "manage.be": "off", "day.stop_after_loss": True}):
             rep = check_causality(MyStrategy(over, CAL), self.ds.bars, n_cuts=12)
             self.assertTrue(rep.passed, f"{over}: {rep.detail}")
 
@@ -220,6 +249,11 @@ class TestCausalityAndEngine(unittest.TestCase):
         bt = {**CFG["backtest"], "require_causality_check": False}
         again = run_backtest(self.ds, rp, self.costs, bt, sizing=st.sizing, contract=contract_for(CFG, st.sizing))
         self.assertEqual(res.trades_hash, again.trades_hash)
+        fl = MyStrategy({"eq.enabled": False, "ifg.displacement": False, "models.flip": True, "manage.be": "off"}, CAL)
+        fres = run_backtest(self.ds, fl, self.costs, CFG["backtest"], sizing=fl.sizing, contract=contract_for(CFG, fl.sizing))
+        self.assertTrue(fres.causality.passed)                                  # ADR-97: flipped trades
+        self.assertGreater(len(fres.trades), 3)
+        self.assertEqual(fres.skipped.get("BUSY_IN_POSITION_OR_ORDER", 0), 0)
         first = int(res.trades["signal_bar"].iloc[0])
         skipped = MyStrategy({"eq.enabled": False, "ifg.displacement": False}, CAL, skip={first})
         s2 = skipped.generate_signals(self.ds.bars)

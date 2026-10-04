@@ -87,7 +87,7 @@ research run reads (preflight, progress, stop) via `campaign.read_outside_lock`;
 ADR-79: Run backtest = Research runs | Single backtest (Experiments tab removed; `/research` -> `/runs`, job/id deep links kept); `results_view.session_group`
 (market-hours groups, `session_group` breakdown); deep-rose decorative gradient; desktop relaunch waits for a closing instance (`_hand_off` ->
 `HANDOFF_WAIT`, `_wait_for_previous`), runtime.json removed first on shutdown, splash `edgelab/desktop_splash.py` (`EdgeLab.exe --splash`).
-Version 0.3.0 (after the V0.2 save point): version bump only, no behaviour change.
+Version 0.3.0 (after the V0.2 save point): version bump only, no behaviour change. Version 0.5.0 came with ADR-97.
 ADR-80: `core/fsutil.atomic_write_text` (unique temp + `replace_with_retry` on Windows sharing violations) for run records,
 scopes and run names; a research run no longer dies with WinError 5 while a page reads its run record.
 ADR-81: paper trading in simulated prop accounts (`edgelab/paper/`: `feed.py` daily Dukascopy download via dukascopy-python, in-memory
@@ -154,14 +154,18 @@ ADR-95: SMT divergence with ES in My strategy: ES = Dukascopy USA500.IDX/USD 1m 
 settings hashes unchanged. Backtest lists scroll inside a fixed-height box.
 ADR-96: My strategy "Setup review" (`mystrategy/setup_review.py`): blind take / skip (skip reasons from a list) on a fixed-seed
 sample (150) of a DISCOVERY backtest's trades, charts stop at the signal, outcomes revealed at the end; never a run, trial or holdout look.
+ADR-97 (version 0.5.0): My strategy "Strategy autotuner" (`mystrategy/autotune_space.py` = 10,000 reasoned combinations of test 37,
+known-answer design fingerprint; `mystrategy/autotune.py` = companion protocol `my_autotune` (10,000 tries, 1 look), multi-core run
+with the lookahead check, `results.jsonl` numbers only, rerun = normal My strategy backtest, not a new try); setting `models.flip`
+(opposite trade; off = old hashes); byte-identical rule speed-ups. ADR-93's "1m data only" still applies.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-96.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-97.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
-## The app today (version 0.3.0)
+## The app today (version 0.5.0)
 
-- **Version:** `edgelab.__version__` = **0.3.0** (web/package.json and package-lock.json must match; the frontend build
+- **Version:** `edgelab.__version__` = **0.5.0** (web/package.json and package-lock.json must match; the frontend build
   records it in `edgelab/web/static/build-info.json`). Save points (never modify or delete them):
   - branch `backup/main-2026-10-01` = 0d0baeb
   - branch `V0.2` = 716da4d, the last 0.2.0 state
@@ -211,7 +215,7 @@ remains. Do not rely on this file alone.
     prop check (the old simulator)
   - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
-    Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (take / skip).
+    Strategy autotuner (ADR-97), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (take / skip).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
     then about/updates, workspace, pass-criteria account + Live 50K drawdown limit, CPU cores, prop account fees +
     discounts, delete-all.
@@ -436,4 +440,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-96). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-97). Update `README.md` status for phases.

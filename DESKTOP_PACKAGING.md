@@ -263,7 +263,7 @@ identical results:
 ## Versioning (one authoritative version)
 
 `edgelab/__init__.py` holds **the** application version, `__version__ = "MAJOR.MINOR.PATCH"` (currently
-`0.3.0`). Everything else reads or checks it:
+`0.5.0`). Everything else reads or checks it:
 
 | Consumer | How it gets the version | Mismatch |
 |---|---|---|

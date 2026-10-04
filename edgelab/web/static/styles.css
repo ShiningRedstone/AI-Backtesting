@@ -902,3 +902,5 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .my-chip:hover { border-color: var(--border-focus); }
 .my-chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .table-wrap.my-setup-scroll { max-height: 560px; overflow-y: auto; }
+/* ADR-97: autotuner tables wrap long reasons instead of running off the card */
+.table-wrap.my-setup-scroll td { white-space: normal; vertical-align: top; }

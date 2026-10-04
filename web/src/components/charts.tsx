@@ -550,3 +550,80 @@ export function ScatterChart({ groups, curves = [], height = 340, xUnit = "win r
     </div>
   );
 }
+
+// ------------------------------------------------------------------------------------------ scatter with free axes (ADR-97)
+export interface XYAxis { label: string; fmt: (v: number) => string; ref?: { value: number; label: string } }
+/** Points on two free numeric axes (either may be negative); a dashed reference line per axis (e.g. a goal); grouping
+ *  of overlapping dots exactly like ScatterChart. Points with a missing value on either axis are not drawn and the
+ *  caller says how many. */
+export function XYScatter({ groups, x, y, height = 380, testId, onPick, onPickMany }: {
+  groups: ScatterGroup[]; x: XYAxis; y: XYAxis; height?: number; testId?: string; onPick?: (id: string) => void;
+  onPickMany?: (ids: string[]) => void;
+}) {
+  const [ref, width] = useWidth();
+  const [hover, setHover] = useState<number | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const P = { l: 58, r: 16, t: 24, b: 40 };
+  const vis = groups.filter((g) => !hidden.has(g.id)).flatMap((g) => g.points);
+  const span = (vals: number[], refv?: number) => {
+    const v = [...vals, ...(refv !== undefined ? [refv] : [])].filter(Number.isFinite);
+    let lo = v.length ? Math.min(...v) : 0, hi = v.length ? Math.max(...v) : 1;
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.05;
+    const t = niceTicks(lo - pad, hi + pad);
+    return { lo: Math.min(lo - pad, t[0]), hi: Math.max(hi + pad, t[t.length - 1]), ticks: t };
+  };
+  const sx = span(vis.map((p) => p.x), x.ref?.value), sy = span(vis.map((p) => p.y), y.ref?.value);
+  const iw = width - P.l - P.r, ih = height - P.t - P.b;
+  const X = (v: number) => P.l + ((v - sx.lo) / (sx.hi - sx.lo || 1)) * iw;
+  const Y = (v: number) => P.t + ih - ((v - sy.lo) / (sy.hi - sy.lo || 1)) * ih;
+  const marks = useMemo(() => groups.flatMap((g, gi) => {
+    if (hidden.has(g.id)) return [];
+    const pts = g.points.map((p) => ({ px: X(p.x), py: Y(p.y), p }));
+    return g.cluster ? clusterMarks(pts, g.size ?? 4, gi, g.clusterDistance ?? 1) : pts.map((q) => ({ g: gi, px: q.px, py: q.py, r: g.size ?? 4, members: [q.p] }));
+  }), [groups, hidden, width, height, sx.lo, sx.hi, sy.lo, sy.hi]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!groups.some((g) => g.points.length)) return <div className="empty small">No points.</div>;
+  const items: LegendItem[] = groups.map((g) => ({ id: g.id, label: `${g.label} (${g.points.length.toLocaleString()})`, color: g.color }));
+  const hm = hover != null ? marks[hover] : null;
+  const range = (vals: number[], f: (v: number) => string) => { const a = Math.min(...vals), b = Math.max(...vals); return a === b ? f(a) : `${f(a)} – ${f(b)}`; };
+  const pick = (m: Mark) => { if (m.members.length > 1 && onPickMany) onPickMany(m.members.map((p) => p.id)); else onPick?.(m.members[0].id); };
+  return (
+    <div className="chart" ref={ref} data-testid={testId}>
+      <Legend items={items} hidden={hidden}
+        onToggle={(id) => setHidden((h) => { const n = new Set(h); if (n.has(id)) n.delete(id); else n.add(id); return n; })} />
+      <svg width={width} height={height} role="img" aria-label={`${x.label} against ${y.label}`} onMouseLeave={() => setHover(null)}>
+        {sy.ticks.map((t) => <g key={`y${t}`}><line className="gridline" x1={P.l} x2={width - P.r} y1={Y(t)} y2={Y(t)} />
+          <text x={P.l - 6} y={Y(t) + 3.5} textAnchor="end">{y.fmt(t)}</text></g>)}
+        {sx.ticks.map((t) => <text key={`x${t}`} x={X(t)} y={P.t + ih + 16} textAnchor="middle">{x.fmt(t)}</text>)}
+        <line className="axis-line" x1={P.l} x2={width - P.r} y1={P.t + ih} y2={P.t + ih} />
+        <text x={4} y={12} textAnchor="start" style={{ fontWeight: 650 }} data-testid="xy-y-title">{y.label}</text>
+        <text x={width - P.r} y={height - 4} textAnchor="end" className="faint" data-testid="xy-x-title">{x.label} →</text>
+        {x.ref && <g><line x1={X(x.ref.value)} x2={X(x.ref.value)} y1={P.t} y2={P.t + ih} stroke="var(--warn)" strokeDasharray="5 4" strokeWidth={1.2} />
+          <text x={X(x.ref.value) + 4} y={P.t + 10} style={{ fill: "var(--warn)" }}>{x.ref.label}</text></g>}
+        {y.ref && <g><line x1={P.l} x2={width - P.r} y1={Y(y.ref.value)} y2={Y(y.ref.value)} stroke="var(--warn)" strokeDasharray="5 4" strokeWidth={1.2} />
+          <text x={width - P.r} y={Y(y.ref.value) - 4} textAnchor="end" style={{ fill: "var(--warn)" }}>{y.ref.label}</text></g>}
+        {marks.map((m, i) => {
+          const g = groups[m.g], on = hover === i, many = m.members.length > 1;
+          return <circle key={`${g.id}:${m.members[0].id}:${i}`} cx={m.px} cy={m.py} r={m.r + (on ? 2 : 0)} fill={g.color} stroke="none"
+            fillOpacity={g.ring ? 0.95 : many ? 0.6 : 0.75} style={{ cursor: onPick || onPickMany ? "pointer" : undefined }}
+            data-point={many ? undefined : m.members[0].id} data-cluster={many ? m.members.length : undefined}
+            onMouseEnter={() => setHover(i)} onClick={() => pick(m)} />;
+        })}
+      </svg>
+      {hm && (
+        <Tip x={Math.min(Math.max(hm.px, 110), width - 110)} y={Math.max(P.t, hm.py - 70)}>
+          {hm.members.length > 1 ? <>
+            <div className="t">{hm.members.length} combinations here</div>
+            <div><span className="sw" style={{ background: groups[hm.g].color }} />{groups[hm.g].label}</div>
+            <div>{x.label}: <b>{range(hm.members.map((p) => p.x), x.fmt)}</b> · {y.label}: <b>{range(hm.members.map((p) => p.y), y.fmt)}</b></div>
+            <div className="faint">click to list them</div>
+          </> : <>
+            <div className="t">{hm.members[0].label}</div>
+            <div><span className="sw" style={{ background: groups[hm.g].color }} />{groups[hm.g].label}</div>
+            <div>{x.label}: <b>{x.fmt(hm.members[0].x)}</b> · {y.label}: <b>{y.fmt(hm.members[0].y)}</b></div>
+            {hm.members[0].detail && <div className="faint">{hm.members[0].detail}</div>}
+          </>}
+        </Tip>)}
+    </div>
+  );
+}

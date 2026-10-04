@@ -19,6 +19,7 @@ import { RunsPage } from "../pages/Runs";
 import { HoldoutPage } from "../pages/Holdout";
 import { FlipsPage } from "../pages/Flips";
 import { RunBacktestPage } from "../pages/RunBacktest";
+import { MyAutotunePage } from "../pages/MyAutotune";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
@@ -36,7 +37,7 @@ const NAV: NavItem[] = [
   { path: "/dashboard", label: "Backtest results", tid: "results", icon: "chart",
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
-  { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup"] },
+  { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
@@ -54,7 +55,7 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
   my: [{ path: "/my", label: "Overview", head: "my" }, { path: "/my-settings", label: "Settings", head: "my-settings" },
     { path: "/my-backtest", label: "Backtest", head: "my-backtest" }, { path: "/my-trades", label: "Trades", head: "my-trades" },
-    { path: "/my-setup", label: "Setup review", head: "my-setup" }, { path: "/my-holdout", label: "Holdout review", head: "my-holdout" }],
+    { path: "/my-autotune", label: "Strategy autotuner", head: "my-autotune" }, { path: "/my-setup", label: "Setup review", head: "my-setup" }, { path: "/my-holdout", label: "Holdout review", head: "my-holdout" }],
 };
 
 const tabOf = (head: string) => NAV.find((n) => n.heads.includes(head));
@@ -115,6 +116,7 @@ function Page() {
     case "my-trades": return route.parts[2] ? <MyTradePage key={`${route.parts[1]}/${route.parts[2]}`} /> : <MyTradesPage key={route.parts[1] ?? ""} />;
     case "my-holdout": return <MyHoldoutPage />;
     case "my-setup": return <MySetupReviewPage />;               // ADR-96
+    case "my-autotune": return <MyAutotunePage />;               // ADR-97
     case "my-plan": return <MyPlanResultPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to Home</a></p></div>;
   }

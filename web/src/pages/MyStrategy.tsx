@@ -46,12 +46,12 @@ const STAT_LABEL: Record<string, string> = {
   confirmation_rejected_no_displacement: "Confirmation without displacement", signal_rejected_stop_too_wide: "Stop too wide",
   signal_rejected_target: "No acceptable target", signal_rejected_quality: "Confluence score too low",
   signals: "Entry signals", signals_not_filled_in_own_tracking: "Limit order not filled",
-  signals_declined_in_review: "Declined in the holdout review",
+  signals_declined_in_review: "Declined in the holdout review", signals_flipped: "Flipped (traded the other way)",
   setup_rejected_no_smt: "No SMT divergence with ES", setup_rejected_smt_unknown: "SMT unknown (ES minutes missing)",
 };
-const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step" : m ?? "–");
+export const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step" : m ?? "–");
 
-function useJob(onDone?: (j: MyJob) => void): [MyJob | null, (j: MyJob) => void] {
+export function useJob(onDone?: (j: MyJob) => void): [MyJob | null, (j: MyJob) => void] {
   const [job, setJob] = useState<MyJob | null>(null);
   useEffect(() => {
     if (!job || job.state !== "running") return;
@@ -68,14 +68,14 @@ function useJob(onDone?: (j: MyJob) => void): [MyJob | null, (j: MyJob) => void]
   return [job, setJob];
 }
 
-function JobLine({ job }: { job: MyJob | null }) {
+export function JobLine({ job }: { job: MyJob | null }) {
   if (!job) return null;
   if (job.state === "running") return <Banner tone="info"><span className="spinner" /> {job.step}…</Banner>;
   if (job.state === "failed") return <Banner tone="error">{job.error?.message ?? "Failed"}</Banner>;
   return null;
 }
 
-function PageHead({ title, children }: { title: string; children?: ReactNode }) {
+export function PageHead({ title, children }: { title: string; children?: ReactNode }) {
   return <header className="page-head"><div><h1>{title}</h1></div><div className="actions">{children}</div></header>;
 }
 
@@ -515,7 +515,7 @@ export function MyPlanResultPage() {
   );
 }
 
-function SaveOne({ id, done }: { id: string; done: boolean }) {
+export function SaveOne({ id, done }: { id: string; done: boolean }) {
   const { toast } = useApp();
   const [res, setRes] = useState<ExportResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -621,8 +621,10 @@ function smtText(s: NonNullable<Explanation["smt"]>, up: boolean): string {
 }
 
 export function explainText(e: Explanation): string[] {
-  const up = e.direction > 0;
+  const up = (e.flip ? e.flip.setup_direction : e.direction) > 0;     // the setup's direction (ADR-97: a flip trades the other way)
   const out: string[] = [];
+  if (e.flip) out.push(`Flipped trade: the setup was a ${up ? "long" : "short"} (stop ${px(e.flip.setup_stop)}, target ${px(e.flip.setup_target)}, `
+    + `${n(e.flip.setup_r_planned, 2)} R); it was traded the other way, as a ${up ? "short" : "long"} with the setup's target as its stop and its stop as its target.`);
   const b = e.bias;
   const tfs = Object.entries(b.per_tf ?? {}).map(([k, v]) => `${k} ${v.score >= 0 ? "+" : ""}${n(v.score, 2)}`).join(", ");
   out.push(`${up ? "Bullish" : "Bearish"} bias (${b.method}${b.score !== null ? `, score ${n(b.score, 2)}` : ""}${tfs ? `: ${tfs}` : ""}).`);

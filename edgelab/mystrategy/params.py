@@ -54,6 +54,10 @@ SCHEMA: list[dict] = [
        "The open's fake move into a 5m+ key level; confirmation on the timeframe with ONE gap in the leg "
        "instead of the highest timeframe.", S_JUDAS),
     _p("models.direction", "Allowed directions", C, "both", "Restrict to longs or shorts.", options=["both", "long_only", "short_only"]),
+    _p("models.flip", "Flip every trade (take the opposite side)", B, False,
+       "Each signal is traded the other way: a long setup becomes a short with the setup's target as the stop and its "
+       "stop as the target (and vice versa). Needs market entries, breakeven off and trailing off (no exact mirror "
+       "exists for those). Not a Blake rule: it tests whether the setups are reliably wrong.", ""),
     _p("models.price_series", "Price series for the rules", C, "bid",
        "Candles the rules read (fills always use BID/ASK). 'mid' = average of BID and ASK.", options=["bid", "mid"]),
     # ---------------------------------------------------------------- session
@@ -346,6 +350,8 @@ def resolve(overrides: dict | None = None) -> dict:
             issues.append("Switch on at least one key-level timeframe")
         if not (s["key.fvg"] or s["key.cisd"] or s["key.rejection_block"] or s["key.bpr"]):
             issues.append("Switch on at least one key-level type")
+        if s["models.flip"] and (s["entry.type"] != "market" or s["manage.be"] != "off" or s["manage.trail"] != "off"):
+            issues.append("Flip every trade needs market entries, breakeven off and trailing off")
         if s["target.max_r"] < s["target.min_r"]:
             issues.append("Maximum target must be at least the minimum target")
         if s["draw.max_points"] <= s["draw.min_points"]:
@@ -370,10 +376,13 @@ def smt_used(s: dict) -> bool:
 
 def identity(s: dict) -> dict:
     """The settings that define the strategy. ``filters.smt_in_score`` (ADR-95) only matters with a minimum score above 0;
-    otherwise it is left out, so settings from before it existed keep their hash (identical logic = identical id)."""
+    otherwise it is left out, so settings from before it existed keep their hash (identical logic = identical id).
+    ``models.flip`` (ADR-97) is left out while off, for the same reason."""
     s = dict(s)
     if not (s["filters.smt_in_score"] and s["filters.min_quality"] > 0):
         s.pop("filters.smt_in_score")
+    if not s["models.flip"]:                  # ADR-97: off = the settings from before it existed, same hash
+        s.pop("models.flip")
     return s
 
 

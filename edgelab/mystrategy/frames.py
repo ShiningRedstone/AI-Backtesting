@@ -196,24 +196,32 @@ class RangeQ:
         self.bmin = np.nanmin(blk, axis=1) if nb else np.zeros(0)
         self.bmax = np.nanmax(blk, axis=1) if nb else np.zeros(0)
 
-    def _q(self, a: int, b: int, fn, bfn) -> float:
+    # ADR-97 speed: ndarray methods instead of np.min / np.max (no dispatch overhead); the same values. The parts of a
+    # long range are combined with np.min / np.max as before (NaN-propagating, identical results).
+    def min(self, a: int, b: int) -> float:
         """Inclusive range [a, b]."""
         if b < a:
             return np.nan
-        B = self.B
+        x, B = self.x, self.B
         if b - a < 2 * B:
-            return float(fn(self.x[a:b + 1]))
+            return float(x[a:b + 1].min())
         ba, bb = a // B + 1, b // B           # whole blocks ba .. bb-1
-        parts = [fn(self.x[a:ba * B]), fn(self.x[bb * B:b + 1])]
+        parts = [x[a:ba * B].min(), x[bb * B:b + 1].min()]
         if bb > ba:
-            parts.append(bfn(slice(ba, bb)))
-        return float(fn(np.asarray(parts)))
-
-    def min(self, a: int, b: int) -> float:
-        return self._q(a, b, np.min, lambda s: self.bmin[s].min())
+            parts.append(self.bmin[ba:bb].min())
+        return float(np.min(np.asarray(parts)))
 
     def max(self, a: int, b: int) -> float:
-        return self._q(a, b, np.max, lambda s: self.bmax[s].max())
+        if b < a:
+            return np.nan
+        x, B = self.x, self.B
+        if b - a < 2 * B:
+            return float(x[a:b + 1].max())
+        ba, bb = a // B + 1, b // B
+        parts = [x[a:ba * B].max(), x[bb * B:b + 1].max()]
+        if bb > ba:
+            parts.append(self.bmax[ba:bb].max())
+        return float(np.max(np.asarray(parts)))
 
 
 def first_where(x: np.ndarray, a: int, b: int, below: float | None = None, above: float | None = None) -> int:

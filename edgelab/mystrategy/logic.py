@@ -378,10 +378,25 @@ class Rules:
             g = fvgs(t, "bull", self.s["key.fvg_min_points"])
             hi = np.searchsorted(g.known, at, side="left")       # known < at  (g.known is non-decreasing with k)
             lo = max(0, hi - 40)
-            for gi in range(hi - 1, lo - 1, -1):
-                if g.bottom[gi] <= price <= g.top[gi] and self._close_through(v, tf, "bull", gi, g, True) >= at:
+            # ADR-97 speed: the price-inside test for the 40 candidates at once, then the same newest-first order
+            inside = np.flatnonzero((g.bottom[lo:hi] <= price) & (price <= g.top[lo:hi]))
+            for gi in (lo + inside[::-1]).tolist():
+                if self._close_through(v, tf, "bull", gi, g, True) >= at:
                     return tf, gi, float(g.top[gi]), float(g.bottom[gi])
         return None
+
+    def _recent_swing_lows(self, v: View, t: TF, start: int) -> list:
+        """Swing-low indices (strength 2) known before ``start`` whose candle ended in the last two days, newest first,
+        at most 30. ADR-97 speed: both swing arrays are sorted (known = completion of a later candle, non-decreasing),
+        so two binary searches give exactly the indices the earlier full scan selected, in the same order."""
+        sw = swings(t, 2)["lo"]
+        key = ("swend", t.tf)
+        ends = v.memo.get(key)
+        if ends is None:
+            ends = v.memo[key] = t.end[sw[0]]
+        a = int(np.searchsorted(ends, start - 2880, side="left"))
+        b = int(np.searchsorted(sw[2], start, side="left"))
+        return list(range(b - 1, max(a, b - 30) - 1, -1)) if b > a else []
 
     def _cisd_at(self, v: View, t: TF, q: int) -> dict | None:
         """The CISD completed by candle ``q`` of ``t`` (q = first candle after a down-close series), or None. Depends
@@ -520,8 +535,7 @@ class Rules:
         sw = swings(t, 2)["lo"]
         low = float(v.l[m])
         swept, equal = None, None
-        sel = np.flatnonzero((sw[2] < start) & (t.end[sw[0]] >= start - 2880))     # the last two days
-        for jj in sel[::-1][:30]:
+        for jj in self._recent_swing_lows(v, t, start):     # the last two days
             price = float(sw[1][jj])
             bar_end = int(t.end[int(sw[0][jj])])
             if bar_end + 1 <= start - 1 and v.rq_l.min(bar_end + 1, start - 1) < price:
@@ -545,9 +559,8 @@ class Rules:
         tf = LBL[self.s["leg.sweep_tf"]]
         t = v.tf[tf]
         sw = swings(t, 2)["lo"]
-        sel = np.flatnonzero((sw[2] < start) & (t.end[sw[0]] >= start - 2880))
         ref = None
-        for jj in sel[::-1][:30]:
+        for jj in self._recent_swing_lows(v, t, start):
             k = int(sw[0][jj])
             price, bar_end = float(sw[1][jj]), int(t.end[k])
             if bar_end + 1 <= start - 1 and v.rq_l.min(bar_end + 1, start - 1) < price:
@@ -590,11 +603,11 @@ class Rules:
             t = v.tf[LBL[s["eq.tf"]]]
             sw = swings(t, s["eq.swing_strength"])
             hs, ls = sw["hi"], sw["lo"]
-            ih = np.flatnonzero(hs[2] < m)
-            il = np.flatnonzero(ls[2] < m)
-            if not len(ih) or not len(il):
+            ih = int(np.searchsorted(hs[2], m, side="left")) - 1      # last swing known before m (sorted, ADR-97)
+            il = int(np.searchsorted(ls[2], m, side="left")) - 1
+            if ih < 0 or il < 0:
                 return None
-            hi, lo = float(hs[1][ih[-1]]), float(ls[1][il[-1]])
+            hi, lo = float(hs[1][ih]), float(ls[1][il])
         if not hi > lo:
             return None
         eq = lo + s["eq.level"] * (hi - lo)
@@ -973,12 +986,21 @@ class Rules:
                 last_exit = i
                 continue
             entry_kind, entry_level, stop, target, be_level, expl = res
-            sig.direction[i] = v.d
-            sig.stop_price[i] = v.px(stop)
-            sig.target_price[i] = v.px(target)
-            if entry_kind != "market":
-                sig.entry_price[i] = v.px(entry_level)
-            exit_bar, cls = self._sim(v, i, entry_kind, entry_level, stop, target, be_level, lvl)
+            if s["models.flip"]:              # ADR-97: the opposite trade (market entry, no breakeven / trailing)
+                w = self.views[-v.d]
+                sig.direction[i] = w.d
+                sig.stop_price[i] = v.px(target)
+                sig.target_price[i] = v.px(stop)
+                exit_bar, cls = self._sim(w, i, "market", math.nan, -target, -stop, math.nan, np.full(1, np.nan))
+                self._flip_explain(expl, v, w, i, stop, target)
+                self.stats["signals_flipped"] += 1
+            else:
+                sig.direction[i] = v.d
+                sig.stop_price[i] = v.px(stop)
+                sig.target_price[i] = v.px(target)
+                if entry_kind != "market":
+                    sig.entry_price[i] = v.px(entry_level)
+                exit_bar, cls = self._sim(v, i, entry_kind, entry_level, stop, target, be_level, lvl)
             if cls == "none":
                 self.stats["signals_not_filled_in_own_tracking"] += 1
             else:
@@ -990,6 +1012,23 @@ class Rules:
             self.explain[i] = expl
             self.stats["signals"] += 1
             day_info["trades"] += 1
+
+    @staticmethod
+    def _flip_explain(expl: dict, v: View, w: View, i: int, stop: float, target: float) -> None:
+        """The explanation of a flipped trade: the setup as found, then the trade actually sent (direction, stop,
+        target swapped). Prices of the actual trade are real prices."""
+        entry = float(w.ent_c[i])                    # the flipped side's close (a short sells on BID, a long buys on ASK)
+        f_stop, f_target = -target, -stop            # in the flipped view's world
+        risk = entry - f_stop
+        expl["flip"] = {"setup_direction": v.d, "setup_stop": expl["stop"]["price"],
+                        "setup_target": expl["target"]["price"], "setup_r_planned": expl["target"]["r_planned"]}
+        expl["direction"] = w.d
+        expl["entry"] = {**expl["entry"], "reference_price": w.px(entry)}
+        expl["stop"] = {**expl["stop"], "mode": "flipped: the setup's target", "price": w.px(f_stop),
+                        "widened_to_minimum": False, "risk_points": round(risk, 2)}
+        expl["target"] = {**expl["target"], "price": w.px(f_target), "source": "flipped: the setup's stop",
+                          "r_planned": round((f_target - entry) / risk, 2) if risk > 0 else None}
+        expl["breakeven"] = {"mode": "off", "level": None}
 
     def _order(self, v: View, su: Setup, trg: dict, i: int, day: dict, bias: dict, chop) -> tuple | None:
         s, st = self.s, self.stats
