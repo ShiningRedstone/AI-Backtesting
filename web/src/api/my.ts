@@ -141,6 +141,7 @@ export interface AutotuneStatus {
     config_ok?: boolean; trial_budget?: number; holdout_looks?: number; trials_used?: number };
   design: AutotuneDesign; done: number; failed: number; run: AutotuneRun; median_seconds: number | null; cpu_count: number;
   processes_default: number; criteria_profile: string | null; es: { imported?: boolean; first?: string; last?: string } | null;
+  rules_version?: number; set_aside?: number;
 }
 export interface AutotunePoint { n: number; label: string; stage: string; options: string[]; trade_count: number; win_rate: number | null;
   expectancy_r: number | null; net_r: number | null; net_usd: number | null; trades_per_week: number | null; profit_factor: number | null;

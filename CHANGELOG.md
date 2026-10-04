@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy: rule fix, faster autotuner, TradingView-like charts (ADR-98)
+
+| Item | Status |
+|---|---|
+| Rule fix: a cached "first touched / closed through" value could belong to another gap list (unfilled-gap draws and targets, key levels with the chop filter) | IMPLEMENTED, TESTED |
+| Results change for some settings (synthetic sample: 18 of 72 combinations); earlier My strategy results were computed with the bug | DISCLOSED |
+| Autotuner: results of the old rule code set aside and run again (same tries, not counted twice) | IMPLEMENTED, TESTED |
+| Autotuner speed: measured memory plan (16 instead of 6 cores with 19.3 GB free), one shared copy of the price data, high priority, reuse of work between combinations when cores are the limit | IMPLEMENTED, TESTED (identical results) |
+| Charts: daily-tab crash fixed; move freely past the newest / oldest candle; drag up and down; "A" automatic price scale; crosshair with price and time labels; OHLC legend; wheel zoom at the mouse | IMPLEMENTED (browser test) |
+| Speed on your PC | REQUIRES REAL DATA (depends on free memory) |
+| Engine, fills, costs, sizing, prop rules, configs, design of the 10,000 | UNCHANGED |
+
 ## Version 0.5.0: Strategy autotuner and flipped trades (ADR-97)
 
 | Item | Status |

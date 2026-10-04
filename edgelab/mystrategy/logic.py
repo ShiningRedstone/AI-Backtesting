@@ -23,6 +23,41 @@ from edgelab.mystrategy.frames import (NEVER, TF, TF_LABEL, Base, Gaps, RangeQ, 
                                        fvgs, swings)
 from edgelab.mystrategy.params import minutes
 
+# ADR-98: version of the rule code. 2 = cached gap results keyed by their gap list (before, a gap number of one list
+# could return another list's "first touched" / "closed through" bar). Part of the strategy id, never of the settings hash.
+RULES_VERSION = 2
+
+# ADR-98 speed: results of the zone helpers (first touch, close through, CISD, rejection block, NWOG, swing ends) depend
+# only on the exact bars, the price series and the few settings in their keys. Worker processes of the Strategy autotuner
+# test many combinations on the SAME bars (and the same 22 lookahead-check histories, whose cut points are fixed), so they
+# keep these results between combinations: key = (content hash of the bars, price series), bounded by an entry budget,
+# oldest dropped first. Off (0) everywhere else. A hit returns exactly what the computation would return.
+from collections import OrderedDict  # noqa: E402
+
+_SHARED_MEMO: "OrderedDict[tuple, dict]" = OrderedDict()
+_SHARED_MEMO_MAX = 0
+
+
+def enable_shared_memo(max_entries: int) -> None:
+    global _SHARED_MEMO_MAX
+    _SHARED_MEMO_MAX = max(0, int(max_entries))
+    _SHARED_MEMO.clear()
+
+
+def _shared_memo_for(bars, series: str) -> dict | None:
+    if _SHARED_MEMO_MAX <= 0:
+        return None
+    key = (bars.content_hash(), len(bars), series)
+    entry = _SHARED_MEMO.pop(key, None)
+    if entry is None:
+        entry = {1: {}, -1: {}}
+    _SHARED_MEMO[key] = entry                                  # most recently used last
+    total = sum(len(e[1]) + len(e[-1]) for e in _SHARED_MEMO.values())
+    while total > _SHARED_MEMO_MAX and len(_SHARED_MEMO) > 1:
+        old = _SHARED_MEMO.pop(next(iter(_SHARED_MEMO)))
+        total -= len(old[1]) + len(old[-1])
+    return entry
+
 IFG_TFS = (1, 2, 3, 4, 5)
 KEY_TFS = {"3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240}
 BIAS_TFS = {"1d": 1440, "4h": 240, "1h": 60, "15m": 15}
@@ -109,6 +144,13 @@ class Rules:
             -1: View(-1, -b.o, -b.l, -b.h, -b.c, -bid[0], -bid[1], -bid[3], -ex_s[2], -ex_s[1], -ex_s[3],
                      {t: _neg_tf(x) for t, x in base_tf.items()}),
         }
+        shared = _shared_memo_for(bars, s["models.price_series"])
+        if shared is not None:
+            for d, v in self.views.items():
+                v.memo = shared[d]
+        key_sig = (tuple(self._key_tfs()), float(s["key.fvg_min_points"]), bool(s["key.invalidate_on_close"]))
+        self._cisd_sig = ("cisd", int(s["key.cisd_max_candles"])) + key_sig       # every setting _cisd_at reads
+        self._rb_sig = ("rb", float(s["key.rb_wick_ratio"])) + key_sig            # every setting _rb_at reads
         for v in self.views.values():
             v.rq_l, v.rq_h = RangeQ(v.l), RangeQ(v.h)
         # ES (ADR-95): aligned to these bars by exact bar-open minute (NaN = no ES bar). Index i only ever holds the ES
@@ -125,7 +167,7 @@ class Rules:
     def _first_touch(self, v: View, tf: int, side: str, gi: int, g: Gaps, below: bool) -> int:
         """First 1m bar after the gap exists that trades into it (memoized; the caller compares with its decision
         bar, so a touch found after it never influences a decision)."""
-        key = ("touch", tf, side, gi)
+        key = ("touch", tf, g.list_key, gi)       # ADR-98: gap numbers belong to ONE list (side + minimum size)
         hit = v.memo.get(key)
         if hit is None:
             a = int(g.known[gi]) + 1
@@ -138,7 +180,7 @@ class Rules:
 
     def _close_through(self, v: View, tf: int, side: str, gi: int, g: Gaps, down: bool) -> int:
         """Bar index at which a candle of the gap's timeframe is known to have CLOSED beyond its far edge."""
-        key = ("thru", tf, side, gi)
+        key = ("thru", tf, g.list_key, gi)
         hit = v.memo.get(key)
         if hit is None:
             t = v.tf[tf]
@@ -401,7 +443,7 @@ class Rules:
     def _cisd_at(self, v: View, t: TF, q: int) -> dict | None:
         """The CISD completed by candle ``q`` of ``t`` (q = first candle after a down-close series), or None. Depends
         only on q (memoized across days); callers compare its ``known`` / ``inval`` indices with their own bars."""
-        key = ("cisd", t.tf, q)
+        key = (self._cisd_sig, t.tf, q)
         if key in v.memo:
             return v.memo[key]
         s = self.s
@@ -449,7 +491,7 @@ class Rules:
         return out
 
     def _rb_at(self, v: View, t: TF, q: int) -> tuple | None:
-        key = ("rb", t.tf, q)
+        key = (self._rb_sig, t.tf, q)
         if key in v.memo:
             return v.memo[key]
         s = self.s

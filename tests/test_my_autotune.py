@@ -200,3 +200,99 @@ class TestAutotuneRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAdr98(unittest.TestCase):
+    """ADR-98: the cached-gap fix, results of the old rules set aside, and the speed-ups giving identical results."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_my_strategy import CAL, random_ds
+        cls.cal = CAL
+        cls.ds = random_ds("2024-01-07", "2024-03-15", seed=4)
+
+    def test_cached_gap_results_belong_to_their_list(self):
+        from edgelab.mystrategy.frames import first_where, fvgs
+        from edgelab.mystrategy.logic import Rules
+        r = Rules(self.ds.bars, self.cal, P.resolve(A.BASE))
+        v = r.views[1]
+        t = v.tf[60]
+        lists = [fvgs(t, "bear", 1.0), fvgs(t, "bear", 2.0), fvgs(t, "bear", 5.0)]
+        self.assertNotEqual(len(lists[0].k), len(lists[2].k))
+        for g in lists + lists[::-1]:                       # mixed order: a cached value never leaks between lists
+            for gi in range(len(g.k)):
+                want = first_where(v.h, int(g.known[gi]) + 1, r.n - 1, above=float(g.bottom[gi]))
+                got = r._first_touch(v, 60, "bear", gi, g, below=False)
+                self.assertTrue(got == want or (want < 0 and got > r.n))
+
+    def test_reuse_between_combinations_is_identical(self):
+        from edgelab.engine.signals import check_causality
+        from edgelab.mystrategy import logic as L
+        from edgelab.mystrategy.strategy import MyStrategy
+        rows = [r for r in A.manifest()["rows"][::997] if not P.smt_used(P.resolve(r["overrides"]))][:6]
+
+        def fp(over):
+            st = MyStrategy(over, self.cal)
+            sig = st.generate_signals(self.ds.bars)
+            rep = check_causality(st, self.ds.bars, n_cuts=6)
+            return (sig.direction.tobytes(), sig.stop_price.tobytes(), sig.target_price.tobytes(), rep.passed,
+                    repr(sorted(st.explanations.items())))
+        fresh = [fp(r["overrides"]) for r in rows]
+        try:
+            L.enable_shared_memo(5_000_000)
+            reused = [fp(r["overrides"]) for r in rows]
+            self.assertGreater(sum(len(e[1]) + len(e[-1]) for e in L._SHARED_MEMO.values()), 0)
+        finally:
+            L.enable_shared_memo(0)
+        self.assertEqual(fresh, reused)
+        self.assertTrue(all(f[3] for f in fresh))
+
+    def test_shared_price_data(self):
+        from edgelab.mystrategy import autotune as AT
+        shm, payload = AT.share_dataset(self.ds)
+        self.assertIsNotNone(shm)
+        try:
+            ds2, h = AT._attach(payload)
+            self.assertEqual(ds2.bars.content_hash(), self.ds.bars.content_hash())
+            self.assertFalse(ds2.bars.close.flags.writeable)
+            self.assertEqual(ds2.manifest.content_hash, self.ds.manifest.content_hash)
+            del ds2
+            h.close()
+        finally:
+            shm.close()
+            shm.unlink()
+
+    def test_worker_plan(self):
+        from edgelab.mystrategy import autotune as AT
+
+        gb = 2 ** 30
+        pl = AT.plan_workers(31, self.ds, True, available=int(19.3 * gb))
+        self.assertTrue(pl["limited_by_memory"])
+        self.assertGreater(pl["processes"], 6)                   # the old plan's 6
+        self.assertEqual(pl["memo_entries"], 0)                  # memory-bound: no reuse memory
+        roomy = AT.plan_workers(4, self.ds, True, available=64 * gb)
+        self.assertEqual(roomy["processes"], 4)
+        self.assertGreater(roomy["memo_entries"], 0)             # core-bound: spare memory reused
+        self.assertLessEqual(AT.plan_workers(31, self.ds, False, available=int(19.3 * gb))["processes"], pl["processes"])
+
+    def test_old_results_are_set_aside(self):
+        import json
+
+        from edgelab.mystrategy import autotune as AT
+        root = Path(tempfile.mkdtemp())
+        try:
+            class S:
+                data_root = root
+            svc = S()
+            AT.home(svc)
+            p = AT._results_path(svc)
+            p.write_text(json.dumps({"n": 1, "metrics": {}}) + "\n" +
+                         json.dumps({"n": 2, "metrics": {}, "rules_version": AT.RULES_VERSION}) + "\n")
+            self.assertEqual(set(AT.read_results(svc)), {2})        # old-rules result not counted as done
+            self.assertEqual(AT._old_lines(svc), 1)
+            self.assertEqual(AT.set_aside_old(svc), 1)
+            self.assertEqual(AT.set_aside_count(svc), 1)
+            self.assertEqual(AT._old_lines(svc), 0)
+            self.assertEqual(set(AT.read_results(svc)), {2})
+        finally:
+            shutil.rmtree(root, ignore_errors=True)

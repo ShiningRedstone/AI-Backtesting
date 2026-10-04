@@ -2602,3 +2602,39 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   Flipped trades say so in "Why it entered".
 - **Version 0.5.0** (`edgelab.__version__`, web/package.json, package-lock.json, bundle).
 - **Unchanged:** engine, fills, costs, sizing, prop rules, configs, every earlier settings hash and its trades.
+
+### ADR-98 My strategy: cached-gap rule fix, faster Strategy autotuner, TradingView-like charts
+- **Request (user):** make the autotuner faster ("overclock"); fix the daily chart that turned the app black; charts that
+  move freely like TradingView (the newest candle need not stick to the right edge). Choices: both speed-ups, measured;
+  maximum speed at high priority; crosshair with labels, an auto-scale "A" button, an OHLC legend top-left; wheel zoom
+  around the candle under the mouse; fix the bug below and restart the autotuner.
+- **Rule bug fixed (found while working on the speed-ups):** `Rules._first_touch` / `_close_through` cached their answer
+  per (timeframe, side, gap number), but gap numbers are positions in ONE gap list and the rules use lists with different
+  minimum sizes (bias `bias.fvg_min_points`, unfilled-gap draws / targets 1 point, chop 0, key levels
+  `key.fvg_min_points`). Whichever rule asked first filled the slot for the other (about 1,900 wrong lookups a year with
+  test 37: the 1h / 4h "first touched" times behind unfilled-gap draws and targets; with the chop filter also 5m / 15m key
+  levels' "closed through"). Keys now carry the list (`Gaps.list_key` = side, minimum size, same-session). Results change
+  for some settings (synthetic sample: 18 of 72 design combinations had different signals); every earlier My strategy
+  result was computed with the bug. `logic.RULES_VERSION = 2` is part of the strategy id (never of the settings hash, so
+  trial keys are unchanged: re-testing the same settings is not a new try). Autotuner results now carry `rules_version`;
+  results of older rule code are set aside into `results_rules_v1.jsonl` at the next start (kept, not shown) and run again.
+- **Speed (identical results; tests/test_my_autotune.py `TestAdr98`):**
+  - measured worker plan (`autotune.plan_workers`): a worker on 4 years of 1-minute data peaks at about 970 MB (about
+    820 MB program + data); 80% of the free memory minus 1 GB for the app (was the research runs' 70% and ~1.9 GB per
+    worker): with 19.3 GB free and 31 cores, 16 workers instead of 6;
+  - ONE shared copy of the bars (`share_dataset` / `_attach`: a shared-memory block, read-only views in every worker,
+    `verify_unchanged()` re-checks the content hash; falls back to a copy per worker);
+  - workers at high priority on Windows (`SetPriorityClass` HIGH, the user's choice);
+  - reuse of zone results between combinations (`logic.enable_shared_memo`, off by default): first-touch, close-through,
+    CISD, rejection-block, NWOG and swing-end results keyed by (bars content hash, price series) plus every setting the
+    computation reads (`_cisd_sig`, `_rb_sig`); the lookahead check's 21 cut points are fixed (seed), so every combination
+    revisits the same histories. About 1.5x faster per combination but ~1.1 KB per bar more memory, so the plan uses it
+    only when cores, not memory, limit the run. A worker crash restarts with half the workers and no reuse.
+- **Charts** (`web/src/components/candles.tsx`): the view is a continuous range of candle slots that may extend into empty
+  space before the first / after the last candle (at least 3 candles stay visible; `clampView` also guards every stored
+  view against other candles: the daily-tab crash was a view from a longer candle list indexing past the end); dragging
+  up / down switches the price scale to manual, the "A" button (bottom right) back to automatic; crosshair with price and
+  date-time labels on the scales; OHLC legend top-left (the candle under the mouse, else the last visible one); wheel
+  zoom around the mouse; drags continue outside the chart.
+- **Unchanged:** engine, fills, costs, sizing, prop rules, configs, the autotuner design (fingerprint 8d25af78c52d731d),
+  settings hashes and trial keys.

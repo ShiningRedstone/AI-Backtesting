@@ -153,6 +153,8 @@ class Gaps:
     top: np.ndarray
     bottom: np.ndarray
     known: np.ndarray        # bar index at which the gap exists (completion of candle k)
+    # ADR-98: which list this is (gap numbers are positions IN this list; lists with another minimum size differ)
+    list_key: tuple = ()
 
 
 def fvgs(t: TF, side: str, min_points: float = 0.0, same_session: bool = True) -> Gaps:
@@ -164,7 +166,7 @@ def fvgs(t: TF, side: str, min_points: float = 0.0, same_session: bool = True) -
         return hit
     m = len(t)
     if m < 3:
-        g = Gaps(*(np.zeros(0, np.int64),), np.zeros(0), np.zeros(0), np.zeros(0, np.int64))
+        g = Gaps(*(np.zeros(0, np.int64),), np.zeros(0), np.zeros(0), np.zeros(0, np.int64), list_key=key)
         t._fvgs[key] = g
         return g
     k = np.arange(2, m)
@@ -176,7 +178,8 @@ def fvgs(t: TF, side: str, min_points: float = 0.0, same_session: bool = True) -
     if same_session and t.tf < 1440:
         ok &= t.td[2:] == t.td[:-2]
     sel = np.flatnonzero(ok)
-    g = Gaps(k[sel].astype(np.int64), top[sel].astype(np.float64), bottom[sel].astype(np.float64), t.comp[k[sel]])
+    g = Gaps(k[sel].astype(np.int64), top[sel].astype(np.float64), bottom[sel].astype(np.float64), t.comp[k[sel]],
+             list_key=key)
     t._fvgs[key] = g
     return g
 

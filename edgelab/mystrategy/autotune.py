@@ -27,11 +27,14 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 
 from edgelab.mystrategy import autotune_space as A
 from edgelab.mystrategy import params as P
 from edgelab.mystrategy import runner as R
+from edgelab.core.fsutil import atomic_write_text
+from edgelab.mystrategy.logic import RULES_VERSION
 
 TRIAL_BUDGET = A.TOTAL
 HOLDOUT_LOOKS = 1
@@ -120,8 +123,13 @@ def _results_path(svc) -> Path:
     return home(svc) / "results.jsonl"
 
 
+def _version_of(r: dict) -> int:
+    return int(r.get("rules_version") or 1)            # lines written before ADR-98 carry no version: rules 1
+
+
 def read_results(svc) -> dict[int, dict]:
-    """Latest result per combination number (a later line for the same number replaces an earlier failed one)."""
+    """Latest result per combination number (a later line for the same number replaces an earlier failed one). Only
+    results of the CURRENT rule code count (ADR-98): older ones were computed with the cached-gap bug."""
     out: dict[int, dict] = {}
     p = _results_path(svc)
     if not p.exists():
@@ -132,8 +140,56 @@ def read_results(svc) -> dict[int, dict]:
                 r = json.loads(line)
             except ValueError:                  # a line being written right now
                 continue
-            out[int(r["n"])] = r
+            if _version_of(r) == RULES_VERSION:
+                out[int(r["n"])] = r
     return out
+
+
+def set_aside_old(svc) -> int:
+    """Move results of older rule code out of results.jsonl into results_rules_v<k>.jsonl (kept, never shown).
+    Returns how many lines were moved. Called by the run before it starts (the parent is the only writer)."""
+    p = _results_path(svc)
+    if not p.exists():
+        return 0
+    keep, old = [], {}
+    with _FILE_LOCK:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            v = _version_of(r)
+            (keep if v == RULES_VERSION else old.setdefault(v, [])).append(line)
+        if not old:
+            return 0
+        for v, lines in old.items():
+            with open(home(svc) / f"results_rules_v{v}.jsonl", "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        atomic_write_text(p, "".join(x + "\n" for x in keep))
+    return sum(len(x) for x in old.values())
+
+
+def _old_lines(svc) -> int:
+    """Results of older rule code still in results.jsonl (until the next start sets them aside)."""
+    p = _results_path(svc)
+    if not p.exists():
+        return 0
+    n = 0
+    with open(p, encoding="utf-8") as f:
+        for line in f:
+            try:
+                n += _version_of(json.loads(line)) != RULES_VERSION
+            except ValueError:
+                continue
+    return n
+
+
+def set_aside_count(svc) -> int:
+    n = 0
+    for f in home(svc).glob("results_rules_v*.jsonl"):
+        with open(f, encoding="utf-8") as fh:
+            n += sum(1 for line in fh if line.strip())
+    return n
 
 
 def _append(svc, row: dict) -> None:
@@ -147,14 +203,115 @@ def _append(svc, row: dict) -> None:
 # =============================================================================================== worker processes
 _W: dict = {}
 
+# ADR-98 speed. Measured on 4 years of 1-minute data (1.39 M bars, 106 MB): one worker peaks at about 970 MB = about
+# 820 MB for the program + its own copy of the bars + working memory. Shared bars (one copy for every worker) leave
+# about half a dataset per worker. Reusing zone results between combinations (logic.enable_shared_memo) needs about
+# 200 bytes per result and about 1.1 KB per bar for a whole combination's set; it is worth it only when CPU cores,
+# not memory, limit the run (it makes a combination ~1.5x faster but needs ~1.5 GB more per worker).
+WORKER_BASE_MB = 820
+USABLE_SHARE = 0.80                  # of the memory free at the start (the user chose maximum speed)
+PARENT_RESERVE_MB = 1024
+MEMO_BYTES_PER_ENTRY = 200
+MEMO_MB_PER_BAR = 0.0011
+HIGH_PRIORITY_CLASS = 0x00000080     # Windows
 
-def _worker_init(cfg: dict, ds, es, root: str, win: tuple, td_from: int, truncation_cache_mb=None,
-                 derived_cache_mb=None) -> None:
-    if truncation_cache_mb is not None:
-        os.environ["EDGELAB_CAUSALITY_CACHE_MB"] = str(int(truncation_cache_mb))
-    if derived_cache_mb is not None:
-        os.environ["EDGELAB_DERIVED_CACHE_MB"] = str(int(derived_cache_mb))
-    _W.update(cfg=cfg, ds=ds, es=es, root=root, win=win, td_from=td_from)
+
+def plan_workers(requested: int, ds, shared: bool, available: int | None = None) -> dict:
+    """How many worker processes fit, and whether each keeps zone results between combinations."""
+    from edgelab.research.memory import dataset_bytes, system_memory
+    requested = max(1, int(requested))
+    if available is None:
+        _, available = system_memory()
+    ds_mb = dataset_bytes(ds) / 2 ** 20
+    worker_mb = WORKER_BASE_MB + (0.5 if shared else 1.5) * ds_mb
+    if not available:
+        return {"processes": requested, "requested": requested, "limited_by_memory": False, "memo_entries": 0,
+                "worker_mb": round(worker_mb), "available_gb": None}
+    usable = max(0.0, USABLE_SHARE * available / 2 ** 20 - PARENT_RESERVE_MB)
+    fit = max(1, int(usable // worker_mb))
+    n = min(requested, fit)
+    memo_entries = 0
+    spare = (usable - n * worker_mb) / n if n else 0
+    need = MEMO_MB_PER_BAR * len(ds.bars)
+    if n == requested and spare >= need:                 # cores are the limit: spend spare memory on reuse
+        memo_entries = int(spare * 2 ** 20 / MEMO_BYTES_PER_ENTRY)
+    return {"processes": n, "requested": requested, "limited_by_memory": n < requested, "memo_entries": memo_entries,
+            "worker_mb": round(worker_mb), "available_gb": round(available / 2 ** 30, 1)}
+
+
+def plan_note(pl: dict, shared: bool) -> str:
+    free = f"{pl['available_gb']} GB free" if pl.get("available_gb") is not None else "free memory unknown"
+    head = (f"{pl['processes']} of {pl['requested']} CPU cores: limited by memory ({free})" if pl["limited_by_memory"]
+            else f"{pl['processes']} CPU core{'s' if pl['processes'] != 1 else ''} ({free})")
+    extra = ["high priority", "price data shared" if shared else "price data copied per core"]
+    if pl["memo_entries"]:
+        extra.append("reusing work between combinations")
+    return head + " · " + ", ".join(extra)
+
+
+def share_dataset(ds):
+    """(shared memory block or None, payload for the workers). The bars go into ONE shared block; the workers attach
+    read-only views to it. Falls back to a normal copy per worker if shared memory is not available."""
+    import copy
+    from multiprocessing import shared_memory
+    names = ("ts_ns", "open", "high", "low", "close", "volume", "spread", "ask_open", "ask_high", "ask_low", "ask_close")
+    try:
+        arrays = {k: getattr(ds.bars, k) for k in names if getattr(ds.bars, k, None) is not None}
+        layout, off = [], 0
+        for k, a in arrays.items():
+            layout.append((k, a.dtype.str, int(a.shape[0]), off))
+            off += (a.nbytes + 63) // 64 * 64
+        shm = shared_memory.SharedMemory(create=True, size=max(off, 64))
+        for (k, dt, n, o), a in zip(layout, arrays.values()):
+            view = np.ndarray((n,), dtype=np.dtype(dt), buffer=shm.buf, offset=o)
+            view[:] = a
+            del view
+        shell = copy.copy(ds)
+        object.__setattr__(shell, "bars", None)
+        return shm, {"shm": shm.name, "layout": layout, "tf_minutes": ds.bars.tf_minutes, "shell": shell}
+    except Exception:                                    # noqa: BLE001 - fall back: every worker gets its own copy
+        return None, {"ds": ds}
+
+
+def _attach(payload: dict):
+    if "ds" in payload:
+        return payload["ds"], None
+    import copy
+    from multiprocessing import shared_memory
+
+    from edgelab.data.schema import BarArrays
+    shm = shared_memory.SharedMemory(name=payload["shm"])  # the parent owns the block and frees it after the run
+    arrays = {}
+    for k, dt, n, o in payload["layout"]:
+        a = np.ndarray((n,), dtype=np.dtype(dt), buffer=shm.buf, offset=o)
+        a.flags.writeable = False
+        arrays[k] = a
+    bars = BarArrays(tf_minutes=payload["tf_minutes"], **arrays)
+    ds = copy.copy(payload["shell"])
+    object.__setattr__(ds, "bars", bars)
+    ds.verify_unchanged()                                # the shared bars ARE the validated bars (content hash)
+    return ds, shm
+
+
+def _raise_priority() -> None:
+    try:
+        if os.name == "nt":
+            import ctypes
+            k = ctypes.windll.kernel32
+            k.SetPriorityClass(k.GetCurrentProcess(), HIGH_PRIORITY_CLASS)
+    except Exception:                                    # noqa: BLE001 - priority is a convenience, never required
+        pass
+
+
+def _worker_init(cfg: dict, data, es, root: str, win: tuple, td_from: int, memo_entries: int = 0,
+                 high_priority: bool = False) -> None:
+    from edgelab.mystrategy import logic as L
+    ds, shm = _attach(data) if isinstance(data, dict) else (data, None)
+    if memo_entries:
+        L.enable_shared_memo(memo_entries)
+    if high_priority:
+        _raise_priority()
+    _W.update(cfg=cfg, ds=ds, es=es, root=root, win=win, td_from=td_from, shm=shm)
 
 
 def evaluate(cfg: dict, ds, es, root, win: tuple, td_from: int, overrides: dict) -> dict:
@@ -252,12 +409,6 @@ class Run:
             self._set(running=False, stopping=False, finished_at=R._now())
 
     def _run(self, svc, processes: int, lock) -> None:
-        import multiprocessing
-        from collections import deque
-        from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-        from concurrent.futures.process import BrokenProcessPool
-
-        from edgelab.research import memory as M
         from edgelab.research import protocol as rp
         guard = lock if lock is not None else nullcontext()
         self._set(step="Checking the protocol and the design")
@@ -270,6 +421,9 @@ class Run:
         if man["manifest_hash"] != A.manifest()["manifest_hash"]:
             raise R.MyStrategyError("DESIGN_CHANGED", "The frozen design differs from this app version's design; it "
                                                       "cannot be continued with this version.")
+        moved = set_aside_old(svc)                       # ADR-98: results of the old rule code start again
+        if moved:
+            self._set(set_aside_now=moved)
         done = {n for n, r in read_results(svc).items() if "error" not in r}
         todo = [r for r in man["rows"] if r["n"] not in done]
         self._set(total=man["total"], done_before=len(done))
@@ -302,17 +456,33 @@ class Run:
             if used + new > mat["trial_budget"]["max_unique_trials"]:
                 raise R.MyStrategyError("TRIAL_BUDGET_EXHAUSTED", f"{new} new tries would exceed the autotuner's budget "
                                                                   f"({used} of {mat['trial_budget']['max_unique_trials']} used).")
-        mp = M.plan(max(1, int(processes)), [ds])
-        n_workers = mp.processes
-        self._set(processes=n_workers, memory_note=mp.note, step="Running")
+        shm, payload = share_dataset(ds)
+        shared = shm is not None
+        pl = plan_workers(processes, ds, shared)
+        n_workers, memo = pl["processes"], pl["memo_entries"]
+        self._set(processes=n_workers, memory_note=plan_note(pl, shared), memory_plan=pl, step="Running")
+        try:
+            self._pool_loop(svc, mine, todo, ds, es, payload, n_workers, memo, start, end, td_from, lock)
+        finally:
+            if shm is not None:
+                shm.close()
+                try:
+                    shm.unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _pool_loop(self, svc, mine, todo, ds, es, payload, n_workers, memo, start, end, td_from, lock) -> None:
+        import multiprocessing
+        from collections import deque
+        from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+        from concurrent.futures.process import BrokenProcessPool
         win = (start, end)
         queue = deque(todo)
         restarts = 0
         while queue and not self._stop.is_set():
             pool = ProcessPoolExecutor(max_workers=n_workers, mp_context=multiprocessing.get_context("spawn"),
                                        initializer=_worker_init,
-                                       initargs=(dict(svc.cfg), ds, es, str(svc.root), win, td_from,
-                                                 mp.truncation_cache_mb, mp.derived_cache_mb))
+                                       initargs=(dict(svc.cfg), payload, es, str(svc.root), win, td_from, memo, True))
             inflight: dict = {}
             broken = False
             try:
@@ -339,7 +509,7 @@ class Run:
                 pool.shutdown(wait=True, cancel_futures=True)
             if broken:
                 restarts += 1
-                n_workers = max(1, n_workers // 2)
+                n_workers, memo = max(1, n_workers // 2), 0      # fewer workers, no reuse memory
                 self._set(processes=n_workers, restarts=restarts,
                           memory_note=f"A worker process stopped; continuing with {n_workers} core(s).")
                 if restarts > 4:
@@ -368,7 +538,7 @@ class Run:
                 "cost_scenario": mat["execution"].get("cost_scenario"), "proposal_id": None, "search_id": None,
                 "run_id": None, "error": None if not failed else json.dumps(out["error"])[:500], "created_at": R._now()})
         out.pop("pid", None)
-        _append(svc, {**out, "n": row["n"], "settings_hash": h, "finished_at": R._now(),
+        _append(svc, {**out, "n": row["n"], "settings_hash": h, "finished_at": R._now(), "rules_version": RULES_VERSION,
                       "trial_id": "TR_" + key[:12].upper(), "app_version": R._code_version()})
         with self._lock:
             self.state["failed_now" if failed else "done_now"] = self.state.get("failed_now" if failed else "done_now",
@@ -408,6 +578,7 @@ def status(svc) -> dict:
     return R.jsonable({"protocol": proto, "design": design(svc), "done": len(ok),
                        "failed": len(res) - len(ok), "run": run_of(svc).info(),
                        "median_seconds": dur[len(dur) // 2] if dur else None, "es": es,
+                       "rules_version": RULES_VERSION, "set_aside": set_aside_count(svc) + _old_lines(svc),
                        "cpu_count": os.cpu_count() or 1})
 
 

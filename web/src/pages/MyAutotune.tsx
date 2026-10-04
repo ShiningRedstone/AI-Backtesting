@@ -76,6 +76,9 @@ export function MyAutotunePage() {
       {!p.ready && <Banner tone="warn">{p.problem}</Banner>}
       {p.ready && p.config_ok === false && <Banner tone="error">The research settings differ from the protocol's. Restore them under
         Run backtest → Research runs before running the autotuner.</Banner>}
+      {(st.set_aside ?? 0) > 0 && <Banner tone="info" testId="at-set-aside">{st.set_aside} combination result{st.set_aside === 1 ? " was" : "s were"} computed
+        with the earlier rule code, which reused a cached value for the wrong gap. They are kept in a backup file but not shown, and run again with the
+        corrected rules (same tries, not counted twice).</Banner>}
       <div className="kpis" data-testid="at-kpis">
         <Kpi label="Combinations tested" value={`${done.toLocaleString()} of ${total.toLocaleString()}`} meter={done / (total || 1)}
           sub={st.failed ? `${st.failed} failed (they run again on the next start)` : "discovery period only"} accent />

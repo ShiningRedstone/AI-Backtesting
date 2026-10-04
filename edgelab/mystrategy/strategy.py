@@ -16,7 +16,7 @@ import numpy as np
 
 from edgelab.engine.signals import OrderSpec, SignalSet, Strategy
 from edgelab.mystrategy import params as P
-from edgelab.mystrategy.logic import Rules
+from edgelab.mystrategy.logic import RULES_VERSION, Rules
 
 
 def order_spec(s: dict) -> OrderSpec:
@@ -41,7 +41,8 @@ class MyStrategy(Strategy):
         s = P.resolve(settings)
         if es is None and P.smt_used(s):
             raise ValueError("these settings use SMT divergence, which needs the ES data")
-        super().__init__(order_spec(s), params_version=P.PARAMS_VERSION, settings_hash=P.settings_hash(s),
+        super().__init__(order_spec(s), params_version=P.PARAMS_VERSION, rules_version=RULES_VERSION,
+                         settings_hash=P.settings_hash(s),
                          settings=P.changed(P.identity(s)), **({"es_content_hash": es.content_hash} if es is not None and
                                                    P.smt_used(s) else {}))
         self.settings = s
