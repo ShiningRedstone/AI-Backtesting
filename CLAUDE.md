@@ -161,8 +161,10 @@ with the lookahead check, `results.jsonl` numbers only, rerun = normal My strate
 ADR-98: cached gap results keyed by their gap list (`Gaps.list_key`; `logic.RULES_VERSION` 2 in the strategy id, not the settings
 hash; old autotuner results set aside); autotuner speed (`plan_workers` measured ~1 GB/worker, shared bars via shared memory,
 high priority, `logic.enable_shared_memo` only when core-bound); charts free-pan / crosshair labels / "A" / OHLC legend.
+ADR-99: autotuner goals = workspace pref `ui.autotune_goals` (six rules `{on, value}` incl. win rate; validated; browser storage
+did not survive restarts because the desktop port changes); amber = every ticked rule met.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-98.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-99.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -443,4 +445,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-98). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-99). Update `README.md` status for phases.

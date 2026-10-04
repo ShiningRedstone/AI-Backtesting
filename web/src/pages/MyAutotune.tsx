@@ -1,17 +1,17 @@
 /* Strategy autotuner (ADR-97): 10,000 reasoned settings combinations of My strategy on the discovery period, the run
    (start / stop / resume, CPU cores), the overview scatter with free axes, the best combinations for prop payouts and a
    combination's panel (its changes from test 37 with the reasons, numbers, prop results, re-run with trades + charts). */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
 import type { AutotuneDetail, AutotunePoint, AutotunePoints, AutotuneStatus, MyJob } from "../api/my";
-import { useApi } from "../app/context";
+import { useApi, useApp } from "../app/context";
 import { go, href } from "../app/router";
 import { profileLabel } from "../app/labels";
 import { useMoney } from "../app/money";
 import { BarChart, XYScatter } from "../components/charts";
 import type { ScatterGroup, XYAxis } from "../components/charts";
-import { Badge, Banner, Button, Card, Drawer, Empty, ErrorPanel, Field, Kpi, NumberInput, PageSkeleton, Select, TableWrap,
+import { Badge, Banner, Button, Card, Checkbox, Drawer, Empty, ErrorPanel, Field, Kpi, NumberInput, PageSkeleton, Select, TableWrap,
   TechDetails, n, pct, r, signCls } from "../components/ui";
 import { JobLine, PageHead, useJob } from "./MyStrategy";
 
@@ -32,16 +32,25 @@ const METRICS: Record<MetricKey, { label: string; fmt: (v: number) => string }> 
 };
 const STAGE: Record<string, string> = { base: "Test 37 itself", single: "1 change", pair: "2 changes", triple: "3 changes", quad: "4 changes" };
 
-interface Goals { tpw: number; rr: number; maxLosing: number | null }
-const DEFAULT_GOALS: Goals = { tpw: 3, rr: 1, maxLosing: null };
+/** ADR-99: "meet your goals" = every rule that is switched on; saved in the workspace (Settings preferences), so it survives
+    restarts and updates. Display only: no backtest reads it. */
+export interface GoalRule { on: boolean; value?: number }
+export type Goals = Record<"win_rate" | "trades_per_week" | "losing_months" | "profit" | "rr" | "prop", GoalRule>;
+export const GOAL_DEFAULTS: Goals = { win_rate: { on: false, value: 70 }, trades_per_week: { on: true, value: 3 },
+  losing_months: { on: false, value: 4 }, profit: { on: true }, rr: { on: true, value: 1 }, prop: { on: true, value: 1 } };
 const load = <T,>(k: string, d: T): T => { try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; } };
 const save = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* per-viewer convenience only */ } };
 
-/** Meets your goals: trades per week, planned reward:risk, profitable, passes the prop evaluation with at least one payout
-    (Settings account), optionally at most N losing months. */
-function isGood(p: AutotunePoint, g: Goals): boolean {
-  return (p.trades_per_week ?? 0) >= g.tpw && (p.avg_planned_rr ?? 0) >= g.rr && (p.net_r ?? 0) > 0
-    && p.prop_evaluation === "PASS" && (p.prop_payouts ?? 0) >= 1 && (g.maxLosing === null || (p.months_losing ?? 99) <= g.maxLosing);
+/** True when the combination meets EVERY rule that is on. A missing number (e.g. no trades) never meets a rule. */
+export function isGood(p: AutotunePoint, g: Goals): boolean {
+  const v = (rule: GoalRule) => rule.value ?? 0;
+  if (g.win_rate.on && !(p.win_rate != null && p.win_rate * 100 >= v(g.win_rate) - 1e-9)) return false;
+  if (g.trades_per_week.on && !(p.trades_per_week != null && p.trades_per_week >= v(g.trades_per_week) - 1e-9)) return false;
+  if (g.losing_months.on && !(p.months_losing != null && p.months_losing <= v(g.losing_months))) return false;
+  if (g.profit.on && !(p.net_r != null && p.net_r > 0)) return false;
+  if (g.rr.on && !(p.avg_planned_rr != null && p.avg_planned_rr >= v(g.rr) - 1e-9)) return false;
+  if (g.prop.on && !(p.prop_evaluation === "PASS" && (p.prop_payouts ?? 0) >= v(g.prop))) return false;
+  return true;
 }
 
 export function MyAutotunePage() {
@@ -122,9 +131,20 @@ export function MyAutotunePage() {
 function ResultsSection({ st, pts, onOpen, onMany }: { st: AutotuneStatus; pts: AutotunePoints | null; onOpen: (n: number) => void;
   onMany: (ns: number[]) => void }) {
   const [axes, setAxes] = useState(() => load("my-autotune-axes", { x: "win_rate" as MetricKey, y: "trades_per_week" as MetricKey }));
-  const [goals, setGoals] = useState<Goals>(() => load("my-autotune-goals", DEFAULT_GOALS));
+  const { prefs, setPref } = useApp();
+  const saved = (prefs as { autotune_goals?: Goals }).autotune_goals;
+  const [goals, setGoalsState] = useState<Goals>(() => ({ ...GOAL_DEFAULTS, ...(saved ?? {}) }));
+  const edited = useRef(false);                       // after the first edit, the page's own goals are the truth
+  useEffect(() => { if (saved && !edited.current) setGoalsState({ ...GOAL_DEFAULTS, ...saved }); }, [JSON.stringify(saved)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const timer = useRef<number | undefined>(undefined);
+  const setGoals = (g: Goals) => {                    // saved in the workspace once typing pauses
+    edited.current = true;
+    setGoalsState(g);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => { void setPref({ autotune_goals: g }); }, 500);
+  };
+  const rule = (k: keyof Goals, patch: Partial<GoalRule>) => setGoals({ ...goals, [k]: { ...goals[k], ...patch } });
   useEffect(() => save("my-autotune-axes", axes), [axes]);
-  useEffect(() => save("my-autotune-goals", goals), [goals]);
   const points = pts?.points ?? [];
   const good = useMemo(() => new Set(points.filter((p) => isGood(p, goals)).map((p) => p.n)), [points, goals]);
   if (!pts) return <PageSkeleton layout="overview" label="Reading the results" />;
@@ -140,8 +160,13 @@ function ResultsSection({ st, pts, onOpen, onMany }: { st: AutotuneStatus; pts: 
       points: drawn.filter((p) => good.has(p.n) && p.stage !== "base").map(toPt) },
     { id: "base", label: "Test 37 (the base)", color: "var(--text)", size: 7, ring: true, points: drawn.filter((p) => p.stage === "base").map(toPt) },
   ];
-  const refOf = (k: MetricKey): XYAxis["ref"] => (k === "trades_per_week" ? { value: goals.tpw, label: `${goals.tpw} / week` }
-    : k === "avg_planned_rr" ? { value: goals.rr, label: `${goals.rr} : 1` } : k === "net_r" ? { value: 0, label: "break-even" } : undefined);
+  const refOf = (k: MetricKey): XYAxis["ref"] => (
+    k === "trades_per_week" && goals.trades_per_week.on ? { value: goals.trades_per_week.value ?? 0, label: `${goals.trades_per_week.value} / week` }
+    : k === "win_rate" && goals.win_rate.on ? { value: (goals.win_rate.value ?? 0) / 100, label: `${goals.win_rate.value}%` }
+    : k === "months_losing" && goals.losing_months.on ? { value: goals.losing_months.value ?? 0, label: `${goals.losing_months.value} losing` }
+    : k === "avg_planned_rr" && goals.rr.on ? { value: goals.rr.value ?? 0, label: `${goals.rr.value} : 1` }
+    : k === "prop_payouts" && goals.prop.on ? { value: goals.prop.value ?? 0, label: `${goals.prop.value} payout${goals.prop.value === 1 ? "" : "s"}` }
+    : k === "net_r" ? { value: 0, label: "break-even" } : undefined);
   const ax = (k: MetricKey): XYAxis => ({ label: METRICS[k].label, fmt: METRICS[k].fmt, ref: refOf(k) });
   const top = points.filter((p) => good.has(p.n)).sort((a, b) => (b.prop_payouts ?? 0) - (a.prop_payouts ?? 0)
     || (b.prop_trader_payout ?? 0) - (a.prop_trader_payout ?? 0) || (b.win_rate ?? 0) - (a.win_rate ?? 0)).slice(0, 50);
@@ -150,17 +175,18 @@ function ResultsSection({ st, pts, onOpen, onMany }: { st: AutotuneStatus; pts: 
   return (
     <>
       <Card title="Your goals" testId="at-goals">
-        <div className="inline">
-          <Field label="Trades per week at least"><NumberInput value={goals.tpw} step={0.5} onChange={(v) => setGoals({ ...goals, tpw: v ?? 0 })}
-            ariaLabel="Trades per week at least" testId="at-goal-tpw" /></Field>
-          <Field label="Planned reward : risk at least"><NumberInput value={goals.rr} step={0.1} onChange={(v) => setGoals({ ...goals, rr: v ?? 0 })}
-            ariaLabel="Reward to risk at least" testId="at-goal-rr" /></Field>
-          <Field label="Losing months at most (empty = any)"><NumberInput value={goals.maxLosing ?? undefined} integer
-            onChange={(v) => setGoals({ ...goals, maxLosing: v ?? null })} ariaLabel="Losing months at most" testId="at-goal-losing" /></Field>
+        <p className="small muted">A combination meets your goals only when it passes EVERY rule that is ticked. Saved in this workspace.</p>
+        <div className="at-goals">
+          <GoalRow label="Win rate at least" unit="%" hint="trades that made money after costs" k="win_rate" goals={goals} rule={rule} step={1} />
+          <GoalRow label="Trades per week at least" k="trades_per_week" goals={goals} rule={rule} step={0.5} />
+          <GoalRow label="Losing months at most" k="losing_months" goals={goals} rule={rule} step={1} integer hint="months with a net loss" />
+          <GoalRow label="Profit after costs" k="profit" goals={goals} rule={rule} hint="net R above 0" />
+          <GoalRow label="Planned reward : risk at least" k="rr" goals={goals} rule={rule} step={0.1} />
+          <GoalRow label="Prop evaluation passed, payouts at least" k="prop" goals={goals} rule={rule} step={1} integer
+            hint={`under ${profileLabel(st.criteria_profile)} (Settings → pass-criteria account)`} />
         </div>
-        <p className="small muted">"Meet your goals" also needs a profit after costs and a passed evaluation with at least one payout under{" "}
-          <b>{profileLabel(st.criteria_profile)}</b> (Settings → pass-criteria account). <b>{good.size.toLocaleString()}</b> of {points.length.toLocaleString()} tested
-          combinations meet them. Ranked by payouts.</p>
+        <p className="small muted" data-testid="at-goal-count"><b>{good.size.toLocaleString()}</b> of {points.length.toLocaleString()} tested combinations
+          meet every ticked rule{base && good.has(base.n) ? " (one of them is test 37 itself, the white dot)" : ""}. Ranked by payouts.</p>
       </Card>
       <Card title="Every tested combination" testId="at-scatter" actions={<div className="inline">
         <Field label="Across"><Select value={axes.x} onChange={(v) => setAxes({ ...axes, x: v as MetricKey })} options={opts} ariaLabel="Across" testId="at-x" /></Field>
@@ -273,5 +299,19 @@ function DesignCard({ st }: { st: AutotuneStatus }) {
           <td className="small">{o.source}</td></tr>)}</tbody></table></TableWrap>
       <TechDetails rows={[["Design version", String(d.autotune_version)], ["Design fingerprint", d.manifest_hash]]} />
     </Card>
+  );
+}
+
+function GoalRow({ label, unit, hint, k, goals, rule, step, integer }: { label: string; unit?: string; hint?: string; k: keyof Goals; goals: Goals;
+  rule: (k: keyof Goals, patch: Partial<GoalRule>) => void; step?: number; integer?: boolean }) {
+  const g = goals[k];
+  return (
+    <div className={`at-goal${g.on ? " on" : ""}`} data-testid={`at-goal-${k}`}>
+      <Checkbox checked={g.on} onChange={(on) => rule(k, { on })} label={label} testId={`at-goal-${k}-on`} />
+      {g.value !== undefined && <span className="inline">
+        <NumberInput value={g.value} step={step} integer={integer} onChange={(v) => { if (v !== undefined) rule(k, { value: v }); }}
+          ariaLabel={label} testId={`at-goal-${k}-value`} />{unit && <span className="muted">{unit}</span>}</span>}
+      {hint && <span className="muted small">{hint}</span>}
+    </div>
   );
 }

@@ -284,7 +284,17 @@ class Services:
                         "currency": "USD", "chf_per_usd": None,                   # CHF = display conversion, user rate
                         "chart_cluster": True, "chart_cluster_distance": 1.0,     # field-chart grouping (1 = ADR-86)
                         "live_dd_limit_usd": 5000.0,                              # "Live 50K OK" drawdown limit
-                        "prop_discount": {"enabled": False, "pct": {}}}           # paper fees: eval + reset, % per account
+                        "prop_discount": {"enabled": False, "pct": {}},           # paper fees: eval + reset, % per account
+                        # ADR-99: Strategy autotuner "meet your goals" (display only; every rule visible, on / off + value)
+                        "autotune_goals": None}
+    AUTOTUNE_GOAL_DEFAULTS = {"win_rate": {"on": False, "value": 70.0},          # % of trades with a profit after costs
+                              "trades_per_week": {"on": True, "value": 3.0},
+                              "losing_months": {"on": False, "value": 4.0},     # at most
+                              "profit": {"on": True},                           # net R > 0 after costs
+                              "rr": {"on": True, "value": 1.0},                 # planned reward : risk at least
+                              "prop": {"on": True, "value": 1.0}}               # evaluation passed + at least N payouts
+    AUTOTUNE_GOAL_RANGES = {"win_rate": (0.0, 100.0), "trades_per_week": (0.0, 50.0), "losing_months": (0.0, 600.0),
+                            "rr": (0.0, 20.0), "prop": (0.0, 1000.0)}
 
     def ui_preferences(self) -> dict:
         """Favorites, the prop account for pass criteria and the two display switches. Workspace preferences only:
@@ -293,6 +303,28 @@ class Services:
         raw = load_prefs(self.data_root).get("ui") or {}
         out = {k: raw.get(k, v) for k, v in self.UI_PREF_DEFAULTS.items()}
         out["favorites"] = [x for x in out["favorites"] if isinstance(x, str)]
+        stored = out.get("autotune_goals") if isinstance(out.get("autotune_goals"), dict) else {}
+        out["autotune_goals"] = {k: {**d, **(stored.get(k) or {})} for k, d in self.AUTOTUNE_GOAL_DEFAULTS.items()}
+        return out
+
+    def _check_autotune_goals(self, v) -> dict:
+        if not isinstance(v, Mapping):
+            raise ValueError("autotune_goals must be an object")
+        out = {}
+        for k, d in self.AUTOTUNE_GOAL_DEFAULTS.items():
+            g = v.get(k, d)
+            if not isinstance(g, Mapping) or not isinstance(g.get("on"), bool):
+                raise ValueError(f"autotune_goals.{k} needs on (true / false)")
+            out[k] = {"on": g["on"]}
+            if "value" in d:
+                val = g.get("value", d["value"])
+                lo, hi = self.AUTOTUNE_GOAL_RANGES[k]
+                if not _num(val) or not lo <= float(val) <= hi:
+                    raise ValueError(f"autotune_goals.{k}.value must be between {lo:g} and {hi:g}")
+                out[k]["value"] = float(val)
+        unknown = set(v) - set(self.AUTOTUNE_GOAL_DEFAULTS)
+        if unknown:
+            raise ValueError(f"unknown autotune goal {sorted(unknown)[0]!r}")
         return out
 
     DISCOUNTED_FEES = ("eval_price", "reset_fee")          # ADR-90: a coupon covers evaluation and reset, not activation
@@ -394,6 +426,8 @@ class Services:
                 v = float(v)
             elif k == "prop_discount":
                 v = self._check_prop_discount(v)
+            elif k == "autotune_goals":
+                v = self._check_autotune_goals(v)
             elif k == "research_processes":
                 from edgelab.research.campaign import max_processes
                 if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= max_processes()):

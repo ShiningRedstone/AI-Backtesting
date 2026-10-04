@@ -2638,3 +2638,20 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   zoom around the mouse; drags continue outside the chart.
 - **Unchanged:** engine, fills, costs, sizing, prop rules, configs, the autotuner design (fingerprint 8d25af78c52d731d),
   settings hashes and trial keys.
+
+### ADR-99 Strategy autotuner: "meet your goals" with every rule visible, saved in the workspace
+- **Problem (user):** goals of 70% win rate, 3+ trades a week and at most 4 losing months, yet amber ("meet your goals")
+  dots broke them. Causes: (1) there was no win-rate goal; (2) the goals lived in browser storage, and the desktop app
+  opens on a new loopback port each start (a new origin), so after every restart / update they silently fell back to the
+  defaults (3 a week, R:R 1, any losing months) while the page looked set.
+- **Fix:** workspace preference `ui.autotune_goals` (display only, outside every run, strategy and the config hash):
+  six rules, each `{on, value}`: win rate at least (% of trades with a profit after costs), trades per week at least,
+  losing months at most (months with a net loss), profit after costs (net R > 0), planned reward : risk at least, prop
+  evaluation passed with at least N payouts (Settings pass-criteria account). Defaults = the earlier behaviour (trades a
+  week 3, profit, R:R 1, prop 1 payout on; win rate 70 and losing months 4 off). Validated server-side
+  (`Services._check_autotune_goals`: known rules, booleans, ranges). The page shows every rule with its checkbox and value
+  (the user's choice), saves when typing pauses, and colours a combination amber only when it passes EVERY ticked rule
+  (a missing number never passes); goal values are drawn as dashed lines on the matching axes.
+- **Verified:** browser test on the demo workspace (every amber dot checked against the stored numbers; goals still set
+  after a restart on another port); `tests/test_my_autotune.py::TestGoals`.
+- **Unchanged:** results, the run, the design; nothing here changes what a backtest produces.

@@ -915,3 +915,9 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .candle-auto.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .candle-chart .xh-label { fill: var(--surface-3); stroke: var(--border-strong); }
 .candle-chart .xh-text { fill: var(--text); font-weight: 600; }
+/* ADR-99: autotuner goals - one row per rule, its checkbox, value and what it means */
+.at-goals { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 8px 16px; margin: 8px 0; }
+.at-goal { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius); opacity: .7; }
+.at-goal.on { opacity: 1; border-color: var(--border-strong); }
+.at-goal .input { width: 90px; }

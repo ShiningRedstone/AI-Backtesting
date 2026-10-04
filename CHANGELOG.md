@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy autotuner: goals fixed (ADR-99)
+
+| Item | Status |
+|---|---|
+| New goal: win rate at least (%) | IMPLEMENTED, TESTED |
+| Every rule (win rate, trades a week, losing months, profit, reward : risk, prop evaluation + payouts) shown with its own checkbox and value | IMPLEMENTED (browser test) |
+| Goals saved in the workspace: kept after restarts and updates (before, they quietly reset to the defaults) | IMPLEMENTED, TESTED |
+| Amber dots only when every ticked rule is met | TESTED (browser) |
+| Backtests, the autotuner run and its results | UNCHANGED |
+
 ## My strategy: rule fix, faster autotuner, TradingView-like charts (ADR-98)
 
 | Item | Status |

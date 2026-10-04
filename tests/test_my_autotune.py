@@ -296,3 +296,30 @@ class TestAdr98(unittest.TestCase):
             self.assertEqual(set(AT.read_results(svc)), {2})
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+
+class TestGoals(unittest.TestCase):
+    """ADR-99: the autotuner goals are workspace preferences: every rule on / off with its value, validated, and still
+    there after a restart (the desktop app opens on a new port each time, so browser storage did not survive)."""
+
+    def test_saved_validated_and_kept(self):
+        from edgelab.services import Services
+        root = Path(tempfile.mkdtemp())
+        try:
+            shutil.copytree(REPO / "configs", root / "configs")
+            svc = Services(root=root)
+            g = svc.ui_preferences()["autotune_goals"]
+            self.assertEqual(g["win_rate"], {"on": False, "value": 70.0})          # defaults: today's rules, all visible
+            self.assertTrue(g["prop"]["on"] and g["profit"]["on"] and g["rr"]["on"] and g["trades_per_week"]["on"])
+            g = {**g, "win_rate": {"on": True, "value": 70}, "losing_months": {"on": True, "value": 4}}
+            svc.set_ui_preferences({"autotune_goals": g})
+            again = Services(root=root).ui_preferences()["autotune_goals"]            # a restart
+            self.assertEqual(again["win_rate"], {"on": True, "value": 70.0})
+            self.assertEqual(again["losing_months"], {"on": True, "value": 4.0})
+            for bad in ({"win_rate": {"on": 1}}, {"x": {"on": True}}, {"win_rate": {"on": True, "value": 101}},
+                        {"rr": {"on": True, "value": "a"}}, "nope"):
+                with self.assertRaises(ValueError):
+                    svc.set_ui_preferences({"autotune_goals": bad})
+            self.assertEqual(Services(root=root).ui_preferences()["autotune_goals"]["win_rate"]["value"], 70.0)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
