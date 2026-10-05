@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
-import type { Candle, Decision, EsStatus, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
+import type { Candle, ChallengeSummary, Decision, EsStatus, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
   SettingDef, SettingsPayload, SetupReviews, SetupStats, SetupView, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
 import { useMoney } from "../app/money";
+import { profileLabel } from "../app/labels";
 import { CandleChart, nyTime } from "../components/candles";
 import type { Marker, PriceBox, PriceLine } from "../components/candles";
 import { StepTimeChart } from "../components/charts";
@@ -291,9 +292,10 @@ export function MyBacktestPage() {
         <JobLine job={job} />
         <ErrorPanel error={err} />
       </Card>
-      {data && <ReportList rows={data.backtests} selected={selected} onOpen={(id) => go(`/my-backtest?r=${id}`)}
+      {data && <ReportList rows={data.backtests} selected={selected} onOpen={(id) => go(`/my-backtest?r=${id}`)} onChanged={reload} editable
         title="Backtests" testId="my-reports" />}
-      {selected ? <ReportView id={selected} /> : data && <Empty>No backtest yet. Run the first one above.</Empty>}
+      {selected ? <ReportView id={selected} title={data?.backtests.find((b) => b.id === selected)?.label || undefined} />
+        : data && <Empty>No backtest yet. Run the first one above.</Empty>}
       {data && <PlansCard data={data} onChange={reload} />}
     </div>
   );
@@ -323,11 +325,11 @@ export function ReportView({ id, title }: { id: string; title?: string }) {
           <Kpi label="Net result" value={money.fmt(m.net_usd ?? null)} tone={signCls(m.net_usd)} sub={r(m.net_r, 1)} />
           <Kpi label="Losing months" value={`${m.months_losing ?? 0} of ${m.months_total ?? 0}`} tone={(m.months_losing ?? 0) > 0 ? "neg" : "pos"} />
           <Kpi label="Profit factor" value={n(m.profit_factor, 2)} sub={`max drawdown ${n(m.max_drawdown_r, 1)} R`} />
-          <Kpi label="Prop evaluation (LucidFlex 50K)" value={data.prop?.evaluation ?? "–"}
-            sub={data.prop ? `${data.prop.payouts ?? 0} payouts` : undefined} />
+          <ChallengeKpi data={data} money={money.fmt} />
         </div>
         {curve.length > 0 && <StepTimeChart points={curve} start={data.window.start} end={data.window.end} label="Cumulative net R" testId="my-curve" />}
       </Card>
+      <ChallengeCard data={data} money={money.fmt} />
       <div className="grid-cards">
         <Card title="Months" testId="my-months">
           <TableWrap><table className="dense">
@@ -364,6 +366,63 @@ export function ReportView({ id, title }: { id: string; title?: string }) {
   );
 }
 
+/** ADR-101: the prop challenge chain of a report: fail -> next challenge, pass -> funded payouts, every fee deducted. */
+export function ChainLine({ c, money }: { c: ChallengeSummary | { error: string }; money: (v: number | null) => string }) {
+  if ("error" in c && c.error) return <span className="muted small">{c.error}</span>;
+  const x = c as ChallengeSummary;
+  return (
+    <span className="small" title={`${x.challenges} challenges bought · ${x.payouts} payouts · fees ${money(x.fees_total)}`}>
+      {x.passes} pass{x.passes === 1 ? "" : "es"} · {x.fails} fail{x.fails === 1 ? "" : "s"} ·{" "}
+      {x.net == null ? <span className="muted">fees not set</span> : <b className={signCls(x.net)}>{money(x.net)}</b>}
+    </span>
+  );
+}
+
+function ChallengeKpi({ data, money }: { data: Report; money: (v: number | null) => string }) {
+  const prof = data.criteria_profile ?? "LUCID_LUCIDFLEX_50K";
+  const c = data.challenge?.profiles?.[prof] as ChallengeSummary | undefined;
+  if (!c || "error" in c && c.error) {
+    return <Kpi label={`Prop (${data.challenge?.names?.[prof] ?? profileLabel(prof)})`} value={data.prop?.evaluation ?? "–"}
+      sub={data.challenge ? "challenge chain unavailable" : "run it again for the challenge chain"} />;
+  }
+  return <Kpi label={`Prop challenges, ${data.challenge?.names?.[prof] ?? profileLabel(prof)}`} value={`${c.passes} passed`}
+    sub={`${c.fails} failed · ${c.net == null ? "set the fees in Settings for the net" : `net ${money(c.net)} after ${money(c.fees_total)} fees`}`}
+    testId="my-chain-kpi" />;
+}
+
+function ChallengeCard({ data, money }: { data: Report; money: (v: number | null) => string }) {
+  const v = data.challenge;
+  if (!v) return null;
+  if (v.error) return <Card title="Prop challenges"><p className="muted small">Not available: {v.error}</p></Card>;
+  const rows = Object.entries(v.profiles ?? {});
+  return (
+    <Card title="Prop challenges, one after another" testId="my-chain">
+      <p className="small muted">The backtest's trades go through challenge after challenge: a failed evaluation → the next challenge (reset fee, or a new
+        evaluation when no reset fee is set); a passed one → activation fee, then the funded account collects every payout until it is lost or ends →
+        a new evaluation. Each challenge is sized from its own starting balance. Fees from Settings → prop account fees (discount applied).
+        Default assumed rules; a historical result, not a forecast.</p>
+      <TableWrap><table className="dense">
+        <thead><tr><th>Account</th><th className="num">Challenges</th><th className="num">Failed</th><th className="num">Passed</th>
+          <th className="num">Funded lost</th><th className="num">Payouts</th><th className="num">Average payout per pass</th><th className="num">Your payouts</th>
+          <th className="num">Fees</th><th className="num">Net</th></tr></thead>
+        <tbody>{rows.map(([pid, c]) => {
+          const name = v.names?.[pid] ?? profileLabel(pid);
+          if ("error" in c && c.error) return <tr key={pid}><td>{name}</td><td colSpan={9} className="muted small">{c.error}</td></tr>;
+          const x = c as ChallengeSummary;
+          return (
+            <tr key={pid} className={pid === data.criteria_profile ? "selected" : ""}>
+              <td>{name}{x.open_at_end ? <span className="muted small"> · still open at the end</span> : null}
+                {x.incompatible ? <span className="muted small"> · stopped: {x.stopped}</span> : null}</td>
+              <td className="num">{x.challenges}</td><td className="num">{x.fails}</td><td className="num">{x.passes}</td>
+              <td className="num">{x.funded_lost}</td><td className="num">{x.payouts}</td><td className="num">{money(x.avg_payout_per_pass)}</td>
+              <td className="num">{money(x.trader_payouts)}</td><td className="num">{x.fees_complete ? money(x.fees_total) : <span className="muted">not set</span>}</td>
+              <td className={`num ${signCls(x.net)}`}><b>{x.net == null ? "–" : money(x.net)}</b></td>
+            </tr>);
+        })}</tbody></table></TableWrap>
+    </Card>
+  );
+}
+
 function useMemoCurve(trades: TradeRow[]) {
   return useMemo(() => {
     let c = 0;
@@ -376,10 +435,20 @@ export const exitWord = (k: string) => ({ TARGET: "Take profit", TARGET_GAP: "Ta
   SESSION_CLOSE: "Session close", END_OF_DATA: "End of data" } as Record<string, string>)[k] ?? k;
 
 /** Backtests / reports as a table: tick boxes, a green check for reports already saved for Claude, one save button. */
-function ReportList({ rows, selected, onOpen, title, testId }: {
-  rows: ReportRow[]; selected?: string | null; onOpen: (id: string) => void; title: string; testId?: string;
+function ReportList({ rows: allRows, selected, onOpen, title, testId, onChanged, editable }: {
+  rows: ReportRow[]; selected?: string | null; onOpen: (id: string) => void; title: string; testId?: string; onChanged?: () => void;
+  editable?: boolean;
 }) {
   const { toast } = useApp();
+  const money = useMoney();
+  const [favOnly, setFavOnly] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [meta, setMeta] = useState<Record<string, { favorite?: boolean; label?: string }>>({});
+  const rows = allRows.map((b) => ({ ...b, ...(meta[b.id] ?? {}) })).filter((b) => !favOnly || b.favorite);
+  const saveMeta = async (id: string, patch: { favorite?: boolean; label?: string }) => {
+    setMeta((m) => ({ ...m, [id]: { ...m[id], ...patch } }));
+    try { await my.setMeta(id, patch); onChanged?.(); } catch (e) { setErr(e as ApiError); setMeta((m) => { const c = { ...m }; delete c[id]; return c; }); }
+  };
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [candles, setCandles] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -402,6 +471,7 @@ function ReportList({ rows, selected, onOpen, title, testId }: {
   return (
     <Card title={title} testId={testId} actions={
       <div className="inline">
+        {editable && <Checkbox checked={favOnly} onChange={setFavOnly} label="Favourites only" testId="my-fav-only" />}
         <Checkbox checked={candles} onChange={setCandles} label="Include candles (bigger file)" />
         <Button kind="primary" onClick={save} busy={busy} busyLabel="Saving…" disabled={!ticked.size} testId="my-save-selected">
           Save selected for Claude{ticked.size ? ` (${ticked.size})` : ""}</Button>
@@ -415,9 +485,9 @@ function ReportList({ rows, selected, onOpen, title, testId }: {
           <thead><tr>
             <th style={{ width: 32 }}><input type="checkbox" aria-label="Select all" checked={all}
               onChange={() => setTicked(all ? new Set() : new Set(rows.map((b) => b.id)))} /></th>
-            <th title="Saved for Claude">Saved</th><th>When</th><th>Name</th><th>Period</th><th className="num">Trades</th>
+            {editable && <th title="Favourite">★</th>}<th title="Saved for Claude">Saved</th><th>When</th><th>Name</th><th>Period</th><th className="num">Trades</th>
             <th className="num">Per week</th><th className="num">Win rate</th><th className="num">Net R</th>
-            <th className="num">Losing months</th><th>Prop</th></tr></thead>
+            <th className="num">Losing months</th><th>Prop challenges</th></tr></thead>
           <tbody>{rows.map((b) => {
             const done = !!b.exported || savedNow.has(b.id);
             return (
@@ -425,15 +495,34 @@ function ReportList({ rows, selected, onOpen, title, testId }: {
                 <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>
                   <input type="checkbox" aria-label={`Select ${b.label || b.id}`} checked={ticked.has(b.id)} onChange={() => toggle(b.id)}
                     data-testid={`my-tick-${b.id}`} /></td>
+                {editable && <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>
+                  <button type="button" className={`fav-star${b.favorite ? " on" : ""}`} aria-pressed={!!b.favorite} data-testid={`my-fav-${b.id}`}
+                    title={b.favorite ? "Remove from favourites" : "Add to favourites"} aria-label={b.favorite ? "remove from favourites" : "add to favourites"}
+                    onClick={() => void saveMeta(b.id, { favorite: !b.favorite })}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"
+                      fill={b.favorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /></svg>
+                  </button></td>}
                 <td>{done ? <span className="my-saved-check" title={b.exported ? `Saved ${nyTime(sec(b.exported.at))} · ${b.exported.file}` : "Saved"}
                   data-testid={`my-saved-${b.id}`}>✓</span> : ""}</td>
                 <td>{nyTime(sec(b.created_at))}</td>
-                <td>{b.label || (b.kind?.startsWith("holdout") ? (b.kind === "holdout_mechanical" ? "Holdout - every signal" : "Holdout - your decisions") : "–")}</td>
+                {editing?.id === b.id ? (
+                  <td onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}>
+                    <form className="inline" onSubmit={(e: { preventDefault: () => void }) => { e.preventDefault(); void saveMeta(b.id, { label: editing.text }); setEditing(null); }}>
+                      <TextInput value={editing.text} onChange={(t) => setEditing({ id: b.id, text: t })} ariaLabel="New name" testId={`my-rename-input-${b.id}`} />
+                      <Button small kind="primary" type="submit" testId={`my-rename-save-${b.id}`}>Save</Button>
+                      <Button small kind="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                    </form></td>
+                ) : (
+                  <td>{b.label || (b.kind?.startsWith("holdout") ? (b.kind === "holdout_mechanical" ? "Holdout - every signal" : "Holdout - your decisions") : "–")}
+                    {editable && <button type="button" className="my-rename" title="Rename" aria-label={`Rename ${b.label || b.id}`} data-testid={`my-rename-${b.id}`}
+                      onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); setEditing({ id: b.id, text: b.label || "" }); }}>✎</button>}</td>
+                )}
                 <td>{day(b.window.start)} – {day(b.window.end)}</td>
                 <td className="num">{b.trade_count}</td><td className="num">{n(b.metrics.trades_per_week, 2)}</td>
                 <td className="num">{pct(b.metrics.win_rate)}</td><td className={`num ${signCls(b.metrics.net_r)}`}>{r(b.metrics.net_r, 1)}</td>
                 <td className="num">{b.metrics.months_losing ?? 0} / {b.metrics.months_total ?? 0}</td>
-                <td>{b.prop?.evaluation ?? "–"}</td>
+                <td>{(() => { const c = b.challenge?.profiles ? Object.values(b.challenge.profiles)[0] : null;
+                  return c ? <ChainLine c={c} money={money.fmt} /> : <span className="muted small">{b.prop?.evaluation ?? "–"}</span>; })()}</td>
               </tr>);
           })}</tbody></table></TableWrap>)}
     </Card>

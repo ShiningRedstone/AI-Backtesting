@@ -2615,8 +2615,12 @@ class Services:
         except P.SettingsError:
             h = None
         st = RV.current(self)
+        fees, crit = self.my_challenge_fees(), self.ui_preferences().get("prop_criteria_profile")
+        bts, reps = R.list_backtests(self), R.all_reports(self)
+        for row in bts + reps:                                  # ADR-101: the criteria account's chain, fees applied
+            row["challenge"] = self._challenge_view(row.get("challenge"), fees, crit)
         return _jsonable({"protocol": R.protocol_info(self), "settings_hash": h, "settings_changed": ov,
-                          "backtests": R.list_backtests(self), "reports": R.all_reports(self),
+                          "criteria_profile": crit, "backtests": bts, "reports": reps,
                           "plans": R.list_plan_results(self)[:20], "es": ES.status(self.data_root),
                           "review": None if st is None else {k: st.get(k) for k in ("id", "status", "created_at",
                                                                                      "settings_hash", "mechanical_report",
@@ -2665,7 +2669,10 @@ class Services:
 
     def my_strategy_backtest(self, bt_id: str) -> dict:
         from edgelab.mystrategy import runner as R
-        return _jsonable(R.get_backtest(self, bt_id))
+        out = R.get_backtest(self, bt_id)
+        out["challenge"] = self._challenge_view(out.get("challenge"), self.my_challenge_fees())
+        out["criteria_profile"] = self.ui_preferences().get("prop_criteria_profile")
+        return _jsonable(out)
 
     def my_strategy_trade(self, bt_id: str, trade_no: int) -> dict:
         from edgelab.mystrategy import runner as R
@@ -2688,7 +2695,8 @@ class Services:
         """Setup reviews on the discovery period (ADR-96): list, the open one, the reason tags, the backtests to start from."""
         from edgelab.mystrategy import runner as R, setup_review as SR
         return _jsonable({"reviews": SR.list_reviews(self), "open": SR.in_progress(self), "reasons": SR.REASONS,
-                          "sample_size": SR.SAMPLE_SIZE, "backtests": R.list_backtests(self)})
+                          "sample_size": SR.SAMPLE_SIZE,
+                          "backtests": [{k: v for k, v in b.items() if k != "challenge"} for b in R.list_backtests(self)]})
 
     def my_strategy_start_setup_review(self, report_id: str, size: int | None = None) -> dict:
         from edgelab.mystrategy import setup_review as SR
@@ -2706,55 +2714,73 @@ class Services:
         from edgelab.mystrategy import setup_review as SR
         return _jsonable(SR.undo(self, sr_id))
 
-    # ------------------------------------------------------------------ Strategy autotuner (ADR-97)
+    # ------------------------------------------------------------------ Strategy autotuner (ADR-101)
+    def my_challenge_fees(self) -> dict:
+        """Fees per rule profile for the prop challenge chain: Settings -> prop account fees, discount applied."""
+        from edgelab.prop.service import default_profiles
+        fees = self.ui_preferences().get("prop_fees") or {}
+        return {p["profile_id"]: self.discounted_fees(p["profile_id"], fees.get(p["profile_id"]) or {})[0]
+                for p in default_profiles(self.root)}
+
+    def _challenge_view(self, raw: Mapping | None, fees: Mapping, only: str | None = None) -> dict | None:
+        """Fee-applied counts of a report's stored chain (ADR-101): {profile_id: summary} (one profile with ``only``)."""
+        from edgelab.mystrategy import challenge as CH
+        if not raw:
+            return None
+        if raw.get("error"):
+            return {"error": raw["error"]}
+        from edgelab.mystrategy.optimizer import profile_name
+        from edgelab.prop.service import default_profiles
+        names = {p["profile_id"]: profile_name(p) for p in default_profiles(self.root)}
+        out = {pid: CH.summary(r, fees.get(pid)) for pid, r in (raw.get("profiles") or {}).items()
+               if only is None or pid == only}
+        return {"profiles": out, "start": raw.get("start"), "names": {pid: names.get(pid, pid) for pid in out}}
+
     def my_autotune_status(self) -> dict:
-        from edgelab.mystrategy import autotune as AT
-        out = AT.status(self)
+        from edgelab.mystrategy import optimizer as O
+        out = O.status(self)
         out["processes_default"] = self.research_processes()["processes"]
-        out["criteria_profile"] = self.ui_preferences().get("prop_criteria_profile")
+        crit = self.ui_preferences().get("prop_criteria_profile")
+        fees = self.my_challenge_fees()
+        for b in out["starts"]:
+            b["challenge"] = self._challenge_view(b.get("challenge"), fees, crit)
         return out
 
-    def my_autotune_points(self, profile: str | None = None) -> dict:
-        from edgelab.mystrategy import autotune as AT
-        return AT.points(self, profile or self.ui_preferences().get("prop_criteria_profile"))
+    def my_autotune_run(self, run_id: str) -> dict:
+        from edgelab.mystrategy import optimizer as O
+        return O.run_detail(self, str(run_id))
 
-    def my_autotune_detail(self, n: int) -> dict:
-        from edgelab.mystrategy import autotune as AT
-        return AT.detail(self, int(n))
-
-    def my_autotune_start(self, processes: int | None = None) -> dict:
-        from edgelab.mystrategy import autotune as AT
+    def my_autotune_start(self, start_id: str, processes: int | None = None, max_tries: int | None = None) -> dict:
+        from edgelab.mystrategy import optimizer as O, params as P
         n = self.research_processes()["processes"] if processes is None else int(processes)
-        AT.ensure_protocol(self, self.lock)                    # refuse without a research protocol before starting
-        return AT.run_of(self).start(self, max(1, n), self.lock)
+        mt = O.DEFAULT_MAX_TRIES if max_tries is None else int(max_tries)
+        if not 1 <= mt <= O.MAX_TRIES_LIMIT:
+            raise ValueError(f"max_tries must be between 1 and {O.MAX_TRIES_LIMIT}")
+        if n < 1:
+            raise ValueError("processes must be at least 1")
+        O.ensure_protocol(self, self.lock)                     # refused before a run starts: protocol, start, fees
+        sm = O.start_summary(self, str(start_id))
+        P.resolve(sm.get("settings_changed") or {})
+        O.run_context(self)
+        return O.run_of(self).start(self, str(start_id), n, mt, self.lock)
 
     def my_autotune_stop(self) -> dict:
-        from edgelab.mystrategy import autotune as AT
-        return AT.run_of(self).stop()
+        from edgelab.mystrategy import optimizer as O
+        return O.run_of(self).stop()
 
-    def my_autotune_rerun(self, n: int) -> dict:
-        from edgelab.mystrategy import autotune as AT, runner as R
-        return R.jobs_of(self).start("autotune_rerun", lambda step: AT.rerun(self, int(n), lock=self.lock, progress=step),
-                                     {"autotune_n": int(n)})
+    def my_autotune_save(self, run_id: str, n: int) -> dict:
+        """One best result of a run as a normal backtest with trade records and candles (not a new try)."""
+        from edgelab.mystrategy import optimizer as O, runner as R
+        rec = O.run_detail(self, str(run_id))
+        if not 0 <= int(n) < len(rec["bests"]):
+            raise R.MyStrategyError("NO_BEST", f"Run {run_id} has no best result #{n}.")
+        return R.jobs_of(self).start("autotune_save", lambda step: O.save_backtest(self, str(run_id), int(n), lock=self.lock,
+                                                                                   progress=step),
+                                     {"run_id": str(run_id), "best": int(n)})
 
-    def my_autotune_flip_info(self, n: int) -> dict:          # ADR-100: flipped reruns
-        from edgelab.mystrategy import autotune_flips as AF
-        return AF.info(self, int(n))
-
-    def my_autotune_flip(self, n: int) -> dict:
-        from edgelab.mystrategy import autotune_flips as AF, runner as R
-        AF.info(self, int(n))                                   # refuse unknown combinations before a job starts
-        return R.jobs_of(self).start("autotune_flip", lambda step: AF.run_flip(self, int(n), lock=self.lock, progress=step),
-                                     {"autotune_n": int(n)})
-
-    def my_autotune_flip_detail(self, n: int) -> dict:
-        from edgelab.mystrategy import autotune_flips as AF
-        return AF.detail(self, int(n))
-
-    def my_autotune_flip_rerun(self, n: int) -> dict:
-        from edgelab.mystrategy import autotune_flips as AF, runner as R
-        return R.jobs_of(self).start("autotune_flip_rerun", lambda step: AF.rerun(self, int(n), lock=self.lock,
-                                                                                  progress=step), {"autotune_n": int(n)})
+    def my_strategy_set_meta(self, bt_id: str, favorite: Any = None, label: Any = None) -> dict:
+        from edgelab.mystrategy import runner as R
+        return _jsonable(R.set_meta(self, str(bt_id), favorite=favorite, label=label))
 
     def my_strategy_export(self, report_ids: list, include_candles: bool = False) -> dict:
         from edgelab.mystrategy import runner as R

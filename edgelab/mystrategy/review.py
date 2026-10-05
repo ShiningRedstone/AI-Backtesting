@@ -86,7 +86,8 @@ def start(svc, overrides: dict | None, *, lock=None, progress: Callable | None =
         ho_id = "HO_" + rv_id[3:]
         summary = R.build_report(R.home(svc) / "holdout" / ho_id, s, strat, res, ds, win, rec, kind="holdout_mechanical",
                                  label="Holdout - mechanical (every signal)", extra={"review_id": rv_id,
-                                                                                    "protocol_id": pid})
+                                                                                    "protocol_id": pid},
+                                 challenge=R.challenge_of(svc, ds, strat, res, win))
         with guard:
             svc.store.update_holdout_access(access_id, status="completed", run_id=rec["run_id"],
                                             completed_at=datetime.now(timezone.utc).isoformat(),
@@ -223,7 +224,8 @@ def finish(svc, st: dict, lock=None) -> dict:
                              kind="holdout_with_decisions", label="Holdout - with your decisions",
                              extra={"review_id": st["id"], "decisions": {str(k): v for k, v in dec.items()},
                                     "note": "Human decisions applied; not a run and not a trial (kept separate from "
-                                            "automated results)."})
+                                            "automated results)."},
+                             challenge=R.challenge_of(svc, ds, strat, res, win))
     st["status"], st["final_report"], st["finished_at"] = "complete", hd_id, R._now()
     _save(svc, st)
     return summary

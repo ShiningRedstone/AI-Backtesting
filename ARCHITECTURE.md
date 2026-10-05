@@ -2675,3 +2675,48 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   (what the flip does, what is switched off, the budget; "Rerun with flipped entry" or "Show the flipped version"); pink
   group "Flipped reruns" (`--c-flip`, never grouped); the flipped panel says "Flipped from combination #n" with a link.
 - **Unchanged:** the engine, the flip rule itself (ADR-97), the autotuner's design, results and 10,000-try budget.
+
+### ADR-101 Strategy autotuner replaced by a step-by-step optimiser; prop challenge chain; backtest favourites / names
+- **Request (user):** "the autotuner didn't work, fully remove it"; instead an optimiser that backtests, keeps what works
+  and tweaks on until nothing improves, as fast as possible (no candles), on the same "Strategy autotuner" page. Choices:
+  built-in optimiser, starting from one of the user's OWN My strategy backtests (not test 37); score = the user's goals,
+  then payouts; train / check split (70 / 30); lookahead check on every new best and the final result; 5,000 tries + 1
+  holdout look; remove the code but keep the old results and ledger. Also: favourite / rename backtests in the Backtest
+  tab, and a prop "challenge chain" for My strategy and the optimiser (fail -> next challenge until the trades run out,
+  pass -> funded payouts under the funded rules, every fee deducted, counts of fails / passes / average payout per pass),
+  run like paper trading (ADR-81), fees from Settings.
+- **Removed:** `mystrategy/autotune.py`, `autotune_space.py`, `autotune_flips.py`, their API, page and tests (ADR-97/100).
+  Their files under `<data>/my_strategy/autotune/` and their protocols / trial events stay untouched (the roles stay in
+  `research/protocol.py` so they remain companions). `models.flip` (a setting) and `ui.autotune_goals` stay.
+- **Challenge chain** `mystrategy/challenge.py`: `paper.engine.run_attempts` (unchanged lifecycle) over the report's
+  trades from its window start; a challenge never traded at the end of the data is not bought. Equity-% sizing per
+  challenge: `Resizer` re-sizes the trades entered from the challenge start with the engine's own `size_trade`, cost model
+  and planned stop (signal close on the entry side / limit level), bit-identical to `run_backtest(account=
+  {starting_equity, equity_from_ts})` (test); a trade that would get 0 contracts is dropped and counted (`dropped`).
+  Stored fee-free (`summary.json["challenge"]`, every profile) by `runner.build_report` for every new backtest and
+  holdout report; `challenge.summary(raw, fees)` applies Settings -> prop account fees (discount applied) when shown:
+  first challenge and the one after a funded cycle = evaluation price, after a failure = reset fee (else evaluation
+  price), activation fee per pass. Older reports show "run it again". Research runs / survivors are unchanged.
+- **Optimiser** `mystrategy/optimizer.py`, companion protocol role `my_optimizer` (scope `...#my_optimizer`, 5,000 tries,
+  ONE holdout look, exposure statement: starts are chosen after discovery backtests). One try = one settings combination
+  on the whole discovery window = one trial key (settings hash, evaluated content, config); a combination tried again (any
+  run) is reused from `optimizer/tries.jsonl`, never a new try. Tweaks (`neighbours`): one setting at a time - switch,
+  other choice, one `STEPS` step, +/- 15 min; never `FIXED` (position size, flip); not when `INERT_UNLESS` says it cannot
+  change trades; invalid / contradicting / SMT-without-ES skipped (raising the minimum score without ES also turns SMT
+  scoring off). Order: the last successful change continued first, then a shuffle seeded by the settings hash. Batches of
+  32: the best tweak that beats the current best on BOTH parts (first 70 % / last 30 % of the discovery trading days) is
+  taken; decisions never depend on the number of cores (test). Stop: no tweak improves the check part (or the train part),
+  every tweak tried, the run's try limit, the budget, or Stop. Score (`score`): goals met, then summed shortfall of unmet
+  goals, then the challenge chain's net (criteria account, fees frozen at start; refused without an evaluation price),
+  then net R; count goals scaled to the part's share of trading days. Tries run `run_backtest` with
+  `require_causality_check=False` (same trades, tested) and no trade records / candles; each new best is checked with the
+  lookahead check in the pool (its trades must equal the try's), a failing best is discarded with its descendants. The
+  final best is backtested normally (`R.backtest(protocol=optimizer)`, same trial). Workers: ADR-98's shared price data,
+  memory plan, reuse memo and high priority (moved here). Records: `optimizer/runs/OPT_*.json` (+ `.tries.jsonl`).
+- **API:** `GET /api/my/autotune`, `GET /api/my/autotune/runs/<OPT_id>`, `POST /api/my/autotune/start {start_id,
+  processes, max_tries}`, `POST /api/my/autotune/stop`, `POST /api/my/autotune/runs/<id>/bests/<n>/save`,
+  `POST /api/my/reports/<id>/meta {favorite, label}` (display only; `label_original` kept). **UI:** Strategy autotuner page
+  (how it works, goals, start table with favourites first, runs, start -> final comparison incl. challenges, changed
+  settings, every-try chart, path with lookahead badges and "Save as backtest"); Backtest tab: star, rename, "Favourites
+  only", "Prop challenges" column / KPI / per-account table.
+- **Unchanged:** engine, fills, costs, sizing, prop rules, configs, My strategy rules and settings hashes, research runs.

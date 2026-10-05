@@ -361,8 +361,18 @@ def _prop_brief(prop: dict, profile_id: str = "LUCID_LUCIDFLEX_50K") -> dict | N
     return None
 
 
+def challenge_of(svc, ds, strat, res, win) -> dict:
+    """ADR-101: the fee-free prop challenge chain of every rule profile over the report's window (never fails a report)."""
+    from edgelab.mystrategy import challenge as CH
+    try:
+        return {"version": CH.CHAIN_VERSION, "start": win[0].isoformat(),
+                "profiles": CH.chains(svc.cfg, svc.root, ds, strat, res.trades, win[0])}
+    except Exception as exc:                             # noqa: BLE001 - shown as unavailable, the report stands
+        return {"version": CH.CHAIN_VERSION, "error": f"{type(exc).__name__}: {exc}"[:300]}
+
+
 def build_report(folder: Path, s: dict, strat, res, ds, win, rec: dict, *, kind: str, label: str = "",
-                 extra: dict | None = None) -> dict:
+                 extra: dict | None = None, challenge: dict | None = None) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     rows = trade_rows(res.trades)
     charts = Charts(ds.bars, ds.calendar, s["models.price_series"])
@@ -383,7 +393,7 @@ def build_report(folder: Path, s: dict, strat, res, ds, win, rec: dict, *, kind:
         "strategy_id": res.strategy_id, "n_signals": res.n_signals, "skipped": res.skipped,
         "causality_passed": None if res.causality is None else bool(res.causality.passed),
         "metrics": rec["metrics"], "monthly": rec["monthly"], "prop": _prop_brief(rec.get("prop") or {}),
-        "rule_stats": dict(strat.stats), "trade_count": len(rows),
+        "rule_stats": dict(strat.stats), "trade_count": len(rows), "challenge": challenge,
         "es_data": None if strat.es is None else {"es_id": strat.es.manifest.get("es_id"),
                                                   "content_hash": strat.es.content_hash,
                                                   "instrument": strat.es.manifest["identity"]["instrument"],
@@ -418,7 +428,8 @@ def backtest(svc, overrides: dict | None, start=None, end=None, *, label: str = 
                   notes=f"My strategy discovery backtest {label}".strip(), lock=lock)
     folder = home(svc) / "backtests" / new_id("BT")
     return build_report(folder, s, strat, res, ds, win, rec, kind="discovery_backtest", label=label,
-                        extra={"protocol_id": mine["protocol_id"], **(extra or {})})
+                        extra={"protocol_id": mine["protocol_id"], **(extra or {})},
+                        challenge=challenge_of(svc, ds, strat, res, win))
 
 
 def list_backtests(svc, kind: str = "backtests") -> list[dict]:
@@ -430,7 +441,8 @@ def list_backtests(svc, kind: str = "backtests") -> list[dict]:
             if sm:
                 m = sm.get("metrics") or {}
                 out.append({k: sm.get(k) for k in ("id", "kind", "label", "created_at", "settings_hash", "window",
-                                                   "trade_count", "prop", "settings_changed", "exported")} | {
+                                                   "trade_count", "prop", "settings_changed", "exported", "favorite",
+                                                   "challenge", "optimizer_run")} | {
                     "metrics": {k: m.get(k) for k in ("win_rate", "expectancy_r", "net_r", "net_usd", "trades_per_week",
                                                       "profit_factor", "max_drawdown_r", "months_losing",
                                                       "months_total", "avg_planned_rr", "avg_win_r")}})
@@ -461,6 +473,31 @@ def get_backtest(svc, bt_id: str) -> dict:
                               "confirmation_tf": ((t.get("explanation") or {}).get("confirmation") or {}).get("tf"),
                               "r_planned": ((t.get("explanation") or {}).get("target") or {}).get("r_planned")}
                              for t in trades]}
+
+
+_META_LOCK = threading.Lock()
+
+
+def set_meta(svc, bt_id: str, *, favorite: bool | None = None, label: str | None = None) -> dict:
+    """Favourite / rename one of the user's reports (ADR-101): display only, the numbers never change."""
+    if favorite is not None and not isinstance(favorite, bool):
+        raise MyStrategyError("BAD_VALUE", "favorite must be true or false")
+    if label is not None:
+        if not isinstance(label, str):
+            raise MyStrategyError("BAD_VALUE", "The name must be text.")
+        label = " ".join(label.split())[:160]
+    p = _bt_folder(svc, bt_id) / "summary.json"
+    with _META_LOCK:
+        sm = _read_json(p)
+        if sm is None:
+            raise KeyError(bt_id)
+        if favorite is not None:
+            sm["favorite"] = favorite
+        if label is not None:
+            sm.setdefault("label_original", sm.get("label") or "")
+            sm["label"] = label
+        _write_json(p, sm)
+    return {"id": bt_id, "favorite": bool(sm.get("favorite")), "label": sm.get("label") or ""}
 
 
 def get_trade(svc, bt_id: str, trade_no: int) -> dict:

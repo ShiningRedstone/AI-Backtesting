@@ -157,16 +157,20 @@ def is_flip(rec: Mapping) -> bool:
 # execution and config as its parent). Like a flip protocol it is a COMPANION: never the governing research protocol.
 MY_STRATEGY_ROLE = "my_strategy"
 MY_STRATEGY_SCOPE_SUFFIX = "#my_strategy"
-AUTOTUNE_ROLE = "my_autotune"                 # ADR-97: the Strategy autotuner's 10,000 My strategy combinations
+# ADR-97 / ADR-100: the first Strategy autotuner (10,000 fixed combinations) and its flipped reruns. Their code was removed
+# in ADR-101; the roles stay so their recorded protocols and tries remain companions (never a governing protocol).
+AUTOTUNE_ROLE = "my_autotune"
 AUTOTUNE_SCOPE_SUFFIX = "#my_autotune"
-AUTOTUNE_FLIP_ROLE = "my_autotune_flip"       # ADR-100: flipped reruns of autotuner combinations (own budget)
+AUTOTUNE_FLIP_ROLE = "my_autotune_flip"
 AUTOTUNE_FLIP_SCOPE_SUFFIX = "#my_autotune_flip"
+OPTIMIZER_ROLE = "my_optimizer"               # ADR-101: the Strategy autotuner's step-by-step optimiser (own budget)
+OPTIMIZER_SCOPE_SUFFIX = "#my_optimizer"
 
 
 def is_companion(rec: Mapping) -> bool:
     """True for a companion protocol (flip, My strategy, autotuner): it never governs library strategies or campaigns."""
     mat = rec.get("material", rec)
-    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE)
+    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE, OPTIMIZER_ROLE)
 
 
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,

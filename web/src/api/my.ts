@@ -33,7 +33,7 @@ export interface PropBrief { profile: string; status: string; evaluation: string
 export interface ReportRow {
   id: string; kind: string; label: string; created_at: string; settings_hash: string; window: { start: string; end: string };
   trade_count: number; prop: PropBrief | null; settings_changed: Record<string, unknown>; metrics: Metrics;
-  exported?: { at: string; file: string } | null;
+  exported?: { at: string; file: string } | null; favorite?: boolean; challenge?: ChallengeView | null; optimizer_run?: string | null;
 }
 export interface MonthRow { month: string; trades: number; wins: number; net_r: number; net_usd: number }
 export interface TradeRow {
@@ -46,7 +46,7 @@ export interface Report extends ReportRow {
   settings: Record<string, unknown>; monthly: MonthRow[]; rule_stats: Record<string, number>; n_signals: number;
   skipped: Record<string, number>; causality_passed: boolean | null; run_id: string | null; trial_id: string | null;
   dataset: Record<string, unknown>; trades: TradeRow[]; decisions?: Record<string, { take: boolean }>; note?: string;
-  review_id?: string;
+  review_id?: string; criteria_profile?: string;
 }
 
 export interface Zone { kind: string; tf: string; top: number; bottom: number; t_from: string; known_ts: string; ce?: number;
@@ -91,7 +91,7 @@ export interface ExportResult { path: string; file: string; folder: string; byte
 export interface Overview {
   protocol: ProtocolInfo; settings_hash: string | null; settings_changed: Record<string, unknown>; backtests: ReportRow[];
   reports: ReportRow[]; plans: { id: string; name: string; created_at: string; variants: number; exported?: unknown }[];
-  job: MyJob | null; es?: EsStatus;
+  job: MyJob | null; es?: EsStatus; criteria_profile?: string;
   review: { id: string; status: string; created_at: string; settings_hash: string; mechanical_report: string; final_report: string | null } | null;
 }
 
@@ -129,37 +129,50 @@ export interface SetupView {
     rows: SetupResultRow[]; note: string };
 }
 
-/** Strategy autotuner (ADR-97). */
-export interface AutotuneOption { id: string; theme: string; label: string; changes: Record<string, unknown>; reason: string; priority: number; source: string }
-export interface AutotuneDesign { autotune_version: number; manifest_hash: string; total: number; base: Record<string, unknown>; base_label: string;
-  themes: { id: string; label: string }[]; options: AutotuneOption[]; counts: Record<string, number>; frozen: boolean; frozen_at?: string | null }
-export interface AutotuneRun { running: boolean; stopping?: boolean; step?: string; started_at?: string; finished_at?: string | null; processes?: number;
-  done_now?: number; failed_now?: number; error?: { kind: string; message: string; trace?: string } | null; memory_note?: string; total?: number;
-  last_duration_s?: number; restarts?: number }
-export interface AutotuneStatus {
+/** Prop challenge chain (ADR-101): fail -> next challenge, pass -> funded payouts, every fee deducted. */
+export interface ChallengeSummary { challenges: number; fails: number; passes: number; funded_lost: number; funded_completed: number;
+  payouts: number; trader_payouts: number; avg_payout_per_pass: number | null; fees_total: number; fees_complete: boolean;
+  net: number | null; open_at_end: boolean; incompatible: boolean; stopped: string | null; dropped: number; error?: string }
+export interface ChallengeView { profiles?: Record<string, ChallengeSummary | { error: string }>; start?: string; error?: string;
+  names?: Record<string, string> }
+
+/** Strategy autotuner (ADR-101): the step-by-step optimiser. */
+export interface GoalCheck { goal: string; ok: boolean; short: number; value: number | null }
+export interface PartScore { met: number; goals: number; short: number; prop_net: number | null; net_r: number | null; rows: GoalCheck[];
+  chain: ChallengeSummary | null; key: number[] }
+export interface OptBest {
+  n: number; parent: number | null; change: { key: string; from: unknown; to: unknown } | null; overrides: Record<string, unknown>;
+  settings_hash: string; trades_hash: string; found_at: string; tries_before: number; train: PartScore; check: PartScore;
+  lookahead: "pending" | "passed" | "failed" | "not_checked"; lookahead_detail?: string; status: "best" | "discarded" | "failed_lookahead";
+  full: null | { metrics: Metrics; monthly?: MonthRow[]; weekly?: Metrics["weekly"]; chains: Record<string, ChallengeSummary | { error: string } | null>;
+    score: PartScore };
+}
+export interface OptTryBrief { met: number; goals: number; short: number; prop_net: number | null; net_r: number | null; payouts: number | null;
+  passes: number | null; fails: number | null }
+export interface OptTry { i: number; best: number; key: string | null; from: unknown; to: unknown; settings_hash: string; accepted: boolean;
+  rejected_by_check: boolean; reused: boolean; train: OptTryBrief; check: OptTryBrief; trades: { train: number | null; check: number | null };
+  win_rate: { train: number | null; check: number | null }; duration_s: number | null }
+export interface OptLive { running: boolean; stopping?: boolean; step?: string; started_at?: string; finished_at?: string | null; processes?: number;
+  tries_now?: number; reused_now?: number; failed_now?: number; bests_now?: number; checks_pending?: number; run_id?: string | null;
+  start_id?: string; error?: { kind: string; message: string; trace?: string } | null; memory_note?: string; last_duration_s?: number;
+  restarts?: number; current_best?: number; neighbourhood?: number }
+export interface OptRunBrief { id: string; created_at: string; finished_at: string | null; status: string; stop_reason: string | null; tries: number;
+  reused: number; failed: number; rejected_by_check: number; max_tries: number; profile: string; profile_name: string;
+  final_backtest: string | null; error: { kind: string; message: string } | null; start: { id: string; label: string; overrides: Record<string, unknown> };
+  bests: number; start_full: OptBest["full"]; final_full: OptBest["full"]; final_n: number | null }
+export interface OptRun extends Omit<OptRunBrief, "bests" | "start_full" | "final_full" | "final_n"> {
+  goals: Record<string, { on: boolean; value?: number }>; fees: Record<string, number | null>; window: { start: string; end: string; split: string; train_share: number };
+  bests: OptBest[]; final?: number | null; current?: number | null; tries_log: OptTry[]; labels: Record<string, string>;
+  saved: { id: string; best: number; created_at: string }[]; live?: OptLive;
+  changes?: { key: string; label: string; from: unknown; to: unknown }[]; final_error?: string; memory_plan?: Record<string, unknown>; batch: number;
+}
+export interface OptStatus {
   protocol: { ready: boolean; problem?: string; protocol_id?: string | null; created?: boolean; discovery?: { start: string; end: string };
     config_ok?: boolean; trial_budget?: number; holdout_looks?: number; trials_used?: number };
-  design: AutotuneDesign; done: number; failed: number; run: AutotuneRun; median_seconds: number | null; cpu_count: number;
-  processes_default: number; criteria_profile: string | null; es: { imported?: boolean; first?: string; last?: string } | null;
-  rules_version?: number; set_aside?: number;
-}
-export interface AutotunePoint { n: number; label: string; stage: string; options: string[]; trade_count: number; win_rate: number | null;
-  expectancy_r: number | null; net_r: number | null; net_usd: number | null; trades_per_week: number | null; profit_factor: number | null;
-  max_drawdown_r: number | null; max_drawdown_usd: number | null; months_losing: number | null; months_total: number | null;
-  avg_planned_rr: number | null; avg_win_r: number | null; prop_evaluation: string | null; prop_payouts: number | null; prop_trader_payout: number | null }
-export interface AutotunePoints { profile: string | null; points: AutotunePoint[]; failed: { n: number; label: string; error: { kind: string; message: string } }[]; total: number;
-  flips?: (AutotunePoint & { flip_of: number; design_n: number | null })[]; flip_budget?: { budget: number; used: number } }
-/** ADR-100: what 'Rerun with flipped entry' does for a combination, and the flip if it exists. */
-export interface FlipInfo { n: number; already_flipped: boolean; switched_off: string[]; design_n: number | null;
-  flip: { kind: "flip" | "design"; design_n?: number } | null }
-export interface AutotuneChange { option: string; theme: string; label: string; changes: Record<string, unknown>; reason: string; priority: number; source: string }
-export interface AutotuneDetail {
-  flip_of?: number; design_n?: number | null; switched_off?: string[];
-  row: { n: number; stage: string; options: string[]; label: string; overrides: Record<string, unknown>; settings_hash: string; changes: AutotuneChange[] };
-  result: null | { error?: { kind: string; message: string }; metrics?: Metrics; monthly?: MonthRow[]; duration_s?: number; trades_hash?: string;
-    causality_passed?: boolean | null; strategy_id?: string; finished_at?: string; weekly?: Metrics["weekly"];
-    prop?: Record<string, { status: string; evaluation: string | null; payouts: number | null; trader_payout: number | null }> };
-  base: Record<string, unknown>; base_label: string; reruns: ReportRow[];
+  run: OptLive; runs: OptRunBrief[]; starts: (ReportRow & { challenge: ChallengeView | null })[]; es: EsStatus | null; cpu_count: number;
+  processes_default: number; context: null | { goals: Record<string, { on: boolean; value?: number }>; profile: string; profile_name: string;
+    fees: Record<string, number | null> }; context_problem: { kind: string; message: string } | null; default_max_tries: number; batch: number;
+  train_share: number; fixed: string[];
 }
 
 export const my = {
@@ -186,14 +199,11 @@ export const my = {
   setupDecide: (id: string, trade_no: number, take: boolean, reasons: string[], note: string) =>
     api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/decide`, { trade_no, take, reasons, note }),
   autotuneUrl: "/api/my/autotune",
-  autotunePointsUrl: (profile?: string | null) => `/api/my/autotune/points${profile ? `?profile=${enc(profile)}` : ""}`,
-  autotuneComboUrl: (n: number) => `/api/my/autotune/combos/${n}`,
-  autotuneFlipInfoUrl: (n: number) => `/api/my/autotune/combos/${n}/flip`,
-  autotuneFlipUrl: (n: number) => `/api/my/autotune/flips/${n}`,
-  autotuneFlip: (n: number) => api.post<MyJob>(`/api/my/autotune/combos/${n}/flip`, {}),
-  autotuneFlipRerun: (n: number) => api.post<MyJob>(`/api/my/autotune/flips/${n}/rerun`, {}),
-  autotuneStart: (processes: number) => api.post<AutotuneRun>("/api/my/autotune/start", { processes }),
-  autotuneStop: () => api.post<AutotuneRun>("/api/my/autotune/stop", {}),
-  autotuneRerun: (n: number) => api.post<MyJob>(`/api/my/autotune/combos/${n}/rerun`, {}),
+  autotuneRunUrl: (id: string) => `/api/my/autotune/runs/${enc(id)}`,
+  autotuneStart: (b: { start_id: string; processes: number; max_tries: number }) => api.post<OptLive>("/api/my/autotune/start", b),
+  autotuneStop: () => api.post<OptLive>("/api/my/autotune/stop", {}),
+  autotuneSave: (id: string, n: number) => api.post<MyJob>(`/api/my/autotune/runs/${enc(id)}/bests/${n}/save`, {}),
+  setMeta: (id: string, b: { favorite?: boolean; label?: string }) =>
+    api.post<{ id: string; favorite: boolean; label: string }>(`/api/my/reports/${enc(id)}/meta`, b),
   setupUndo: (id: string) => api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/undo`, {}),
 };

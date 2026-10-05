@@ -1,326 +1,133 @@
-/* Strategy autotuner (ADR-97): 10,000 reasoned settings combinations of My strategy on the discovery period, the run
-   (start / stop / resume, CPU cores), the overview scatter with free axes, the best combinations for prop payouts and a
-   combination's panel (its changes from test 37 with the reasons, numbers, prop results, re-run with trades + charts). */
+/* Strategy autotuner (ADR-101): a step-by-step optimiser of My strategy. Starts from one of the user's backtests, tries
+   one-setting tweaks without the lookahead check (numbers only), keeps a tweak only when it improves both the first 70 %
+   and the last 30 % of the discovery period, checks every new best for lookahead and backtests the final best normally. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, viewCache } from "../api/client";
+import type { ReactNode } from "react";
+import { ApiError } from "../api/client";
 import { my } from "../api/my";
-import type { AutotuneDetail, AutotunePoint, AutotunePoints, AutotuneStatus, FlipInfo, MyJob } from "../api/my";
+import type { ChallengeSummary, ChallengeView, OptBest, OptLive, OptRun, OptStatus, OptTry, PartScore } from "../api/my";
 import { useApi, useApp } from "../app/context";
-import { go, href } from "../app/router";
-import { profileLabel } from "../app/labels";
+import { go, href, useRoute } from "../app/router";
 import { useMoney } from "../app/money";
-import { BarChart, XYScatter } from "../components/charts";
-import type { ScatterGroup, XYAxis } from "../components/charts";
-import { Badge, Banner, Button, Card, Checkbox, Drawer, Empty, ErrorPanel, Field, Kpi, NumberInput, PageSkeleton, Select, TableWrap,
+import { XYScatter } from "../components/charts";
+import type { ScatterGroup } from "../components/charts";
+import { Badge, Banner, Button, Card, Checkbox, Empty, ErrorPanel, Field, Kpi, NumberInput, PageSkeleton, Select, TableWrap,
   TechDetails, n, pct, r, signCls } from "../components/ui";
-import { JobLine, PageHead, useJob } from "./MyStrategy";
+import { ChainLine, JobLine, PageHead, useJob } from "./MyStrategy";
 
-type MetricKey = "win_rate" | "trades_per_week" | "net_r" | "expectancy_r" | "profit_factor" | "max_drawdown_r" | "months_losing"
-  | "avg_planned_rr" | "prop_payouts" | "net_usd" | "trade_count";
-const METRICS: Record<MetricKey, { label: string; fmt: (v: number) => string }> = {
-  win_rate: { label: "Win rate", fmt: (v) => `${(v * 100).toFixed(0)}%` },
-  trades_per_week: { label: "Trades per week", fmt: (v) => v.toFixed(1) },
-  net_r: { label: "Net R", fmt: (v) => v.toFixed(0) },
-  expectancy_r: { label: "R per trade", fmt: (v) => v.toFixed(2) },
-  profit_factor: { label: "Profit factor", fmt: (v) => v.toFixed(2) },
-  max_drawdown_r: { label: "Worst drawdown (R)", fmt: (v) => v.toFixed(0) },
-  months_losing: { label: "Losing months", fmt: (v) => v.toFixed(0) },
-  avg_planned_rr: { label: "Planned reward : risk", fmt: (v) => v.toFixed(2) },
-  prop_payouts: { label: "Prop payouts", fmt: (v) => v.toFixed(0) },
-  net_usd: { label: "Net profit ($)", fmt: (v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : v.toFixed(0)) },
-  trade_count: { label: "Trades", fmt: (v) => v.toFixed(0) },
-};
-const STAGE: Record<string, string> = { base: "Test 37 itself", single: "1 change", pair: "2 changes", triple: "3 changes", quad: "4 changes" };
-
-/** ADR-99: "meet your goals" = every rule that is switched on; saved in the workspace (Settings preferences), so it survives
-    restarts and updates. Display only: no backtest reads it. */
+/** The goals (ADR-99) are workspace preferences; the autotuner scores with them (goals first, then prop net). */
 export interface GoalRule { on: boolean; value?: number }
 export type Goals = Record<"win_rate" | "trades_per_week" | "losing_months" | "profit" | "rr" | "prop", GoalRule>;
 export const GOAL_DEFAULTS: Goals = { win_rate: { on: false, value: 70 }, trades_per_week: { on: true, value: 3 },
   losing_months: { on: false, value: 4 }, profit: { on: true }, rr: { on: true, value: 1 }, prop: { on: true, value: 1 } };
-const load = <T,>(k: string, d: T): T => { try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; } };
-const save = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* per-viewer convenience only */ } };
+const GOAL_LABEL: Record<string, string> = { win_rate: "Win rate", trades_per_week: "Trades per week", losing_months: "Losing months",
+  profit: "Profit after costs", rr: "Planned reward : risk", prop: "Prop pass + payouts" };
 
-/** True when the combination meets EVERY rule that is on. A missing number (e.g. no trades) never meets a rule. */
-export function isGood(p: AutotunePoint, g: Goals): boolean {
-  const v = (rule: GoalRule) => rule.value ?? 0;
-  if (g.win_rate.on && !(p.win_rate != null && p.win_rate * 100 >= v(g.win_rate) - 1e-9)) return false;
-  if (g.trades_per_week.on && !(p.trades_per_week != null && p.trades_per_week >= v(g.trades_per_week) - 1e-9)) return false;
-  if (g.losing_months.on && !(p.months_losing != null && p.months_losing <= v(g.losing_months))) return false;
-  if (g.profit.on && !(p.net_r != null && p.net_r > 0)) return false;
-  if (g.rr.on && !(p.avg_planned_rr != null && p.avg_planned_rr >= v(g.rr) - 1e-9)) return false;
-  if (g.prop.on && !(p.prop_evaluation === "PASS" && (p.prop_payouts ?? 0) >= v(g.prop))) return false;
-  return true;
-}
+const STOP_REASON: Record<string, string> = {
+  no_improvement: "No tweak of the best settings improved the first 70 % any more.",
+  check_stopped_improving: "Tweaks still improved the first 70 %, but none of them also improved the last 30 %: more tweaking would only fit noise.",
+  no_tweaks_left: "Every tweak of the best settings was already tried.",
+  limit: "This run's try limit was reached.",
+  budget: "The autotuner's tries are used up.",
+  stopped: "You stopped it.",
+};
+
+const fmtVal = (v: unknown) => (typeof v === "boolean" ? (v ? "on" : "off") : v === null || v === undefined ? "–" : String(v));
 
 export function MyAutotunePage() {
-  const { data: st, error, reload } = useApi<AutotuneStatus>(my.autotuneUrl);
-  const { data: pts, reload: reloadPts } = useApi<AutotunePoints>(st ? my.autotunePointsUrl(st.criteria_profile) : null, [st?.criteria_profile]);
-  const [cores, setCores] = useState<number | null>(null);
-  const [err, setErr] = useState<ApiError | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState<number | null>(null);
-  const [openFlip, setOpenFlip] = useState<number | null>(null);      // ADR-100: a pink bubble
-  const [many, setMany] = useState<number[] | null>(null);
+  const route = useRoute();
+  const { data: st, error, reload } = useApi<OptStatus>(my.autotuneUrl);
   const running = !!st?.run.running;
-  useEffect(() => {                                       // live while running: status every 5 s, the scatter every 30 s
+  useEffect(() => {
     if (!running) return;
-    const a = window.setInterval(() => reload(), 5000);
-    const b = window.setInterval(() => reloadPts(), 30000);
-    return () => { window.clearInterval(a); window.clearInterval(b); };
+    const t = window.setInterval(() => reload(), 4000);
+    return () => window.clearInterval(t);
   }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (st && !running) reloadPts(); }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
-  const start = async () => {
-    setBusy(true); setErr(null);
-    try { await my.autotuneStart(cores ?? st?.processes_default ?? 1); reload(); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
-  };
-  const stop = async () => { setBusy(true); try { await my.autotuneStop(); reload(); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); } };
+  const runId = route.query.get("run") ?? st?.run.run_id ?? st?.runs[0]?.id ?? null;
   if (error) return <div className="page"><PageHead title="Strategy autotuner" /><ErrorPanel error={error} /></div>;
   if (!st) return <div className="page"><PageHead title="Strategy autotuner" /><PageSkeleton layout="overview" label="Loading the autotuner" /></div>;
-  const d = st.design, p = st.protocol, run = st.run;
-  const total = d.total, done = st.done;
-  const coreOpts = Array.from({ length: Math.max(1, st.cpu_count) }, (_, i) => String(i + 1));
+  const p = st.protocol;
   return (
     <div className="page" data-testid="my-autotune-page">
       <PageHead title="Strategy autotuner" />
       {!p.ready && <Banner tone="warn">{p.problem}</Banner>}
       {p.ready && p.config_ok === false && <Banner tone="error">The research settings differ from the protocol's. Restore them under
         Run backtest → Research runs before running the autotuner.</Banner>}
-      {(st.set_aside ?? 0) > 0 && <Banner tone="info" testId="at-set-aside">{st.set_aside} combination result{st.set_aside === 1 ? " was" : "s were"} computed
-        with the earlier rule code, which reused a cached value for the wrong gap. They are kept in a backup file but not shown, and run again with the
-        corrected rules (same tries, not counted twice).</Banner>}
       <div className="kpis" data-testid="at-kpis">
-        <Kpi label="Combinations tested" value={`${done.toLocaleString()} of ${total.toLocaleString()}`} meter={done / (total || 1)}
-          sub={st.failed ? `${st.failed} failed (they run again on the next start)` : "discovery period only"} accent />
-        <Kpi label="Time per combination" value={st.median_seconds == null ? "–" : `${Math.round(st.median_seconds)} s`}
-          sub={`one core; ${run.processes ?? cores ?? st.processes_default} run side by side`} />
-        <Kpi label="Tries used (autotuner protocol)" value={`${(p.trials_used ?? 0).toLocaleString()} of ${(p.trial_budget ?? total).toLocaleString()}`}
-          sub={`${p.holdout_looks ?? 1} holdout look, not used here`} />
+        <Kpi label="Tries used (autotuner protocol)" value={`${(p.trials_used ?? 0).toLocaleString()} of ${(p.trial_budget ?? 5000).toLocaleString()}`}
+          meter={(p.trials_used ?? 0) / (p.trial_budget || 1)} sub={`a settings combination tried again is never a new try · ${p.holdout_looks ?? 1} holdout look`} accent />
+        <Kpi label="Runs" value={st.runs.length} sub={st.runs[0] ? `last: ${statusWord(st.runs[0].status)}` : "none yet"} />
+        <Kpi label="Scored by" value="Your goals" sub={`then prop net (payouts − fees) on ${st.context?.profile_name ?? "the pass-criteria account"}`} />
       </div>
-      <Card title="Run" testId="at-run" actions={<div className="inline">
-        {!running && <Field label="CPU cores"><Select value={String(cores ?? st.processes_default)} onChange={(v) => setCores(Number(v))}
-          options={coreOpts} ariaLabel="CPU cores" testId="at-cores" /></Field>}
-        {running ? <Button onClick={stop} busy={busy || run.stopping} busyLabel="Stopping…" testId="at-stop">Stop</Button>
-          : <Button kind="primary" onClick={start} busy={busy} busyLabel="Starting…" disabled={!p.ready || done >= total} testId="at-start">
-            {done ? "Continue" : "Start"}</Button>}</div>}>
-        <p className="muted">Every combination is a full backtest of the discovery period
-          {p.discovery ? ` (${new Date(p.discovery.start).toLocaleDateString()} – ${new Date(p.discovery.end).toLocaleDateString()})` : ""} through the same
-          engine as My strategy, with the lookahead check, BID/ASK costs, MNQ sizing and the prop check. Stop keeps every finished combination; Continue
-          runs the rest. The holdout stays locked.</p>
-        {running && <Banner tone="info"><span className="spinner" /> {run.step}{run.done_now ? ` · ${run.done_now} finished in this run` : ""}
-          {run.memory_note ? ` · ${run.memory_note}` : ""}</Banner>}
-        {!running && run.error && <Banner tone="error">{run.error.message}</Banner>}
-        {!running && run.step === "Finished" && done >= total && <Banner tone="ok">All {total.toLocaleString()} combinations are tested.</Banner>}
-        <ErrorPanel error={err} />
-      </Card>
-      <ResultsSection st={st} pts={pts} onOpen={setOpen} onOpenFlip={setOpenFlip} onMany={setMany} />
-      <DesignCard st={st} />
-      {pts && pts.failed.length > 0 && <Card title={`Failed combinations (${st.failed})`} testId="at-failed">
-        <TableWrap className="my-report-scroll"><table className="dense"><thead><tr><th className="num">#</th><th>Changes</th><th>Why it failed</th></tr></thead>
-          <tbody>{pts.failed.map((f) => <tr key={f.n}><td className="num">{f.n}</td><td>{f.label}</td><td className="small">{f.error.message}</td></tr>)}</tbody></table></TableWrap>
-      </Card>}
-      <Drawer open={many !== null} onClose={() => setMany(null)} title={`${many?.length ?? 0} combinations here`} testId="at-many">
-        {many && pts && <ComboTable rows={pts.points.filter((x) => many.includes(x.n))} onOpen={(k) => { setMany(null); setOpen(k); }} />}
-      </Drawer>
-      <Drawer open={open !== null} onClose={() => setOpen(null)} title={open !== null ? `Combination #${open}` : ""} testId="at-detail">
-        {open !== null && <ComboPanel key={open} n={open} profile={st.criteria_profile} onChanged={reloadPts}
-          onOpenFlip={(k) => { setOpen(null); setOpenFlip(k); }} onOpenCombo={(k) => { setOpenFlip(null); setOpen(k); }} />}
-      </Drawer>
-      <Drawer open={openFlip !== null} onClose={() => setOpenFlip(null)} title={openFlip !== null ? `Flipped #${openFlip}` : ""} testId="at-flip-detail">
-        {openFlip !== null && <ComboPanel key={`f${openFlip}`} n={openFlip} flip profile={st.criteria_profile} onChanged={reloadPts}
-          onOpenFlip={(k) => setOpenFlip(k)} onOpenCombo={(k) => { setOpenFlip(null); setOpen(k); }} />}
-      </Drawer>
+      <HowCard st={st} />
+      <GoalsCard st={st} />
+      <StartCard st={st} onChange={reload} />
+      <RunsCard st={st} selected={runId} />
+      {runId && <RunView key={runId} id={runId} live={st.run.run_id === runId ? st.run : null} onChanged={reload} />}
     </div>
   );
 }
 
-function ResultsSection({ st, pts, onOpen, onOpenFlip, onMany }: { st: AutotuneStatus; pts: AutotunePoints | null; onOpen: (n: number) => void;
-  onOpenFlip: (n: number) => void; onMany: (ns: number[]) => void }) {
-  const [axes, setAxes] = useState(() => load("my-autotune-axes", { x: "win_rate" as MetricKey, y: "trades_per_week" as MetricKey }));
+const statusWord = (s: string) => ({ running: "running", finished: "finished", stopped: "stopped", failed: "failed" } as Record<string, string>)[s] ?? s;
+
+function HowCard({ st }: { st: OptStatus }) {
+  const d = st.protocol.discovery;
+  return (
+    <Card title="How it works" testId="at-how">
+      <ol className="small at-how">
+        <li>Pick one of your backtests. Its settings are the starting point (position size and the flip switch are never changed).</li>
+        <li>The autotuner tries one change at a time: a switch flipped, another choice, a number one step up or down, a time 15 minutes earlier or later.
+          Settings that cannot change any trade with the current settings are skipped.</li>
+        <li>Every try is a backtest of the discovery period{d ? ` (${new Date(d.start).toLocaleDateString()} – ${new Date(d.end).toLocaleDateString()})` : ""} through
+          the same engine, BID/ASK costs and MNQ sizing, but without the slow lookahead check and without trade records or candles: numbers only.</li>
+        <li>The period is split by trading days: the first {Math.round(st.train_share * 100)} % chooses, the last {100 - Math.round(st.train_share * 100)} % checks.
+          A change is kept only when it is better on BOTH parts. Better = more of your goals met, then closer to the unmet ones, then more prop
+          net (payouts − every challenge fee), then more net R.</li>
+        <li>It keeps going from the new best until no change improves the last {100 - Math.round(st.train_share * 100)} % any more, or the try limit.</li>
+        <li>Every new best gets the full lookahead check in parallel; one that fails is thrown away with everything built on it. The final best
+          is backtested normally (trade records, candles, lookahead check) and appears in your Backtest list. The holdout stays locked.</li>
+      </ol>
+    </Card>
+  );
+}
+
+function GoalsCard({ st }: { st: OptStatus }) {
   const { prefs, setPref } = useApp();
   const saved = (prefs as { autotune_goals?: Goals }).autotune_goals;
   const [goals, setGoalsState] = useState<Goals>(() => ({ ...GOAL_DEFAULTS, ...(saved ?? {}) }));
-  const edited = useRef(false);                       // after the first edit, the page's own goals are the truth
+  const edited = useRef(false);
   useEffect(() => { if (saved && !edited.current) setGoalsState({ ...GOAL_DEFAULTS, ...saved }); }, [JSON.stringify(saved)]); // eslint-disable-line react-hooks/exhaustive-deps
   const timer = useRef<number | undefined>(undefined);
-  const setGoals = (g: Goals) => {                    // saved in the workspace once typing pauses
+  const setGoals = (g: Goals) => {
     edited.current = true;
     setGoalsState(g);
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => { void setPref({ autotune_goals: g }); }, 500);
   };
   const rule = (k: keyof Goals, patch: Partial<GoalRule>) => setGoals({ ...goals, [k]: { ...goals[k], ...patch } });
-  useEffect(() => save("my-autotune-axes", axes), [axes]);
-  const points = pts?.points ?? [];
-  const good = useMemo(() => new Set(points.filter((p) => isGood(p, goals)).map((p) => p.n)), [points, goals]);
-  if (!pts) return <PageSkeleton layout="overview" label="Reading the results" />;
-  if (!points.length) return <Card title="Results"><Empty>No combination is finished yet. Start the run above.</Empty></Card>;
-  const val = (p: AutotunePoint, k: MetricKey) => p[k] as number | null;
-  const drawn = points.filter((p) => val(p, axes.x) != null && val(p, axes.y) != null && Number.isFinite(val(p, axes.x)!) && Number.isFinite(val(p, axes.y)!));
-  const toPt = (p: AutotunePoint) => ({ id: String(p.n), x: val(p, axes.x)!, y: val(p, axes.y)!, label: `#${p.n} ${p.label}`,
-    detail: `${n(p.trades_per_week, 1)} / week · ${pct(p.win_rate, 0)} wins · ${r(p.net_r, 1)} net · ${p.prop_evaluation ?? "–"}, ${p.prop_payouts ?? 0} payouts` });
-  const groups: ScatterGroup[] = [
-    { id: "other", label: "Combinations", color: "var(--c-strategy)", size: 3.5, cluster: true,
-      points: drawn.filter((p) => !good.has(p.n) && p.stage !== "base").map(toPt) },
-    { id: "good", label: "Meet your goals", color: "var(--c-survivor)", size: 5, ring: true,
-      points: drawn.filter((p) => good.has(p.n) && p.stage !== "base").map(toPt) },
-    { id: "base", label: "Test 37 (the base)", color: "var(--text)", size: 7, ring: true, points: drawn.filter((p) => p.stage === "base").map(toPt) },
-    { id: "flips", label: "Flipped reruns", color: "var(--c-flip)", size: 6, ring: true,       // ADR-100: bright pink, never grouped
-      points: (pts.flips ?? []).filter((p) => val(p, axes.x) != null && val(p, axes.y) != null && Number.isFinite(val(p, axes.x)!)
-        && Number.isFinite(val(p, axes.y)!)).map((p) => ({ ...toPt(p), id: `f${p.flip_of}`, label: p.label })) },
-  ];
-  const refOf = (k: MetricKey): XYAxis["ref"] => (
-    k === "trades_per_week" && goals.trades_per_week.on ? { value: goals.trades_per_week.value ?? 0, label: `${goals.trades_per_week.value} / week` }
-    : k === "win_rate" && goals.win_rate.on ? { value: (goals.win_rate.value ?? 0) / 100, label: `${goals.win_rate.value}%` }
-    : k === "months_losing" && goals.losing_months.on ? { value: goals.losing_months.value ?? 0, label: `${goals.losing_months.value} losing` }
-    : k === "avg_planned_rr" && goals.rr.on ? { value: goals.rr.value ?? 0, label: `${goals.rr.value} : 1` }
-    : k === "prop_payouts" && goals.prop.on ? { value: goals.prop.value ?? 0, label: `${goals.prop.value} payout${goals.prop.value === 1 ? "" : "s"}` }
-    : k === "net_r" ? { value: 0, label: "break-even" } : undefined);
-  const ax = (k: MetricKey): XYAxis => ({ label: METRICS[k].label, fmt: METRICS[k].fmt, ref: refOf(k) });
-  const top = points.filter((p) => good.has(p.n)).sort((a, b) => (b.prop_payouts ?? 0) - (a.prop_payouts ?? 0)
-    || (b.prop_trader_payout ?? 0) - (a.prop_trader_payout ?? 0) || (b.win_rate ?? 0) - (a.win_rate ?? 0)).slice(0, 50);
-  const base = points.find((p) => p.stage === "base");
-  const opts = (Object.keys(METRICS) as MetricKey[]).map((k) => ({ value: k, label: METRICS[k].label }));
+  const ctx = st.context;
+  const fees = ctx?.fees ?? {};
   return (
-    <>
-      <Card title="Your goals" testId="at-goals">
-        <p className="small muted">A combination meets your goals only when it passes EVERY rule that is ticked. Saved in this workspace.</p>
-        <div className="at-goals">
-          <GoalRow label="Win rate at least" unit="%" hint="trades that made money after costs" k="win_rate" goals={goals} rule={rule} step={1} />
-          <GoalRow label="Trades per week at least" k="trades_per_week" goals={goals} rule={rule} step={0.5} />
-          <GoalRow label="Losing months at most" k="losing_months" goals={goals} rule={rule} step={1} integer hint="months with a net loss" />
-          <GoalRow label="Profit after costs" k="profit" goals={goals} rule={rule} hint="net R above 0" />
-          <GoalRow label="Planned reward : risk at least" k="rr" goals={goals} rule={rule} step={0.1} />
-          <GoalRow label="Prop evaluation passed, payouts at least" k="prop" goals={goals} rule={rule} step={1} integer
-            hint={`under ${profileLabel(st.criteria_profile)} (Settings → pass-criteria account)`} />
-        </div>
-        <p className="small muted" data-testid="at-goal-count"><b>{good.size.toLocaleString()}</b> of {points.length.toLocaleString()} tested combinations
-          meet every ticked rule{base && good.has(base.n) ? " (one of them is test 37 itself, the white dot)" : ""}. Ranked by payouts.</p>
-      </Card>
-      <Card title="Every tested combination" testId="at-scatter" actions={<div className="inline">
-        <Field label="Across"><Select value={axes.x} onChange={(v) => setAxes({ ...axes, x: v as MetricKey })} options={opts} ariaLabel="Across" testId="at-x" /></Field>
-        <Field label="Up"><Select value={axes.y} onChange={(v) => setAxes({ ...axes, y: v as MetricKey })} options={opts} ariaLabel="Up" testId="at-y" /></Field></div>}>
-        <XYScatter groups={groups} x={ax(axes.x)} y={ax(axes.y)} testId="at-xy"
-          onPick={(id) => (id.startsWith("f") ? onOpenFlip(Number(id.slice(1))) : onOpen(Number(id)))}
-          onPickMany={(ids) => onMany(ids.filter((x) => !x.startsWith("f")).map(Number))} />
-        <p className="small muted">Each dot is one combination's discovery backtest; click one for its changes and numbers. Overlapping dots are grouped.
-          {points.length - drawn.length > 0 ? ` ${points.length - drawn.length} combinations have no value on these axes (e.g. no trades) and are not drawn.` : ""}
-          {" "}With {points.length.toLocaleString()} combinations tried, the best-looking ones are partly luck: only the holdout can confirm one.</p>
-      </Card>
-      <Card title={top.length ? `Best for prop payouts (${top.length} of ${good.size} shown)` : "Best for prop payouts"} testId="at-top">
-        {base && <p className="small muted">Test 37 itself: {n(base.trades_per_week, 2)} trades / week, {pct(base.win_rate)} wins, {r(base.net_r, 1)} net,
-          {" "}{base.prop_evaluation ?? "–"} with {base.prop_payouts ?? 0} payouts.</p>}
-        {!top.length ? <Empty>No tested combination meets your goals yet.</Empty> : <ComboTable rows={top} onOpen={onOpen} />}
-      </Card>
-    </>
-  );
-}
-
-function ComboTable({ rows, onOpen }: { rows: AutotunePoint[]; onOpen: (n: number) => void }) {
-  return (
-    <TableWrap className="my-setup-scroll"><table className="dense" data-testid="at-table"><thead><tr><th className="num">#</th><th>Changes from test 37</th>
-      <th className="num">Per week</th><th className="num">Win rate</th><th className="num">R : R</th><th className="num">Net R</th>
-      <th className="num">Losing months</th><th className="num">Drawdown R</th><th>Evaluation</th><th className="num">Payouts</th></tr></thead>
-      <tbody>{rows.map((p) => (
-        <tr key={p.n} onClick={() => onOpen(p.n)} style={{ cursor: "pointer" }}>
-          <td className="num">{p.n}</td><td>{p.label}</td><td className="num">{n(p.trades_per_week, 2)}</td><td className="num">{pct(p.win_rate)}</td>
-          <td className="num">{n(p.avg_planned_rr, 2)}</td><td className={`num ${signCls(p.net_r)}`}>{r(p.net_r, 1)}</td>
-          <td className="num">{p.months_losing ?? "–"} / {p.months_total ?? "–"}</td><td className="num">{n(p.max_drawdown_r, 1)}</td>
-          <td>{p.prop_evaluation === "PASS" ? <Badge tone="ok">Pass</Badge> : <Badge>{p.prop_evaluation ?? "–"}</Badge>}</td>
-          <td className="num">{p.prop_payouts ?? 0}</td></tr>))}</tbody></table></TableWrap>
-  );
-}
-
-function ComboPanel({ n: num, profile, flip, onChanged, onOpenFlip, onOpenCombo }: { n: number; profile: string | null; flip?: boolean;
-  onChanged: () => void; onOpenFlip: (n: number) => void; onOpenCombo: (n: number) => void }) {
-  const { data, error, reload } = useApi<AutotuneDetail>(flip ? my.autotuneFlipUrl(num) : my.autotuneComboUrl(num), [num, flip]);
-  const money = useMoney();
-  const [err, setErr] = useState<ApiError | null>(null);
-  const [job, setJob] = useJob((j: MyJob) => { viewCache.clear(); reload(); if (j.state === "completed") setErr(null); });
-  if (error) return <ErrorPanel error={error} />;
-  if (!data) return <PageSkeleton layout="overview" label="Loading the combination" />;
-  const res = data.result, m = res?.metrics;
-  const rerun = async () => {
-    setErr(null);
-    try { setJob(await (flip ? my.autotuneFlipRerun(num) : my.autotuneRerun(num))); } catch (e) { setErr(e as ApiError); }
-  };
-  const pr = profile ? res?.prop?.[profile] : undefined;
-  const done = (job?.result as { id?: string } | null)?.id;
-  return (
-    <div data-testid="at-panel">
-      {flip && <Banner tone="info" testId="at-flipped-from">Flipped from{" "}
-        <a href="#" onClick={(e: { preventDefault: () => void }) => { e.preventDefault(); onOpenCombo(num); }} data-testid="at-flip-source">combination #{num}</a>:
-        every trade taken the other way (long ↔ short, its stop is the target and its target the stop, same prices).
-        {data.design_n ? ` It is also combination #${data.design_n} of the 10,000 (no new try).` : ""}
-        {data.switched_off?.length ? ` Switched off for the flip (no exact mirror): ${data.switched_off.join(", ")}.` : ""}</Banner>}
-      <p><b>{data.row.label}</b> <span className="muted small">· {flip ? "flipped rerun" : STAGE[data.row.stage] ?? data.row.stage}</span></p>
-      {!res ? <Banner tone="info">Not tested yet.</Banner> : res.error ? <Banner tone="error">{res.error.message}</Banner> : m && <>
-        <div className="kpis">
-          <Kpi label="Trades per week" value={n(m.trades_per_week, 2)} sub={`${m.trade_count} trades`} />
-          <Kpi label="Win rate" value={pct(m.win_rate)} sub={`planned R : R ${n(m.avg_planned_rr, 2)}`} accent />
-          <Kpi label="Net" value={r(m.net_r, 1)} tone={signCls(m.net_r) as "pos" | "neg" | ""} sub={money.fmt(m.net_usd)} />
-          <Kpi label="Losing months" value={`${m.months_losing ?? 0} of ${m.months_total ?? 0}`} tone={(m.months_losing ?? 0) > 0 ? "neg" : "pos"}
-            sub={`worst drawdown ${n(m.max_drawdown_r, 1)} R`} />
-          <Kpi label={`Prop: ${profileLabel(profile)}`} value={pr?.evaluation ?? "–"} sub={`${pr?.payouts ?? 0} payouts · ${money.fmt(pr?.trader_payout ?? 0)} to you`} />
-        </div>
-        {res.monthly && res.monthly.length > 0 && <BarChart categories={res.monthly.map((x) => x.month)} series={[{ id: "r", label: "Net R per month",
-          values: res.monthly.map((x) => x.net_r) }]} height={170} testId="at-monthly" />}
-      </>}
-      <h3>Changes from {data.base_label}</h3>
-      {!data.row.changes.length ? <p className="muted">None: this is test 37 itself, the reference for every other combination.</p> :
-        <TableWrap><table className="dense" data-testid="at-changes"><thead><tr><th>Change</th><th>Why</th><th>Basis</th></tr></thead>
-          <tbody>{data.row.changes.map((c) => <tr key={c.option}><td><b>{c.label}</b><div className="muted small">
-            {Object.entries(c.changes).map(([k, v]) => `${k} = ${String(v)}`).join(", ")}</div></td><td className="small">{c.reason}</td>
-            <td className="small">{c.source}</td></tr>)}</tbody></table></TableWrap>}
-      {res?.prop && <><h3>Prop accounts</h3>
-        <TableWrap><table className="dense"><thead><tr><th>Account</th><th>Evaluation</th><th className="num">Payouts</th><th className="num">To you</th></tr></thead>
-          <tbody>{Object.entries(res.prop).map(([k, v]) => <tr key={k}><td>{profileLabel(k)}</td><td>{v.evaluation ?? v.status}</td>
-            <td className="num">{v.payouts ?? 0}</td><td className="num">{money.fmt(v.trader_payout ?? 0)}</td></tr>)}</tbody></table></TableWrap>
-        <p className="small muted">Under the default assumed rules; historical result under stated assumptions, not a forecast.</p></>}
-      {!flip && <FlipSection n={num} onChanged={onChanged} onOpenFlip={onOpenFlip} />}
-      <h3>Trades and charts</h3>
-      <p className="small muted">The autotuner keeps the numbers only. Re-running gives this combination as a normal My strategy backtest with every trade and its
-        charts (same settings and data, so it is not a new try).</p>
-      <div className="inline">
-        <Button kind="primary" onClick={rerun} busy={job?.state === "running"} busyLabel="Running…" disabled={!res || !!res.error} testId="at-rerun">
-          Re-run with trades and charts</Button>
-        {done && <a className="btn btn-secondary" href={href(`/my-trades/${done}`)} data-testid="at-open-trades">Open the trades</a>}
+    <Card title="Your goals" testId="at-goals">
+      <p className="small muted">The autotuner aims for these first. Saved in this workspace; a run uses the goals and fees from when it started.
+        Losing months and payouts are counted for the whole discovery period and scaled to each part's share of the trading days.</p>
+      <div className="at-goals">
+        <GoalRow label="Win rate at least" unit="%" hint="trades that made money after costs" k="win_rate" goals={goals} rule={rule} step={1} />
+        <GoalRow label="Trades per week at least" k="trades_per_week" goals={goals} rule={rule} step={0.5} />
+        <GoalRow label="Losing months at most" k="losing_months" goals={goals} rule={rule} step={1} integer hint="months with a net loss" />
+        <GoalRow label="Profit after costs" k="profit" goals={goals} rule={rule} hint="net R above 0" />
+        <GoalRow label="Planned reward : risk at least" k="rr" goals={goals} rule={rule} step={0.1} />
+        <GoalRow label="A passed prop challenge and payouts at least" k="prop" goals={goals} rule={rule} step={1} integer
+          hint={`challenge after challenge on ${ctx?.profile_name ?? "the pass-criteria account"}`} />
       </div>
-      <JobLine job={job} />
-      <ErrorPanel error={err} />
-      {data.reruns.length > 0 && <ul className="small">{data.reruns.map((b) => <li key={b.id}>
-        <a href={href(`/my-trades/${b.id}`)}>Re-run of {new Date(b.created_at).toLocaleString()}</a> · {b.trade_count} trades</li>)}</ul>}
-      {res && !res.error && <TechDetails rows={[["Combination", String(num)], ["Settings fingerprint", data.row.settings_hash],
-        ["Trades fingerprint", res.trades_hash ?? "–"], ["Lookahead check", res.causality_passed ? "passed" : String(res.causality_passed)],
-        ["Run time", `${n(res.duration_s, 0)} s`]]} />}
-      <p className="small"><a href="#" onClick={(e: { preventDefault: () => void }) => { e.preventDefault(); go("/my-settings"); }}>My strategy settings</a></p>
-    </div>
-  );
-}
-
-function DesignCard({ st }: { st: AutotuneStatus }) {
-  const d = st.design;
-  const [theme, setTheme] = useState<string>("all");
-  const rows = d.options.filter((o) => theme === "all" || o.theme === theme);
-  const label = Object.fromEntries(d.themes.map((t) => [t.id, t.label]));
-  return (
-    <Card title={`How the ${d.total.toLocaleString()} combinations were chosen`} testId="at-design" actions={
-      <Select value={theme} onChange={setTheme} options={[{ value: "all", label: "Every theme" }, ...d.themes.map((t) => ({ value: t.id, label: t.label }))]}
-        ariaLabel="Theme" testId="at-theme" />}>
-      <p className="small">Every combination is {d.base_label.toLowerCase()} plus 0-4 of the {d.options.length} reasoned changes below, never two from one theme,
-        and every change must still matter (e.g. no rejection-block setting while rejection blocks are off). Nothing is drawn at random:
-        test 37 itself ({d.counts.base}), every change on its own ({d.counts.single}), pairs ({d.counts.pair.toLocaleString()}: every direction mode,
-        including flip, with every other change, then the other pairs with the most Blake-central first), and groups of 3 ({d.counts.triple.toLocaleString()})
-        and 4 ({d.counts.quad.toLocaleString()}) changes spread evenly over all theme groups, Blake's own rules about three times as often as threshold
-        calibrations. {d.frozen ? `Frozen ${new Date(d.frozen_at as string).toLocaleString()}.` : "Frozen on the first start."}</p>
-      <TableWrap className="my-setup-scroll"><table className="dense" data-testid="at-options"><thead><tr><th>Theme</th><th>Change</th><th>Why</th><th>Basis</th></tr></thead>
-        <tbody>{rows.map((o) => <tr key={o.id}><td className="small">{label[o.theme] ?? o.theme}</td><td><b>{o.label}</b><div className="muted small">
-          {Object.entries(o.changes).map(([k, v]) => `${k} = ${String(v)}`).join(", ")}</div></td><td className="small">{o.reason}</td>
-          <td className="small">{o.source}</td></tr>)}</tbody></table></TableWrap>
-      <TechDetails rows={[["Design version", String(d.autotune_version)], ["Design fingerprint", d.manifest_hash]]} />
+      {st.context_problem ? <Banner tone="warn" testId="at-fees-missing">{st.context_problem.message} <a href={href("/settings")}>Open Settings</a></Banner>
+        : <p className="small muted" data-testid="at-fees">Prop account: <b>{ctx?.profile_name}</b> (Settings → pass-criteria account) · evaluation{" "}
+          {money0(fees.eval_price)} · reset {fees.reset_fee == null ? "= evaluation price" : money0(fees.reset_fee)} · activation{" "}
+          {fees.activation_fee == null ? "none" : money0(fees.activation_fee)} (Settings → prop account fees, discount applied).</p>}
     </Card>
   );
 }
+const money0 = (v: number | null | undefined) => (v == null ? "–" : `$${Math.round(v).toLocaleString()}`);
 
 function GoalRow({ label, unit, hint, k, goals, rule, step, integer }: { label: string; unit?: string; hint?: string; k: keyof Goals; goals: Goals;
   rule: (k: keyof Goals, patch: Partial<GoalRule>) => void; step?: number; integer?: boolean }) {
@@ -336,32 +143,244 @@ function GoalRow({ label, unit, hint, k, goals, rule, step, integer }: { label: 
   );
 }
 
-/** ADR-100: "Rerun with flipped entry": the same settings with every trade the other way, shown as a pink bubble. */
-function FlipSection({ n: num, onChanged, onOpenFlip }: { n: number; onChanged: () => void; onOpenFlip: (n: number) => void }) {
-  const { data, reload } = useApi<FlipInfo>(my.autotuneFlipInfoUrl(num), [num]);
+function chainOf(v: ChallengeView | null | undefined): ChallengeSummary | null {
+  const p = v?.profiles ? Object.values(v.profiles)[0] : null;
+  return (p as ChallengeSummary | null) ?? null;
+}
+
+function StartCard({ st, onChange }: { st: OptStatus; onChange: () => void }) {
+  const money = useMoney();
+  const run = st.run;
+  const running = !!run.running;
+  const [pick, setPick] = useState<string | null>(null);
+  const [cores, setCores] = useState<number | null>(null);
+  const [maxTries, setMaxTries] = useState<number>(st.default_max_tries);
+  const [favOnly, setFavOnly] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [job, setJob] = useJob((j: MyJob) => {
-    viewCache.clear(); reload(); onChanged();
-    if (j.state === "completed") onOpenFlip(num);
-  });
-  if (!data) return null;
-  const go = async () => { setErr(null); try { setJob(await my.autotuneFlip(num)); } catch (e) { setErr(e as ApiError); } };
+  const rows = favOnly ? st.starts.filter((b) => b.favorite) : st.starts;
+  const chosen = pick ?? st.starts[0]?.id ?? null;
+  const start = async () => {
+    if (!chosen) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await my.autotuneStart({ start_id: chosen, processes: cores ?? st.processes_default, max_tries: maxTries });
+      onChange();
+      go(res.run_id ? `/my-autotune?run=${res.run_id}` : "/my-autotune");
+    } catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  const stop = async () => { setBusy(true); try { await my.autotuneStop(); onChange(); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); } };
+  const coreOpts = Array.from({ length: Math.max(1, st.cpu_count) }, (_, i) => String(i + 1));
   return (
-    <div data-testid="at-flip-section">
-      <h3>Flipped entry</h3>
-      <p className="small muted">{data.already_flipped
-        ? "This combination is already flipped: its flipped version is the unflipped one (every trade the other way again)."
-        : "Every trade taken the other way: long ↔ short, a take-profit where the stop was and a stop where the take-profit was (same prices, so 1:2 becomes 1:0.5)."}
-        {data.switched_off.length ? ` No exact mirror exists for: ${data.switched_off.join(", ")}; the flipped version runs with them switched off.` : ""}
-        {data.design_n ? ` The flipped settings are combination #${data.design_n} of the 10,000: it is linked, not run again (no new try).`
-          : " It counts as one try of the separate flipped-reruns budget (500, its own holdout look)."}</p>
-      <div className="inline">
-        {data.flip ? <Button kind="primary" onClick={() => onOpenFlip(num)} testId="at-open-flip">Show the flipped version</Button>
-          : <Button kind="primary" onClick={go} busy={job?.state === "running"} busyLabel="Running the flip…" testId="at-flip">
-            Rerun with flipped entry</Button>}
-      </div>
-      <JobLine job={job} />
+    <Card title="Start a run" testId="at-run" actions={<div className="inline">
+      {!running && <Field label="CPU cores"><Select value={String(cores ?? st.processes_default)} onChange={(v) => setCores(Number(v))}
+        options={coreOpts} ariaLabel="CPU cores" testId="at-cores" /></Field>}
+      {!running && <Field label="Most tries this run"><NumberInput value={maxTries} integer step={100}
+        onChange={(v) => setMaxTries(Math.max(1, Math.min(5000, v ?? st.default_max_tries)))} ariaLabel="Most tries this run" testId="at-max-tries" /></Field>}
+      {running ? <Button onClick={stop} busy={busy || run.stopping} busyLabel="Stopping…" testId="at-stop">Stop</Button>
+        : <Button kind="primary" onClick={start} busy={busy} busyLabel="Starting…" testId="at-start"
+          disabled={!st.protocol.ready || !chosen || !!st.context_problem}>Start autotuning</Button>}</div>}>
+      {running && <LiveLine live={run} />}
+      {!running && run.error && <Banner tone="error" testId="at-run-error">{run.error.message}</Banner>}
       <ErrorPanel error={err} />
-    </div>
+      {!running && <>
+        <div className="inline" style={{ justifyContent: "space-between" }}>
+          <p className="small muted" style={{ margin: 0 }}>Start from (your discovery backtests, favourites first):</p>
+          <Checkbox checked={favOnly} onChange={setFavOnly} label="Favourites only" testId="at-fav-only" />
+        </div>
+        {!rows.length ? <Empty>{favOnly ? "No favourite backtest. Star one in the Backtest tab." : "No backtest yet. Run one in the Backtest tab first."}</Empty> : (
+          <TableWrap className="my-report-scroll" testId="at-starts"><table className="dense">
+            <thead><tr><th style={{ width: 28 }} /><th>★</th><th>Name</th><th>When</th><th className="num">Trades</th><th className="num">Per week</th>
+              <th className="num">Win rate</th><th className="num">Net R</th><th className="num">Losing months</th><th>Prop challenges</th></tr></thead>
+            <tbody>{rows.map((b) => {
+              const c = chainOf(b.challenge);
+              return (
+                <tr key={b.id} className={b.id === chosen ? "selected" : ""} onClick={() => setPick(b.id)} style={{ cursor: "pointer" }}>
+                  <td><input type="radio" name="at-start" checked={b.id === chosen} onChange={() => setPick(b.id)} aria-label={`Start from ${b.label || b.id}`}
+                    data-testid={`at-start-${b.id}`} /></td>
+                  <td>{b.favorite ? <span className="at-star on" aria-label="favourite">★</span> : ""}</td>
+                  <td>{b.label || "–"}</td><td>{new Date(b.created_at).toLocaleString()}</td>
+                  <td className="num">{b.trade_count}</td><td className="num">{n(b.metrics.trades_per_week, 2)}</td>
+                  <td className="num">{pct(b.metrics.win_rate)}</td><td className={`num ${signCls(b.metrics.net_r)}`}>{r(b.metrics.net_r, 1)}</td>
+                  <td className="num">{b.metrics.months_losing ?? 0} / {b.metrics.months_total ?? 0}</td>
+                  <td>{c ? <ChainLine c={c} money={money.fmt} /> : <span className="muted small">run it again to see</span>}</td>
+                </tr>);
+            })}</tbody></table></TableWrap>)}
+      </>}
+    </Card>
   );
 }
+
+function LiveLine({ live }: { live: OptLive }) {
+  return (
+    <Banner tone="info" testId="at-live"><span className="spinner" /> {live.step}
+      {` · ${(live.tries_now ?? 0).toLocaleString()} tries`}{live.reused_now ? ` (+${live.reused_now} reused)` : ""}
+      {` · ${Math.max(0, (live.bests_now ?? 1) - 1)} improvement${(live.bests_now ?? 1) - 1 === 1 ? "" : "s"}`}
+      {live.checks_pending ? ` · ${live.checks_pending} lookahead check${live.checks_pending === 1 ? "" : "s"} running` : ""}
+      {live.last_duration_s ? ` · ${Math.round(live.last_duration_s)} s per try on one core` : ""}
+      {live.memory_note ? ` · ${live.memory_note}` : ""}</Banner>
+  );
+}
+
+function RunsCard({ st, selected }: { st: OptStatus; selected: string | null }) {
+  const money = useMoney();
+  if (!st.runs.length) return null;
+  return (
+    <Card title="Runs" testId="at-runs">
+      <TableWrap className="my-report-scroll"><table className="dense">
+        <thead><tr><th>Started</th><th>From</th><th>Status</th><th className="num">Tries</th><th className="num">Improvements</th>
+          <th className="num">Net R start → final</th><th>Final prop challenges</th><th>Why it stopped</th></tr></thead>
+        <tbody>{st.runs.map((x) => {
+          const fin = x.final_full ?? x.start_full;
+          const c = fin?.chains ? (fin.chains[x.profile] as ChallengeSummary | undefined) : undefined;
+          return (
+            <tr key={x.id} className={x.id === selected ? "selected" : ""} onClick={() => go(`/my-autotune?run=${x.id}`)} style={{ cursor: "pointer" }}
+              data-testid={`at-run-${x.id}`}>
+              <td>{new Date(x.created_at).toLocaleString()}</td><td>{x.start.label || "–"}</td>
+              <td><Badge tone={x.status === "finished" ? "ok" : x.status === "failed" ? "error" : x.status === "running" ? "info" : "neutral"}>{statusWord(x.status)}</Badge></td>
+              <td className="num">{x.tries.toLocaleString()}{x.reused ? ` +${x.reused}` : ""}</td><td className="num">{Math.max(0, x.bests - 1)}</td>
+              <td className="num">{r(x.start_full?.metrics.net_r, 1)} → <span className={signCls(x.final_full?.metrics.net_r)}>{r(x.final_full?.metrics.net_r, 1)}</span></td>
+              <td>{c ? <ChainLine c={c} money={money.fmt} /> : "–"}</td>
+              <td className="small">{x.error ? x.error.message : x.stop_reason ? STOP_REASON[x.stop_reason] ?? x.stop_reason : ""}</td>
+            </tr>);
+        })}</tbody></table></TableWrap>
+    </Card>
+  );
+}
+
+type YKey = "net_r_train" | "net_r_check" | "prop_train" | "prop_check" | "goals_train" | "goals_check";
+const YAXES: Record<YKey, { label: string; get: (t: OptTry) => number | null; fmt: (v: number) => string }> = {
+  net_r_train: { label: "Net R, first 70 %", get: (t) => t.train.net_r, fmt: (v) => v.toFixed(0) },
+  net_r_check: { label: "Net R, last 30 %", get: (t) => t.check.net_r, fmt: (v) => v.toFixed(0) },
+  prop_train: { label: "Prop net $, first 70 %", get: (t) => t.train.prop_net, fmt: (v) => `${Math.round(v)}` },
+  prop_check: { label: "Prop net $, last 30 %", get: (t) => t.check.prop_net, fmt: (v) => `${Math.round(v)}` },
+  goals_train: { label: "Goals met, first 70 %", get: (t) => t.train.met, fmt: (v) => v.toFixed(0) },
+  goals_check: { label: "Goals met, last 30 %", get: (t) => t.check.met, fmt: (v) => v.toFixed(0) },
+};
+
+function RunView({ id, live, onChanged }: { id: string; live: OptLive | null; onChanged: () => void }) {
+  const { data, error, reload } = useApi<OptRun>(my.autotuneRunUrl(id), [id]);
+  const money = useMoney();
+  const [y, setY] = useState<YKey>("net_r_check");
+  const running = !!live?.running;
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => reload(), 6000);
+    return () => window.clearInterval(t);
+  }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!running) reload(); }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [job, setJob] = useJob(() => { reload(); onChanged(); });
+  const [err, setErr] = useState<ApiError | null>(null);
+  const label = (k: string | null | undefined) => (k ? data?.labels[k] ?? k : "");
+  const groups = useMemo<ScatterGroup[]>(() => {
+    if (!data) return [];
+    const ax = YAXES[y];
+    const pt = (t: OptTry) => ({ id: String(t.i), x: t.i, y: ax.get(t) as number, label: `Try ${t.i}: ${label(t.key)} ${fmtVal(t.from)} → ${fmtVal(t.to)}`,
+      detail: `first 70 %: ${t.train.met}/${t.train.goals} goals, ${r(t.train.net_r, 1)} · last 30 %: ${t.check.met}/${t.check.goals} goals, ${r(t.check.net_r, 1)}` });
+    const ok = data.tries_log.filter((t) => { const v = ax.get(t); return v != null && Number.isFinite(v); });
+    return [
+      { id: "tries", label: "Tries", color: "var(--c-strategy)", size: 3, points: ok.filter((t) => !t.accepted && !t.rejected_by_check).map(pt) },
+      { id: "rejected", label: "Better on the first 70 %, not on the last 30 %", color: "var(--faint)", size: 3.5,
+        points: ok.filter((t) => t.rejected_by_check).map(pt) },
+      { id: "bests", label: "New best", color: "var(--c-survivor)", size: 6, ring: true, points: ok.filter((t) => t.accepted).map(pt) },
+    ];
+  }, [data, y]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (error) return <ErrorPanel error={error} />;
+  if (!data) return <PageSkeleton layout="overview" label="Loading the run" />;
+  const bests = data.bests;
+  const fin = data.final != null ? bests[data.final] : [...bests].reverse().find((b) => b.status === "best") ?? null;
+  const first = bests[0] ?? null;
+  const save = async (k: number) => { setErr(null); try { setJob(await my.autotuneSave(data.id, k)); } catch (e) { setErr(e as ApiError); } };
+  const savedOf = (k: number) => data.saved.find((s) => s.best === k);
+  return (
+    <>
+      <Card title={`Run of ${new Date(data.created_at).toLocaleString()}`} testId="at-run-view"
+        actions={data.final_backtest ? <a className="btn btn-secondary btn-sm" href={href(`/my-backtest?r=${data.final_backtest}`)}
+          data-testid="at-final-link">Final backtest with trades</a> : undefined}>
+        <p className="muted small">Started from <b>{data.start.label || data.start.id}</b> · scored on {data.profile_name} ·
+          first 70 % until {new Date(data.window.split).toLocaleDateString()} · {data.tries.toLocaleString()} tries
+          {data.reused ? ` (+${data.reused} reused from earlier runs)` : ""} · {data.rejected_by_check} rejected by the last 30 %</p>
+        {running && live && <LiveLine live={live} />}
+        {!running && data.stop_reason && <Banner tone={data.status === "failed" ? "error" : "ok"} testId="at-stop-reason">
+          {STOP_REASON[data.stop_reason] ?? data.stop_reason}</Banner>}
+        {data.error && <Banner tone="error">{data.error.message}</Banner>}
+        {data.final_error && <Banner tone="error">The final backtest could not be made: {data.final_error}</Banner>}
+        <JobLine job={job} />
+        <ErrorPanel error={err} />
+        {first?.full && fin?.full ? <Compare a={first} b={fin} profile={data.profile} money={money.fmt} />
+          : <p className="small muted">The whole-period numbers appear when the lookahead checks are done.</p>}
+        {(data.changes ?? []).length > 0 && <>
+          <h3 className="small-head">What changed from the starting settings</h3>
+          <dl className="kv" data-testid="at-changes">{(data.changes ?? []).map((c) => (
+            <div key={c.key} className="kv-row"><dt>{c.label}</dt><dd>{fmtVal(c.from)} → <b>{fmtVal(c.to)}</b></dd></div>))}</dl>
+        </>}
+      </Card>
+      <Card title="Every try" testId="at-chart" actions={<Field label="Up"><Select value={y} onChange={(v) => setY(v as YKey)} ariaLabel="Vertical axis"
+        options={(Object.keys(YAXES) as YKey[]).map((k) => ({ value: k, label: YAXES[k].label }))} testId="at-y" /></Field>}>
+        {data.tries_log.length ? <XYScatter groups={groups} x={{ label: "Try", fmt: (v) => v.toFixed(0) }}
+          y={{ label: YAXES[y].label, fmt: YAXES[y].fmt, ref: y.startsWith("net_r") || y.startsWith("prop") ? { value: 0, label: "break-even" } : undefined }}
+          height={320} testId="at-scatter" /> : <Empty>No try finished yet.</Empty>}
+      </Card>
+      <Card title="Path of improvements" testId="at-path">
+        <TableWrap><table className="dense">
+          <thead><tr><th className="num">#</th><th>Change</th><th>First 70 %</th><th>Last 30 %</th><th>Lookahead check</th><th /></tr></thead>
+          <tbody>{bests.map((b) => (
+            <tr key={b.n} className={b.status !== "best" ? "muted" : b.n === data.final ? "selected" : ""} data-testid={`at-best-${b.n}`}>
+              <td className="num">{b.n}</td>
+              <td>{b.change ? <>{label(b.change.key)}: {fmtVal(b.change.from)} → <b>{fmtVal(b.change.to)}</b></> : "Starting settings"}
+                {b.status === "discarded" && <span className="muted small"> (thrown away: built on a result that failed the check)</span>}</td>
+              <td><PartLine s={b.train} money={money.fmt} /></td><td><PartLine s={b.check} money={money.fmt} /></td>
+              <td><LookBadge b={b} /></td>
+              <td>{savedOf(b.n) ? <a href={href(`/my-backtest?r=${savedOf(b.n)!.id}`)}>Open backtest</a>
+                : b.status === "best" && b.n > 0 && !running ? <Button small onClick={() => save(b.n)} busy={job?.state === "running"}
+                  testId={`at-save-${b.n}`}>Save as backtest</Button> : null}</td>
+            </tr>))}</tbody></table></TableWrap>
+        <TechDetails rows={[["Run", data.id], ["Tries per batch", String(data.batch)], ["Final settings hash", fin?.settings_hash ?? ""]]} />
+      </Card>
+    </>
+  );
+}
+
+function PartLine({ s, money }: { s: PartScore; money: (v: number | null) => string }) {
+  const c = s.chain;
+  return (
+    <span className="small" title={s.rows.map((x) => `${GOAL_LABEL[x.goal] ?? x.goal}: ${x.ok ? "met" : "not met"}`).join(" · ")}>
+      {s.met}/{s.goals} goals · <span className={signCls(s.net_r)}>{r(s.net_r, 1)}</span>
+      {c && !c.error ? <> · {c.passes}P/{c.fails}F · <span className={signCls(c.net)}>{money(c.net)}</span></> : null}
+    </span>
+  );
+}
+
+function LookBadge({ b }: { b: OptBest }) {
+  if (b.lookahead === "passed") return <Badge tone="ok">passed</Badge>;
+  if (b.lookahead === "failed") return <Badge tone="error" title={b.lookahead_detail}>failed</Badge>;
+  if (b.lookahead === "not_checked") return <Badge tone="neutral" title="The run was stopped before the check finished">not checked</Badge>;
+  return <Badge tone="info">checking…</Badge>;
+}
+
+function Compare({ a, b, profile, money }: { a: OptBest; b: OptBest; profile: string; money: (v: number | null) => string }) {
+  const ma = a.full!.metrics, mb = b.full!.metrics;
+  const ca = a.full!.chains[profile] as ChallengeSummary | undefined, cb = b.full!.chains[profile] as ChallengeSummary | undefined;
+  const rows: [string, ReactNode, ReactNode][] = [
+    ["Trades per week", n(ma.trades_per_week, 2), n(mb.trades_per_week, 2)],
+    ["Win rate", pct(ma.win_rate), pct(mb.win_rate)],
+    ["Net R", <span className={signCls(ma.net_r)}>{r(ma.net_r, 1)}</span>, <span className={signCls(mb.net_r)}>{r(mb.net_r, 1)}</span>],
+    ["R per trade", r(ma.expectancy_r), r(mb.expectancy_r)],
+    ["Profit factor", n(ma.profit_factor, 2), n(mb.profit_factor, 2)],
+    ["Worst drawdown", `${n(ma.max_drawdown_r, 1)} R`, `${n(mb.max_drawdown_r, 1)} R`],
+    ["Losing months", `${ma.months_losing ?? 0} of ${ma.months_total ?? 0}`, `${mb.months_losing ?? 0} of ${mb.months_total ?? 0}`],
+    ["Planned reward : risk", n(ma.avg_planned_rr, 2), n(mb.avg_planned_rr, 2)],
+    ["Prop challenges bought", ca?.challenges ?? "–", cb?.challenges ?? "–"],
+    ["Failed / passed", ca ? `${ca.fails} / ${ca.passes}` : "–", cb ? `${cb.fails} / ${cb.passes}` : "–"],
+    ["Payouts (average per pass)", ca ? `${ca.payouts} (${money(ca.avg_payout_per_pass)})` : "–", cb ? `${cb.payouts} (${money(cb.avg_payout_per_pass)})` : "–"],
+    ["Fees paid", money(ca?.fees_total ?? null), money(cb?.fees_total ?? null)],
+    ["Prop net (payouts − fees)", <b className={signCls(ca?.net)}>{money(ca?.net ?? null)}</b>, <b className={signCls(cb?.net)}>{money(cb?.net ?? null)}</b>],
+  ];
+  return (
+    <TableWrap testId="at-compare"><table className="dense">
+      <thead><tr><th>Whole discovery period</th><th className="num">Start</th><th className="num">Final (best #{b.n})</th></tr></thead>
+      <tbody>{rows.map(([k, x, y]) => <tr key={k}><td>{k}</td><td className="num">{x}</td><td className="num">{y}</td></tr>)}</tbody>
+    </table></TableWrap>
+  );
+}
+

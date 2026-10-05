@@ -47,6 +47,8 @@ FACTORY_ID = re.compile(r"^FM_[0-9A-F]{16}$")
 MY_REPORT_ID = re.compile(r"^(BT|HO|HD|PL)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")       # ADR-93
 MY_EXPORT_ID = re.compile(r"^(BT|HO|HD|PL|SR)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")      # ADR-96: + setup reviews
 MY_SETUP_ID = re.compile(r"^SR_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")
+MY_BT_ID = re.compile(r"^BT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")
+MY_OPT_ID = re.compile(r"^OPT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")                   # ADR-101: autotuner runs
 MY_JOB_ID = re.compile(r"^MSJ_[0-9a-f]{12}$")
 
 
@@ -1217,51 +1219,44 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def my_setup_undo(sid):
         return jsonify(call(svc.my_strategy_setup_undo, _id(sid, MY_SETUP_ID, "setup review id")))
 
-    @app.get("/api/my/autotune")                       # ADR-97: Strategy autotuner
+    @app.get("/api/my/autotune")                       # ADR-101: Strategy autotuner (step-by-step optimiser)
     def my_autotune():
         return jsonify(call(svc.my_autotune_status))
 
-    @app.get("/api/my/autotune/points")
-    def my_autotune_points():
-        prof = request.args.get("profile")
-        if prof is not None and not re.fullmatch(r"[A-Z0-9_]{1,80}", prof):
-            raise _bad("invalid profile")
-        return jsonify(call(svc.my_autotune_points, prof))
-
-    @app.get("/api/my/autotune/combos/<int:n>")
-    def my_autotune_detail(n):
-        return jsonify(call(svc.my_autotune_detail, n))
+    @app.get("/api/my/autotune/runs/<rid>")
+    def my_autotune_run(rid):
+        return jsonify(call(svc.my_autotune_run, _id(rid, MY_OPT_ID, "autotuner run id")))
 
     @app.post("/api/my/autotune/start")
     def my_autotune_start():
-        p = body().get("processes")
+        b = body()
+        p, mt = b.get("processes"), b.get("max_tries")
         if p is not None and (not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 256):
             raise _bad("processes must be an integer between 1 and 256")
-        return jsonify(call(svc.my_autotune_start, p)), 202
+        if mt is not None and (not isinstance(mt, int) or isinstance(mt, bool) or not 1 <= mt <= 5000):
+            raise _bad("max_tries must be an integer between 1 and 5000")
+        start = _id(b.get("start_id"), MY_BT_ID, "backtest id")
+        return jsonify(call(svc.my_autotune_start, start, p, mt)), 202
 
     @app.post("/api/my/autotune/stop")
     def my_autotune_stop():
         return jsonify(call(svc.my_autotune_stop))
 
-    @app.post("/api/my/autotune/combos/<int:n>/rerun")
-    def my_autotune_rerun(n):
-        return jsonify(call(svc.my_autotune_rerun, n)), 202
+    @app.post("/api/my/autotune/runs/<rid>/bests/<int:n>/save")
+    def my_autotune_save(rid, n):
+        return jsonify(call(svc.my_autotune_save, _id(rid, MY_OPT_ID, "autotuner run id"), n)), 202
 
-    @app.get("/api/my/autotune/combos/<int:n>/flip")      # ADR-100: flipped reruns
-    def my_autotune_flip_info(n):
-        return jsonify(call(svc.my_autotune_flip_info, n))
-
-    @app.post("/api/my/autotune/combos/<int:n>/flip")
-    def my_autotune_flip(n):
-        return jsonify(call(svc.my_autotune_flip, n)), 202
-
-    @app.get("/api/my/autotune/flips/<int:n>")
-    def my_autotune_flip_detail(n):
-        return jsonify(call(svc.my_autotune_flip_detail, n))
-
-    @app.post("/api/my/autotune/flips/<int:n>/rerun")
-    def my_autotune_flip_rerun(n):
-        return jsonify(call(svc.my_autotune_flip_rerun, n)), 202
+    @app.post("/api/my/reports/<rid>/meta")            # ADR-101: favourite / rename a backtest
+    def my_report_meta(rid):
+        b = body()
+        fav, label = b.get("favorite"), b.get("label")
+        if fav is not None and not isinstance(fav, bool):
+            raise _bad("favorite must be true or false")
+        if label is not None and (not isinstance(label, str) or len(label) > 160):
+            raise _bad("label must be text of at most 160 characters")
+        if fav is None and label is None:
+            raise _bad("nothing to change")
+        return jsonify(call(svc.my_strategy_set_meta, _id(rid, MY_REPORT_ID, "report id"), fav, label))
 
     @app.post("/api/my/exports/open")
     def my_open_exports():

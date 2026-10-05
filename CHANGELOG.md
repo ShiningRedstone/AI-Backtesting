@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy autotuner rebuilt as a step-by-step optimiser; prop challenge chain; backtest favourites (ADR-101)
+
+| Item | Status |
+|---|---|
+| Old Strategy autotuner (10,000 fixed combinations, flipped reruns) removed; its result files and counted tries are kept, not shown | IMPLEMENTED |
+| New Strategy autotuner: starts from one of your backtests, tries one-setting tweaks, keeps a tweak only when it improves the first 70 % AND the last 30 % of the discovery period, stops when nothing improves the last 30 % | IMPLEMENTED, TESTED |
+| Score: your goals first, then prop net (payouts - every challenge fee) on the pass-criteria account, then net R | IMPLEMENTED, TESTED |
+| Speed: tries without the lookahead check and without trade records / candles (same trades, tested); every new best checked in parallel; the final best backtested normally | IMPLEMENTED, TESTED |
+| Own protocol: 5,000 tries + 1 holdout look; a combination tried again is never a new try; same result on 1 or 2 cores | IMPLEMENTED, TESTED |
+| Prop challenge chain on every new My strategy report: fail -> next challenge, pass -> funded payouts, fees deducted; fails, passes, average payout per pass, net | IMPLEMENTED, TESTED (re-sizing bit-identical to the engine) |
+| Backtest tab: favourite star, rename, "Favourites only" | IMPLEMENTED, TESTED |
+| Speed and results on 4 years of real data | REQUIRES REAL DATA |
+| Engine, fills, costs, sizing, prop rules, configs, research runs and survivors | UNCHANGED |
+
 ## Strategy autotuner: rerun with flipped entry (ADR-100)
 
 | Item | Status |
