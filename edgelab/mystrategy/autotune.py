@@ -363,6 +363,25 @@ def _worker(n: int, overrides: dict) -> dict:
 
 
 # =============================================================================================== the run
+def load_inputs(svc, protocol: dict, lock=None):
+    """(ds, es, start, end, td_from) of a protocol's whole discovery window: the 1-minute source dataset (validated,
+    ASK prices required) and the ES series when it covers the window (else None)."""
+    w = R.windows(protocol["material"])
+    start, end = R._ts(w["discovery"]["start"]), R._ts(w["discovery"]["end"])
+    ds = svc._cell_dataset(R.dataset_1m(svc, protocol), (start, end), lock)
+    if not ds.bars.has_ask_ohlc:
+        raise R.MyStrategyError("ASK_OHLC_REQUIRED", "The dataset has no ASK prices; BID/ASK execution needs them.")
+    from edgelab.mystrategy import es as ES
+    try:
+        es = ES.load(svc.data_root)
+    except ES.EsError:
+        es = None
+    if es is not None and not es.covers(max(int(start.value), int(ds.bars.ts_ns[0])),
+                                        min(int(end.value), int(ds.bars.ts_ns[-1])) - 3 * 86_400_000_000_000):
+        es = None
+    return ds, es, start, end, R._trading_date_ord(ds.calendar, start)
+
+
 class Run:
     """The one autotuner run of this process (background thread + worker processes)."""
 
@@ -430,24 +449,11 @@ class Run:
         if not todo:
             return
         self._set(step="Loading and checking the price data")
-        w = R.windows(mat)
-        start, end = R._ts(w["discovery"]["start"]), R._ts(w["discovery"]["end"])
-        ds = svc._cell_dataset(R.dataset_1m(svc, mine), (start, end), lock)
-        if not ds.bars.has_ask_ohlc:
-            raise R.MyStrategyError("ASK_OHLC_REQUIRED", "The dataset has no ASK prices; BID/ASK execution needs them.")
-        from edgelab.mystrategy import es as ES
-        try:
-            es = ES.load(svc.data_root)
-        except ES.EsError:
-            es = None
-        if es is not None and not es.covers(max(int(start.value), int(ds.bars.ts_ns[0])),
-                                            min(int(end.value), int(ds.bars.ts_ns[-1])) - 3 * 86_400_000_000_000):
-            es = None
+        ds, es, start, end, td_from = load_inputs(svc, mine, lock)
         if es is None and any(P.smt_used(P.resolve(r["overrides"])) for r in todo):
             raise R.MyStrategyError("ES_DATA_REQUIRED", "Some combinations use SMT divergence with ES. Import ES data that covers "
                                                         "the whole discovery period first (My strategy -> Settings -> ES data for "
                                                         "SMT); nothing was run.")
-        td_from = R._trading_date_ord(ds.calendar, start)
         keys = [rp.trial_key(pid, r["settings_hash"], self._content(ds, r["overrides"], es), mat["config_hash"])
                 for r in todo]
         with guard:                                      # refuse BEFORE computing when the budget cannot hold the run
@@ -600,7 +606,9 @@ def points(svc, profile: str | None = None) -> dict:
                     "prop_trader_payout": pr.get("trader_payout") if pr else None})
     failed = [{"n": n, "label": rows[n]["label"] if n in rows else "", "error": r["error"]}
               for n, r in sorted(res.items()) if "error" in r][:200]
-    return R.jsonable({"profile": profile, "points": out, "failed": failed, "total": man["total"]})
+    from edgelab.mystrategy import autotune_flips as AF            # ADR-100: the pink bubbles
+    return R.jsonable({"profile": profile, "points": out, "failed": failed, "total": man["total"],
+                       "flips": AF.points(svc, profile, rows, res), "flip_budget": AF.status(svc)})
 
 
 def detail(svc, n: int) -> dict:

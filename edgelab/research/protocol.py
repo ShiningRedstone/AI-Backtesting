@@ -159,12 +159,14 @@ MY_STRATEGY_ROLE = "my_strategy"
 MY_STRATEGY_SCOPE_SUFFIX = "#my_strategy"
 AUTOTUNE_ROLE = "my_autotune"                 # ADR-97: the Strategy autotuner's 10,000 My strategy combinations
 AUTOTUNE_SCOPE_SUFFIX = "#my_autotune"
+AUTOTUNE_FLIP_ROLE = "my_autotune_flip"       # ADR-100: flipped reruns of autotuner combinations (own budget)
+AUTOTUNE_FLIP_SCOPE_SUFFIX = "#my_autotune_flip"
 
 
 def is_companion(rec: Mapping) -> bool:
     """True for a companion protocol (flip, My strategy, autotuner): it never governs library strategies or campaigns."""
     mat = rec.get("material", rec)
-    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE)
+    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE)
 
 
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,

@@ -2737,6 +2737,25 @@ class Services:
         return R.jobs_of(self).start("autotune_rerun", lambda step: AT.rerun(self, int(n), lock=self.lock, progress=step),
                                      {"autotune_n": int(n)})
 
+    def my_autotune_flip_info(self, n: int) -> dict:          # ADR-100: flipped reruns
+        from edgelab.mystrategy import autotune_flips as AF
+        return AF.info(self, int(n))
+
+    def my_autotune_flip(self, n: int) -> dict:
+        from edgelab.mystrategy import autotune_flips as AF, runner as R
+        AF.info(self, int(n))                                   # refuse unknown combinations before a job starts
+        return R.jobs_of(self).start("autotune_flip", lambda step: AF.run_flip(self, int(n), lock=self.lock, progress=step),
+                                     {"autotune_n": int(n)})
+
+    def my_autotune_flip_detail(self, n: int) -> dict:
+        from edgelab.mystrategy import autotune_flips as AF
+        return AF.detail(self, int(n))
+
+    def my_autotune_flip_rerun(self, n: int) -> dict:
+        from edgelab.mystrategy import autotune_flips as AF, runner as R
+        return R.jobs_of(self).start("autotune_flip_rerun", lambda step: AF.rerun(self, int(n), lock=self.lock,
+                                                                                  progress=step), {"autotune_n": int(n)})
+
     def my_strategy_export(self, report_ids: list, include_candles: bool = False) -> dict:
         from edgelab.mystrategy import runner as R
         return _jsonable(R.export(self, [str(x) for x in report_ids], include_candles))

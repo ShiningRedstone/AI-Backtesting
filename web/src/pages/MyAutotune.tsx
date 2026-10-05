@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
-import type { AutotuneDetail, AutotunePoint, AutotunePoints, AutotuneStatus, MyJob } from "../api/my";
+import type { AutotuneDetail, AutotunePoint, AutotunePoints, AutotuneStatus, FlipInfo, MyJob } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href } from "../app/router";
 import { profileLabel } from "../app/labels";
@@ -60,6 +60,7 @@ export function MyAutotunePage() {
   const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
+  const [openFlip, setOpenFlip] = useState<number | null>(null);      // ADR-100: a pink bubble
   const [many, setMany] = useState<number[] | null>(null);
   const running = !!st?.run.running;
   useEffect(() => {                                       // live while running: status every 5 s, the scatter every 30 s
@@ -112,7 +113,7 @@ export function MyAutotunePage() {
         {!running && run.step === "Finished" && done >= total && <Banner tone="ok">All {total.toLocaleString()} combinations are tested.</Banner>}
         <ErrorPanel error={err} />
       </Card>
-      <ResultsSection st={st} pts={pts} onOpen={setOpen} onMany={setMany} />
+      <ResultsSection st={st} pts={pts} onOpen={setOpen} onOpenFlip={setOpenFlip} onMany={setMany} />
       <DesignCard st={st} />
       {pts && pts.failed.length > 0 && <Card title={`Failed combinations (${st.failed})`} testId="at-failed">
         <TableWrap className="my-report-scroll"><table className="dense"><thead><tr><th className="num">#</th><th>Changes</th><th>Why it failed</th></tr></thead>
@@ -122,14 +123,19 @@ export function MyAutotunePage() {
         {many && pts && <ComboTable rows={pts.points.filter((x) => many.includes(x.n))} onOpen={(k) => { setMany(null); setOpen(k); }} />}
       </Drawer>
       <Drawer open={open !== null} onClose={() => setOpen(null)} title={open !== null ? `Combination #${open}` : ""} testId="at-detail">
-        {open !== null && <ComboPanel key={open} n={open} profile={st.criteria_profile} />}
+        {open !== null && <ComboPanel key={open} n={open} profile={st.criteria_profile} onChanged={reloadPts}
+          onOpenFlip={(k) => { setOpen(null); setOpenFlip(k); }} onOpenCombo={(k) => { setOpenFlip(null); setOpen(k); }} />}
+      </Drawer>
+      <Drawer open={openFlip !== null} onClose={() => setOpenFlip(null)} title={openFlip !== null ? `Flipped #${openFlip}` : ""} testId="at-flip-detail">
+        {openFlip !== null && <ComboPanel key={`f${openFlip}`} n={openFlip} flip profile={st.criteria_profile} onChanged={reloadPts}
+          onOpenFlip={(k) => setOpenFlip(k)} onOpenCombo={(k) => { setOpenFlip(null); setOpen(k); }} />}
       </Drawer>
     </div>
   );
 }
 
-function ResultsSection({ st, pts, onOpen, onMany }: { st: AutotuneStatus; pts: AutotunePoints | null; onOpen: (n: number) => void;
-  onMany: (ns: number[]) => void }) {
+function ResultsSection({ st, pts, onOpen, onOpenFlip, onMany }: { st: AutotuneStatus; pts: AutotunePoints | null; onOpen: (n: number) => void;
+  onOpenFlip: (n: number) => void; onMany: (ns: number[]) => void }) {
   const [axes, setAxes] = useState(() => load("my-autotune-axes", { x: "win_rate" as MetricKey, y: "trades_per_week" as MetricKey }));
   const { prefs, setPref } = useApp();
   const saved = (prefs as { autotune_goals?: Goals }).autotune_goals;
@@ -159,6 +165,9 @@ function ResultsSection({ st, pts, onOpen, onMany }: { st: AutotuneStatus; pts: 
     { id: "good", label: "Meet your goals", color: "var(--c-survivor)", size: 5, ring: true,
       points: drawn.filter((p) => good.has(p.n) && p.stage !== "base").map(toPt) },
     { id: "base", label: "Test 37 (the base)", color: "var(--text)", size: 7, ring: true, points: drawn.filter((p) => p.stage === "base").map(toPt) },
+    { id: "flips", label: "Flipped reruns", color: "var(--c-flip)", size: 6, ring: true,       // ADR-100: bright pink, never grouped
+      points: (pts.flips ?? []).filter((p) => val(p, axes.x) != null && val(p, axes.y) != null && Number.isFinite(val(p, axes.x)!)
+        && Number.isFinite(val(p, axes.y)!)).map((p) => ({ ...toPt(p), id: `f${p.flip_of}`, label: p.label })) },
   ];
   const refOf = (k: MetricKey): XYAxis["ref"] => (
     k === "trades_per_week" && goals.trades_per_week.on ? { value: goals.trades_per_week.value ?? 0, label: `${goals.trades_per_week.value} / week` }
@@ -191,8 +200,9 @@ function ResultsSection({ st, pts, onOpen, onMany }: { st: AutotuneStatus; pts: 
       <Card title="Every tested combination" testId="at-scatter" actions={<div className="inline">
         <Field label="Across"><Select value={axes.x} onChange={(v) => setAxes({ ...axes, x: v as MetricKey })} options={opts} ariaLabel="Across" testId="at-x" /></Field>
         <Field label="Up"><Select value={axes.y} onChange={(v) => setAxes({ ...axes, y: v as MetricKey })} options={opts} ariaLabel="Up" testId="at-y" /></Field></div>}>
-        <XYScatter groups={groups} x={ax(axes.x)} y={ax(axes.y)} testId="at-xy" onPick={(id) => onOpen(Number(id))}
-          onPickMany={(ids) => onMany(ids.map(Number))} />
+        <XYScatter groups={groups} x={ax(axes.x)} y={ax(axes.y)} testId="at-xy"
+          onPick={(id) => (id.startsWith("f") ? onOpenFlip(Number(id.slice(1))) : onOpen(Number(id)))}
+          onPickMany={(ids) => onMany(ids.filter((x) => !x.startsWith("f")).map(Number))} />
         <p className="small muted">Each dot is one combination's discovery backtest; click one for its changes and numbers. Overlapping dots are grouped.
           {points.length - drawn.length > 0 ? ` ${points.length - drawn.length} combinations have no value on these axes (e.g. no trades) and are not drawn.` : ""}
           {" "}With {points.length.toLocaleString()} combinations tried, the best-looking ones are partly luck: only the holdout can confirm one.</p>
@@ -221,20 +231,29 @@ function ComboTable({ rows, onOpen }: { rows: AutotunePoint[]; onOpen: (n: numbe
   );
 }
 
-function ComboPanel({ n: num, profile }: { n: number; profile: string | null }) {
-  const { data, error, reload } = useApi<AutotuneDetail>(my.autotuneComboUrl(num), [num]);
+function ComboPanel({ n: num, profile, flip, onChanged, onOpenFlip, onOpenCombo }: { n: number; profile: string | null; flip?: boolean;
+  onChanged: () => void; onOpenFlip: (n: number) => void; onOpenCombo: (n: number) => void }) {
+  const { data, error, reload } = useApi<AutotuneDetail>(flip ? my.autotuneFlipUrl(num) : my.autotuneComboUrl(num), [num, flip]);
   const money = useMoney();
   const [err, setErr] = useState<ApiError | null>(null);
   const [job, setJob] = useJob((j: MyJob) => { viewCache.clear(); reload(); if (j.state === "completed") setErr(null); });
   if (error) return <ErrorPanel error={error} />;
   if (!data) return <PageSkeleton layout="overview" label="Loading the combination" />;
   const res = data.result, m = res?.metrics;
-  const rerun = async () => { setErr(null); try { setJob(await my.autotuneRerun(num)); } catch (e) { setErr(e as ApiError); } };
+  const rerun = async () => {
+    setErr(null);
+    try { setJob(await (flip ? my.autotuneFlipRerun(num) : my.autotuneRerun(num))); } catch (e) { setErr(e as ApiError); }
+  };
   const pr = profile ? res?.prop?.[profile] : undefined;
   const done = (job?.result as { id?: string } | null)?.id;
   return (
     <div data-testid="at-panel">
-      <p><b>{data.row.label}</b> <span className="muted small">· {STAGE[data.row.stage] ?? data.row.stage}</span></p>
+      {flip && <Banner tone="info" testId="at-flipped-from">Flipped from{" "}
+        <a href="#" onClick={(e: { preventDefault: () => void }) => { e.preventDefault(); onOpenCombo(num); }} data-testid="at-flip-source">combination #{num}</a>:
+        every trade taken the other way (long ↔ short, its stop is the target and its target the stop, same prices).
+        {data.design_n ? ` It is also combination #${data.design_n} of the 10,000 (no new try).` : ""}
+        {data.switched_off?.length ? ` Switched off for the flip (no exact mirror): ${data.switched_off.join(", ")}.` : ""}</Banner>}
+      <p><b>{data.row.label}</b> <span className="muted small">· {flip ? "flipped rerun" : STAGE[data.row.stage] ?? data.row.stage}</span></p>
       {!res ? <Banner tone="info">Not tested yet.</Banner> : res.error ? <Banner tone="error">{res.error.message}</Banner> : m && <>
         <div className="kpis">
           <Kpi label="Trades per week" value={n(m.trades_per_week, 2)} sub={`${m.trade_count} trades`} />
@@ -258,6 +277,7 @@ function ComboPanel({ n: num, profile }: { n: number; profile: string | null }) 
           <tbody>{Object.entries(res.prop).map(([k, v]) => <tr key={k}><td>{profileLabel(k)}</td><td>{v.evaluation ?? v.status}</td>
             <td className="num">{v.payouts ?? 0}</td><td className="num">{money.fmt(v.trader_payout ?? 0)}</td></tr>)}</tbody></table></TableWrap>
         <p className="small muted">Under the default assumed rules; historical result under stated assumptions, not a forecast.</p></>}
+      {!flip && <FlipSection n={num} onChanged={onChanged} onOpenFlip={onOpenFlip} />}
       <h3>Trades and charts</h3>
       <p className="small muted">The autotuner keeps the numbers only. Re-running gives this combination as a normal My strategy backtest with every trade and its
         charts (same settings and data, so it is not a new try).</p>
@@ -312,6 +332,36 @@ function GoalRow({ label, unit, hint, k, goals, rule, step, integer }: { label: 
         <NumberInput value={g.value} step={step} integer={integer} onChange={(v) => { if (v !== undefined) rule(k, { value: v }); }}
           ariaLabel={label} testId={`at-goal-${k}-value`} />{unit && <span className="muted">{unit}</span>}</span>}
       {hint && <span className="muted small">{hint}</span>}
+    </div>
+  );
+}
+
+/** ADR-100: "Rerun with flipped entry": the same settings with every trade the other way, shown as a pink bubble. */
+function FlipSection({ n: num, onChanged, onOpenFlip }: { n: number; onChanged: () => void; onOpenFlip: (n: number) => void }) {
+  const { data, reload } = useApi<FlipInfo>(my.autotuneFlipInfoUrl(num), [num]);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [job, setJob] = useJob((j: MyJob) => {
+    viewCache.clear(); reload(); onChanged();
+    if (j.state === "completed") onOpenFlip(num);
+  });
+  if (!data) return null;
+  const go = async () => { setErr(null); try { setJob(await my.autotuneFlip(num)); } catch (e) { setErr(e as ApiError); } };
+  return (
+    <div data-testid="at-flip-section">
+      <h3>Flipped entry</h3>
+      <p className="small muted">{data.already_flipped
+        ? "This combination is already flipped: its flipped version is the unflipped one (every trade the other way again)."
+        : "Every trade taken the other way: long ↔ short, a take-profit where the stop was and a stop where the take-profit was (same prices, so 1:2 becomes 1:0.5)."}
+        {data.switched_off.length ? ` No exact mirror exists for: ${data.switched_off.join(", ")}; the flipped version runs with them switched off.` : ""}
+        {data.design_n ? ` The flipped settings are combination #${data.design_n} of the 10,000: it is linked, not run again (no new try).`
+          : " It counts as one try of the separate flipped-reruns budget (500, its own holdout look)."}</p>
+      <div className="inline">
+        {data.flip ? <Button kind="primary" onClick={() => onOpenFlip(num)} testId="at-open-flip">Show the flipped version</Button>
+          : <Button kind="primary" onClick={go} busy={job?.state === "running"} busyLabel="Running the flip…" testId="at-flip">
+            Rerun with flipped entry</Button>}
+      </div>
+      <JobLine job={job} />
+      <ErrorPanel error={err} />
     </div>
   );
 }

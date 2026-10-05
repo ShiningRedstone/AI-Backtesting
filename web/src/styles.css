@@ -44,6 +44,7 @@
   /* chart series: values unchanged from the earlier palette (CVD-validated on #0c1320); each keeps >= 3.4:1 on --surface #151516 */
   --c1: #16a877; --c2: #4a8ff0; --c3: #b58a2e; --c-neg: #d8545f; --c-neutral: #6b6b74;
   --c-survivor: #f5b83d;
+  --c-flip: #ff3dc8;                                        /* ADR-100: flipped reruns, bright pink */
   --c-strategy: var(--c2);                                 /* field-chart strategy dots (light theme: teal, ADR-90) */   /* ADR-86: survivors on the field chart (amber: strongest contrast to the blue strategies, never red) */
   --grid: #222225; --axis: #36363c;
   /* shape */
@@ -782,6 +783,7 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
   --info: #2457c5; --info-weak: rgba(36, 87, 197, .08); --info-border: rgba(36, 87, 197, .32);
   --demo: #6d3fd1; --demo-weak: rgba(109, 63, 209, .08); --demo-border: rgba(109, 63, 209, .35);
   --c1: #0e8a5f; --c2: #2f6fd6; --c3: #93691a; --c-neg: #c0392b; --c-neutral: #8a8a94;
+  --c-flip: #d4008f;
   --c-survivor: #e8730c;                                   /* ADR-90: light-mode field chart: orange survivors, teal strategies */
   --c-strategy: rgba(15, 124, 134, .7);
   --grid: #e9e9ed; --axis: #c8c8cf;

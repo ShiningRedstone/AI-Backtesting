@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy autotuner: rerun with flipped entry (ADR-100)
+
+| Item | Status |
+|---|---|
+| "Rerun with flipped entry" in every combination's panel: long <-> short, take-profit and stop swapped at the same prices | IMPLEMENTED, TESTED |
+| Breakeven, trailing stop and limit entries switched off in the flipped version (no exact mirror), listed in the panel | IMPLEMENTED, TESTED |
+| Flipped reruns shown as bright pink bubbles; their panel links back to the original | IMPLEMENTED (browser test) |
+| Own budget: 500 flipped reruns with their own holdout look; a flip that is already one of the 10,000 is linked, not counted | IMPLEMENTED, TESTED |
+| Engine, flip rule, the autotuner's design and budget | UNCHANGED |
+
 ## Strategy autotuner: goals fixed (ADR-99)
 
 | Item | Status |

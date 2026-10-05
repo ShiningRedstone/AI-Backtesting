@@ -1247,6 +1247,22 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def my_autotune_rerun(n):
         return jsonify(call(svc.my_autotune_rerun, n)), 202
 
+    @app.get("/api/my/autotune/combos/<int:n>/flip")      # ADR-100: flipped reruns
+    def my_autotune_flip_info(n):
+        return jsonify(call(svc.my_autotune_flip_info, n))
+
+    @app.post("/api/my/autotune/combos/<int:n>/flip")
+    def my_autotune_flip(n):
+        return jsonify(call(svc.my_autotune_flip, n)), 202
+
+    @app.get("/api/my/autotune/flips/<int:n>")
+    def my_autotune_flip_detail(n):
+        return jsonify(call(svc.my_autotune_flip_detail, n))
+
+    @app.post("/api/my/autotune/flips/<int:n>/rerun")
+    def my_autotune_flip_rerun(n):
+        return jsonify(call(svc.my_autotune_flip_rerun, n)), 202
+
     @app.post("/api/my/exports/open")
     def my_open_exports():
         return jsonify(svc.my_strategy_open_exports())

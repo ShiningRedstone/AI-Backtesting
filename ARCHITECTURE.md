@@ -2655,3 +2655,23 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Verified:** browser test on the demo workspace (every amber dot checked against the stored numbers; goals still set
   after a restart on another port); `tests/test_my_autotune.py::TestGoals`.
 - **Unchanged:** results, the run, the design; nothing here changes what a backtest produces.
+
+### ADR-100 Strategy autotuner: "Rerun with flipped entry" (pink bubbles)
+- **Request (user):** on the autotuner's bubble chart, a button to rerun a combination with flipped entries, shown as a
+  bright pink bubble. Flip = long <-> short, the take-profit where the stop was and the stop where the take-profit was;
+  same distances, so the reward : risk inverts (1:2 -> 1:0.5). Choices: autotuner chart only; an own budget; a pink bubble
+  opens the same panel plus "Flipped from #n"; breakeven / trailing / limit entries (no exact mirror) are switched OFF in
+  the flipped version (first "disable the button", then changed by the user to "flip with them off").
+- **Module** `mystrategy/autotune_flips.py`: `flipped()` toggles `models.flip` (ADR-97's exact flip) and switches off
+  breakeven, trailing and limit entries where present (recorded in `switched_off`); a flipped combination flips back to its
+  unflipped version. Companion protocol role `my_autotune_flip` (scope `...#my_autotune_flip`, `is_companion`): 500 tries,
+  ONE holdout look, exposure statement that flips are chosen after seeing results. If the flipped settings are one of the
+  10,000 (941 are flips), the combination is linked (kind `design`), never run again or counted. Otherwise the run is
+  `autotune.evaluate` on `autotune.load_inputs` (the ONE engine, lookahead check, BID/ASK, MNQ, prop audit), one trial
+  event, and a line in `autotune/flips.jsonl` (rules version recorded). "Re-run with trades and charts" = a normal
+  My strategy backtest under the protocol that counted it (same trial key).
+- **API:** `GET/POST /api/my/autotune/combos/<n>/flip`, `GET /api/my/autotune/flips/<n>`, `POST .../flips/<n>/rerun`;
+  `/api/my/autotune/points` adds `flips` and `flip_budget`. **UI:** "Flipped entry" section in a combination's panel
+  (what the flip does, what is switched off, the budget; "Rerun with flipped entry" or "Show the flipped version"); pink
+  group "Flipped reruns" (`--c-flip`, never grouped); the flipped panel says "Flipped from combination #n" with a link.
+- **Unchanged:** the engine, the flip rule itself (ADR-97), the autotuner's design, results and 10,000-try budget.

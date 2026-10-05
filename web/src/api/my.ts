@@ -147,9 +147,14 @@ export interface AutotunePoint { n: number; label: string; stage: string; option
   expectancy_r: number | null; net_r: number | null; net_usd: number | null; trades_per_week: number | null; profit_factor: number | null;
   max_drawdown_r: number | null; max_drawdown_usd: number | null; months_losing: number | null; months_total: number | null;
   avg_planned_rr: number | null; avg_win_r: number | null; prop_evaluation: string | null; prop_payouts: number | null; prop_trader_payout: number | null }
-export interface AutotunePoints { profile: string | null; points: AutotunePoint[]; failed: { n: number; label: string; error: { kind: string; message: string } }[]; total: number }
+export interface AutotunePoints { profile: string | null; points: AutotunePoint[]; failed: { n: number; label: string; error: { kind: string; message: string } }[]; total: number;
+  flips?: (AutotunePoint & { flip_of: number; design_n: number | null })[]; flip_budget?: { budget: number; used: number } }
+/** ADR-100: what 'Rerun with flipped entry' does for a combination, and the flip if it exists. */
+export interface FlipInfo { n: number; already_flipped: boolean; switched_off: string[]; design_n: number | null;
+  flip: { kind: "flip" | "design"; design_n?: number } | null }
 export interface AutotuneChange { option: string; theme: string; label: string; changes: Record<string, unknown>; reason: string; priority: number; source: string }
 export interface AutotuneDetail {
+  flip_of?: number; design_n?: number | null; switched_off?: string[];
   row: { n: number; stage: string; options: string[]; label: string; overrides: Record<string, unknown>; settings_hash: string; changes: AutotuneChange[] };
   result: null | { error?: { kind: string; message: string }; metrics?: Metrics; monthly?: MonthRow[]; duration_s?: number; trades_hash?: string;
     causality_passed?: boolean | null; strategy_id?: string; finished_at?: string; weekly?: Metrics["weekly"];
@@ -183,6 +188,10 @@ export const my = {
   autotuneUrl: "/api/my/autotune",
   autotunePointsUrl: (profile?: string | null) => `/api/my/autotune/points${profile ? `?profile=${enc(profile)}` : ""}`,
   autotuneComboUrl: (n: number) => `/api/my/autotune/combos/${n}`,
+  autotuneFlipInfoUrl: (n: number) => `/api/my/autotune/combos/${n}/flip`,
+  autotuneFlipUrl: (n: number) => `/api/my/autotune/flips/${n}`,
+  autotuneFlip: (n: number) => api.post<MyJob>(`/api/my/autotune/combos/${n}/flip`, {}),
+  autotuneFlipRerun: (n: number) => api.post<MyJob>(`/api/my/autotune/flips/${n}/rerun`, {}),
   autotuneStart: (processes: number) => api.post<AutotuneRun>("/api/my/autotune/start", { processes }),
   autotuneStop: () => api.post<AutotuneRun>("/api/my/autotune/stop", {}),
   autotuneRerun: (n: number) => api.post<MyJob>(`/api/my/autotune/combos/${n}/rerun`, {}),

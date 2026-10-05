@@ -183,7 +183,51 @@ class TestAutotuneRun(unittest.TestCase):
         while AT.run_of(svc).info()["running"]:
             time.sleep(0.2)
         self.assertEqual(AT.status(svc)["protocol"]["trials_used"], 3)
+        # ADR-100: flipped reruns. #1's flip is combination #6 ("Flip every trade"): linked, never a new try
+        from edgelab.mystrategy import autotune_flips as AF
+        rec = AF.run_flip(svc, 1, lock=svc.lock)
+        self.assertEqual((rec["kind"], rec["design_n"]), ("design", 6))
+        self.assertEqual(AF.status(svc)["used"], 0)
+        # #2 (longs only) flipped: a new strategy, counted in the flip protocol only, through the same engine
+        rec = AF.run_flip(svc, 2, lock=svc.lock)
+        self.assertEqual(rec["kind"], "flip")
+        self.assertTrue(rec["causality_passed"])
+        self.assertEqual(AF.status(svc)["used"], 1)
+        self.assertEqual(AT.status(svc)["protocol"]["trials_used"], 3)          # the autotuner's budget untouched
+        _, fp = AF.ensure_protocol(svc, create=False)
+        self.assertEqual(fp["material"]["role"], "my_autotune_flip")
+        self.assertEqual(fp["material"]["trial_budget"]["max_unique_trials"], 500)
+        self.assertEqual(campaign.governing_protocol(svc)["protocol_id"], self.parent["protocol_id"])
+        ov = AF.flipped(AT.frozen_manifest(svc)["rows"][1]["overrides"])[0]
+        self.assertTrue(P.resolve(ov)["models.flip"])
+        ds, es, s0, e0, td = AT.load_inputs(svc, fp, svc.lock)
+        direct = AT.evaluate(svc.cfg, ds, es, str(svc.root), (s0, e0), td, ov)
+        self.assertEqual(direct["trades_hash"], rec["trades_hash"])               # = the engine on the flipped settings
+        AF.run_flip(svc, 2, lock=svc.lock)
+        self.assertEqual(AF.status(svc)["used"], 1)                               # the same flip is never a new try
+        pts = AT.points(svc, "LUCID_LUCIDFLEX_50K")
+        self.assertEqual({p["flip_of"] for p in pts["flips"]}, {1, 2})
+        d = AF.detail(svc, 2)
+        self.assertEqual((d["flip_of"], d["row"]["changes"][-1]["option"]), (2, "flip"))
+        sm = AF.rerun(svc, 2, lock=svc.lock)                                      # trades + charts, not a new try
+        self.assertEqual(sm["autotune_flip_of"], 2)
+        self.assertEqual(AF.status(svc)["used"], 1)
         svc.store.close()
+
+    def test_flipped_settings(self):
+        """The flip toggles models.flip; breakeven, trailing and limit entries are switched off (no exact mirror); a
+        flipped combination flips back to its unflipped version."""
+        from edgelab.mystrategy import autotune_flips as AF
+        ov, off = AF.flipped({**A.BASE})
+        self.assertTrue(P.resolve(ov)["models.flip"])
+        self.assertEqual(off, [])                                                  # test 37: breakeven already off
+        ov, off = AF.flipped({**A.BASE, "manage.be": "leg_swing", "manage.trail": "swing_1m", "entry.type": "limit_gap"})
+        s = P.resolve(ov)
+        self.assertEqual((s["manage.be"], s["manage.trail"], s["entry.type"]), ("off", "off", "market"))
+        self.assertEqual(len(off), 3)
+        back, off2 = AF.flipped(AF.flipped({**A.BASE})[0])
+        self.assertEqual(P.settings_hash(back), P.settings_hash(A.BASE))
+        self.assertEqual(off2, [])
 
     def test_api(self):
         from edgelab.web.app import create_app
