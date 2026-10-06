@@ -20,6 +20,7 @@ import { HoldoutPage } from "../pages/Holdout";
 import { FlipsPage } from "../pages/Flips";
 import { RunBacktestPage } from "../pages/RunBacktest";
 import { MyAutotunePage } from "../pages/MyAutotune";
+import { EdgeCheckPage, TradeAnatomyPage } from "../pages/Edge";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
@@ -38,6 +39,7 @@ const NAV: NavItem[] = [
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
+  { path: "/edge", label: "Edge lab", tid: "edge", icon: "search", heads: ["edge", "edge-anatomy"] },          // ADR-104
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
@@ -52,6 +54,7 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
     { path: "/controls", label: "Random controls", head: "controls" }],
   paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
     { path: "/prop", label: "Backtest prop check", head: "prop" }],
+  edge: [{ path: "/edge", label: "Edge check", head: "edge" }, { path: "/edge-anatomy", label: "Trade anatomy", head: "edge-anatomy" }],
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
   my: [{ path: "/my", label: "Overview", head: "my" }, { path: "/my-settings", label: "Settings", head: "my-settings" },
     { path: "/my-backtest", label: "Backtest", head: "my-backtest" }, { path: "/my-trades", label: "Trades", head: "my-trades" },
@@ -118,6 +121,8 @@ function Page() {
     case "my-setup": return <MySetupReviewPage />;               // ADR-96
     case "my-autotune": return <MyAutotunePage />;               // ADR-97
     case "my-plan": return <MyPlanResultPage />;
+    case "edge": return <EdgeCheckPage />;                       // ADR-104: Edge lab
+    case "edge-anatomy": return <TradeAnatomyPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to Home</a></p></div>;
   }
 }

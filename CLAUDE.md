@@ -178,8 +178,11 @@ picked from discovery backtests or passed autotuner bests; automatic result show
 ADR-103: holdout allowance v2 (`ALLOWANCE_VERSION` 2: 2 strategies x automatic + manual = 4 looks; an older allowance is retired
 on the first start, its looks kept); manual tester = setup OR a short result panel (R, exit, planned R:R, details dropdown,
 Next); a skip returns what the trade would have done.
+ADR-104: tab "Edge lab" (`edgelab/edge/`): Edge check = 4 FROZEN hypotheses for NQ 9:30-11:00 NY (`hypotheses.py`, fingerprint
+known answer; reasons against each), discovery only, next-minute entry / 10:59 exit, day-level shuffle test x Bonferroni 4, net on
+ASK/BID + configured MNQ costs, per year, ES; Trade anatomy of My strategy reports (gross vs net R, MFE/MAE). Never a run/trial/look.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-103.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-104.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -236,6 +239,7 @@ remains. Do not rely on this file alone.
   - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", favourites / rename, prop challenge chain, pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
     Strategy autotuner (step-by-step optimiser, ADR-101), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (2 strategies, each automatic then manual take / skip with a short result panel, ADR-102/103).
+  - Edge lab (ADR-104): Edge check (frozen NQ 9:30-11:00 hypotheses, strict statistics), Trade anatomy (My strategy reports).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
     then about/updates, workspace, pass-criteria account + Live 50K drawdown limit, CPU cores, prop account fees +
     discounts, delete-all.
@@ -460,4 +464,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-103). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-104). Update `README.md` status for phases.

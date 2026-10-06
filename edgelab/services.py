@@ -2710,6 +2710,34 @@ class Services:
         from edgelab.mystrategy import review as RV
         return _jsonable(RV.start_manual(self, int(n), lock=self.lock))
 
+    # ------------------------------------------------------------------ Edge lab (ADR-104)
+    def _edge_jobs(self):
+        from edgelab.mystrategy import runner as R
+        j = self.__dict__.get("_edge_job_manager")
+        if j is None:
+            j = self.__dict__["_edge_job_manager"] = R.Jobs()
+        return j
+
+    def edge_status(self) -> dict:
+        """The frozen hypothesis set, the latest edge-check result, the running job and the reports for trade anatomy."""
+        from edgelab.edge import check as EC, hypotheses as HY
+        from edgelab.mystrategy import runner as R
+        reports = [{k: r.get(k) for k in ("id", "label", "kind", "created_at", "trade_count", "favorite", "window")}
+                   for r in R.all_reports(self)]
+        return _jsonable({"set": HY.manifest(), "latest": EC.latest(self), "job": self._edge_jobs().active(),
+                          "reports": reports})
+
+    def edge_run(self) -> dict:
+        from edgelab.edge import check as EC
+        return self._edge_jobs().start("edge_check", lambda step: EC.run(self, lock=self.lock, progress=step))
+
+    def edge_job(self, job_id: str) -> dict:
+        return self._edge_jobs().get(job_id)
+
+    def edge_anatomy(self, report_id: str) -> dict:
+        from edgelab.edge import anatomy as AN
+        return _jsonable(AN.for_report(self, report_id))
+
     def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
         from edgelab.mystrategy import review as RV
         return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock))

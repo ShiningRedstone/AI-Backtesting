@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Edge lab: does a signal know the direction? (ADR-104)
+
+| Item | Status |
+|---|---|
+| New tab "Edge lab" | IMPLEMENTED (browser test) |
+| Edge check: 4 frozen ideas for NQ 9:30-11:00 New York, each with its reasons against; shuffle test, Bonferroni, costs, per year, ES | IMPLEMENTED, TESTED (no lookahead, calibrated on random data, planted effect found) |
+| Trade anatomy of any My strategy report: before / after costs, how far trades went, splits, verdict | IMPLEMENTED, TESTED |
+| Results on your real NQ / ES data | REQUIRES REAL DATA (run it in the app) |
+| Backtests, rules, costs, configs, tries, holdout | UNCHANGED (never read the holdout) |
+
 ## Holdout: reset to 2 strategies, simpler manual tester (ADR-103)
 
 | Item | Status |

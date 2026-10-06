@@ -931,3 +931,7 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .my-result-line { font-size: 18px; }
 .my-result-r { font-size: 22px; }
 .my-result-details summary { cursor: pointer; color: var(--muted); }
+/* ADR-104: Edge lab */
+.edge-list { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }
+.edge-against summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
+.edge-against ul { margin: 4px 0 8px; padding-left: 20px; display: grid; gap: 3px; color: var(--text-2); }

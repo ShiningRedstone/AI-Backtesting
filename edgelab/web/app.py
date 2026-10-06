@@ -48,8 +48,8 @@ MY_REPORT_ID = re.compile(r"^(BT|HO|HD|PL)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")     
 MY_EXPORT_ID = re.compile(r"^(BT|HO|HD|PL|SR)_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")      # ADR-96: + setup reviews
 MY_SETUP_ID = re.compile(r"^SR_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")
 MY_BT_ID = re.compile(r"^BT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")
-MY_OPT_ID = re.compile(r"^OPT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")                   # ADR-101: autotuner runs
 MY_JOB_ID = re.compile(r"^MSJ_[0-9a-f]{12}$")
+MY_OPT_ID = re.compile(r"^OPT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}$")                   # ADR-101: autotuner runs
 
 
 class ApiError(Exception):
@@ -1168,6 +1168,22 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if ov is not None and not isinstance(ov, dict):
             raise _bad("overrides must be an object")
         return jsonify(call(svc.my_strategy_start_review, ov)), 202
+
+    @app.get("/api/edge")                              # ADR-104: Edge lab
+    def edge_status():
+        return jsonify(call(svc.edge_status))
+
+    @app.post("/api/edge/check")
+    def edge_run():
+        return jsonify(call(svc.edge_run)), 202
+
+    @app.get("/api/edge/jobs/<jid>")
+    def edge_job(jid):
+        return jsonify(call(svc.edge_job, _id(jid, MY_JOB_ID, "job id")))
+
+    @app.get("/api/edge/anatomy/<rid>")
+    def edge_anatomy(rid):
+        return jsonify(call(svc.edge_anatomy, _id(rid, MY_REPORT_ID, "report id")))
 
     @app.get("/api/my/holdout")                        # ADR-102: automatic + manual holdout of one strategy
     def my_holdout():

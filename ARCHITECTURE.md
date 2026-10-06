@@ -2761,3 +2761,31 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **UI:** looks / strategies counters; a card per strategy (automatic done / manual start, in progress or done, results
   on demand); the manual card shows the setup (Take / Skip) OR the result panel, never both; Next shows the next setup.
   `POST /api/my/holdout/manual {strategy: 1|2}`.
+
+### ADR-104 Edge lab: test whether a signal knows the direction before building a strategy; trade anatomy
+- **Request (user):** every strategy failed the holdout; a way to find mechanical signals without overfitting or trying
+  hundreds of versions. Build the "edge check" and the "trade anatomy" as a new tab, for NQ 9:30-11:00 New York; the
+  assistant picks every other parameter and must look for reasons each idea does NOT work.
+- **Edge check** (`edge/hypotheses.py`, `edge/check.py`, `edge/stats.py`): a FROZEN set of 4 hypotheses (version 1,
+  known-answer fingerprint; changing it is a new version and every idea ever tested stays in the family): H1 opening
+  drive (first 30 min -> 10:00-11:00), H2 overnight move (yesterday's 15:59 close -> 9:30 open, no threshold), H3 30-min
+  opening-range breakout (10:00-10:44), H4 prior-day high / low sweep and reversal (the Blake / ICT premise: back inside
+  within 15 min). Each carries its written reasons AGAINST. Every decision uses complete bars only; the trade enters at
+  the next minute's open and exits at the 10:59 close (test: changing every later minute never changes a signal). Day
+  table from the protocol's 1-minute source dataset, DISCOVERY window only (`_cell_dataset(discovery)`), NY time, days
+  with < 85 of 90 window minutes skipped, typical range = average 9:30-11:00 high-low of the 20 previous days (causal).
+  Statistics: gross = BID move in the signal's direction (normalised by the typical range for the test); day-level
+  shuffle test (10,000 permutations of the directions over the same days: keeps drift and the long / short counts),
+  two-sided p, Bonferroni x 4; bootstrap 95 % / Bonferroni intervals; net = the tradeable direction filled on ASK / BID
+  minus one MNQ contract's commission, fees and slippage from the configured cost scenario (`round_trip_base`, financing);
+  per-year signs (years with 20+ signals); the same rule on ES when imported (BID only, gross); the smallest effect the
+  test could find (80 % power). Verdicts: TOO_FEW / NO_EVIDENCE / NOT_TRADEABLE / INCONSISTENT / CANDIDATE (never
+  "profitable"). Calibration test: on pure random walks the raw false-alarm rate is ~5 %; a planted effect is found.
+  Results cached by (set fingerprint, data content, window, config hash, ES content) in `<data>/edge/`.
+- **Trade anatomy** (`edge/anatomy.py`): from a My strategy report's stored trades: gross R before costs with a bootstrap
+  interval, costs per trade, net R, how far trades went in favour / against (MFE / MAE, bar resolution), losers that were
+  +1 R first or never moved, splits by direction / model / exit, and a plain verdict (NO_DIRECTION, WRONG_WAY, COSTS,
+  POSITIVE, TOO_FEW).
+- **API / UI:** `GET /api/edge`, `POST /api/edge/check` (job), `GET /api/edge/jobs/<id>`, `GET /api/edge/anatomy/<report>`;
+  new top-level tab "Edge lab" (Edge check | Trade anatomy).
+- **Never:** a run, a trial, a holdout look, a change to backtests, rules, costs or configs.
