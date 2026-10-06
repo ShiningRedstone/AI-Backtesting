@@ -2822,6 +2822,18 @@ class Services:
             return {"update": st, "scores": sc}
         return self._market_jobs().start("market_newdays", work, meta={"what": "newdays"})
 
+    def market_holdout(self) -> dict:
+        """ADR-107: the holdout prediction test (one recorded look): status and, once used, its result."""
+        from edgelab.market import holdout as H
+        return _jsonable(H.status(self))
+
+    def market_holdout_run(self, confirm: str) -> dict:
+        from edgelab.market import holdout as H
+        if confirm != "HOLDOUT":
+            raise H.HoldoutTestError("CONFIRM_REQUIRED", "Type HOLDOUT to spend the one look.")
+        return self._market_jobs().start("market_holdout", lambda step: _market_light(H.run(self, lock=self.lock, progress=step)),
+                                         meta={"what": "holdout"})
+
     def market_job(self, job_id: str) -> dict:
         j = self._market_jobs().get(job_id)
         return {k: v for k, v in j.items() if k != "result"} | {"done": j["state"] != "running"}
@@ -2835,6 +2847,16 @@ class Services:
             if m is None:
                 raise KeyError("no new days")
             return m
+        if src == "holdout":
+            from edgelab.market import holdout as H
+            from edgelab.mystrategy import runner as R
+            st = H.status(self)
+            if not st.get("used"):
+                raise KeyError("the holdout test is not used yet")    # never shown before the look
+            parent = R._parent(self)
+            ds = self._cell_dataset(R.dataset_1m(self, parent), (R._ts(st["holdout"]["start"]), R._ts(st["holdout"]["end"])),
+                                    self.lock)
+            return D.Minute(ds.bars.ts_ns, ds.bars.open, ds.bars.high, ds.bars.low, ds.bars.close)
         mk = D.discovery(self, self.lock)
         key = mk.source["nq"]["content_hash"]
         if key not in cache:
@@ -2848,8 +2870,10 @@ class Services:
         latest = A.latest(self.data_root)
         if not latest:
             raise KeyError("no analysis yet")
-        if src == "new":
-            p = ND.folder(self.data_root, "") / f"predictions_{latest['key']}.npz"
+        if src in ("new", "holdout"):
+            from edgelab.market import holdout as H
+            p = (ND.folder(self.data_root, "") / f"predictions_{latest['key']}.npz" if src == "new"
+                 else H.home(self.data_root) / "predictions.npz")
             if not p.exists():
                 return {"days": []}
             with np.load(p) as z:
@@ -2868,7 +2892,15 @@ class Services:
         if not latest:
             raise KeyError("no analysis yet")
         m = self._market_minutes(src)
-        if src == "new":
+        if src == "holdout":
+            from edgelab.market import holdout as H
+            with np.load(H.home(self.data_root) / "predictions.npz") as z:
+                fc = {k: z[k] for k in z.files}
+            hres = H.status(self).get("result") or {}
+            latest = {**latest, "forecast": {**(latest.get("forecast") or {}),
+                                             "up": {"chosen": (hres.get("chosen") or {}).get("up")},
+                                             "size": {"chosen": (hres.get("chosen") or {}).get("size")}}}
+        elif src == "new":
             p = ND.folder(self.data_root, "") / f"predictions_{latest['key']}.npz"
             with np.load(p) as z:
                 fc = {k: z[k] for k in z.files}
@@ -2881,11 +2913,11 @@ class Services:
             p = A.home(self.data_root) / f"analysis_{latest['key']}" / "forecast.npz"
             with np.load(p) as z:
                 fc = {k: z[k] for k in z.files}
-        news = N.events(self.data_root) if (latest.get("news") or {}).get("used") or src == "new" else []
+        news = N.events(self.data_root) if (latest.get("news") or {}).get("used") or src != "discovery" else []
         out = F.day_view(m, fc, {**(latest.get("forecast") or {}), "inputs": (latest.get("forecast") or {}).get("inputs", [])},
                          date, news)
         shocks = []
-        if src != "new":
+        if src == "discovery":
             sp = A.home(self.data_root) / f"analysis_{latest['key']}" / "shocks.json"
             try:
                 import json as _json

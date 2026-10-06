@@ -1,5 +1,6 @@
-"""Shocks on every timeframe (ADR-106): bars whose high-low is at least 3x the median of the SAME time slot over the
-previous 20 trading dates. Overlapping shock bars of different timeframes form ONE episode (which timeframes saw it is
+"""Shocks on every timeframe (ADR-106): bars whose high-low against the median of the SAME time slot over the
+previous 20 trading dates is among the largest 0.1 % of that timeframe (and at least 3x; 3x alone flagged ~20 bars a
+day on real 1-minute data). Overlapping shock bars of different timeframes form ONE episode (which timeframes saw it is
 recorded: a 1-minute-only spike is not a 15-minute event).
 
 Why (all tags that apply, the first is the main one):
@@ -23,6 +24,7 @@ from edgelab.market import patterns as P
 from edgelab.market.trend import quantiles, rate
 
 SHOCK_RATIO = 3.0
+SHOCK_QUANTILE = 0.999
 ES_RATIO = 2.0
 CLOCK = ((18 * 60, "18:00 re-open"), (2 * 60, "2:00 London"), (3 * 60, "3:00 London"), (8 * 60 + 30, "8:30 US data"),
          (9 * 60 + 30, "9:30 US open"), (10 * 60, "10:00 US data"), (14 * 60, "14:00 FOMC time"),
@@ -36,7 +38,9 @@ def detect(m: D.Minute, bars: dict, typ: dict, es: D.Minute | None, es_bars: dic
     for tf in INTRADAY:
         b = bars[tf]
         r = (b.h - b.l) / np.where(typ[tf] > 0, typ[tf], np.nan)
-        for k in np.flatnonzero(r >= SHOCK_RATIO):
+        fin = r[np.isfinite(r)]
+        cut = max(SHOCK_RATIO, float(np.quantile(fin, SHOCK_QUANTILE))) if len(fin) else SHOCK_RATIO
+        for k in np.flatnonzero(r >= cut):
             cands.append((int(b.ts[k]), int(b.ts[k] + tf * D.MIN_NS), tf, int(k), float(r[k])))
     cands.sort()
     # merge overlapping bars into episodes

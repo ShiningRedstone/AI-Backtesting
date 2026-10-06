@@ -60,6 +60,60 @@ def day_types(facts: dict) -> np.ndarray:
     return t
 
 
+CHANCE_REPS = 20
+
+
+def chance_levels(m: D.Minute, facts: dict, reps: int = CHANCE_REPS, seed: int = 106) -> dict:
+    """What CHANCE gives for the day-shape statistics, from the data itself: every regular session's 1-minute close-to-
+    close moves keep their SIZE (so the busy open, quiet lunch and busy close stay exactly as they were) but get random
+    signs (any direction pattern is destroyed), ``reps`` times per day. The same statistics are measured on the real
+    close path, so the two are directly comparable: a real effect must stand out from the chance column."""
+    rng = np.random.default_rng(seed)
+    rth = (m.ny_min >= 570) & (m.ny_min < 960)
+    days = np.unique(m.day[rth])
+    real = {"low_first": [], "high_first": [], "first_hour": [], "t_hi": []}
+    sim = {"low_first": [0, 0], "high_first": [0, 0], "first_hour": [0, 0], "t_hi": []}
+    for d in days:
+        idx = np.flatnonzero(rth & (m.day == d))
+        if len(idx) < 380 or m.ny_min[idx[0]] != 570:
+            continue
+        path = np.r_[m.o[idx[0]], m.c[idx]]
+        steps = np.diff(path)
+        mins = np.r_[570, m.ny_min[idx] + 1]
+        for P_, store in ((path[None, :], None), (None, sim)):
+            if P_ is None:
+                signs = rng.choice([-1.0, 1.0], size=(reps, len(steps)))
+                P_ = np.c_[np.zeros(reps), np.cumsum(steps[None, :] * signs, axis=1)]
+            amin, amax = P_.argmin(1), P_.argmax(1)
+            upd = P_[:, -1] > P_[:, 0]
+            dnd = P_[:, -1] < P_[:, 0]
+            fh = (mins[amin] < 630) | (mins[amax] < 630)
+            if store is None:
+                if upd[0]:
+                    real["low_first"].append(bool(amin[0] < amax[0]))
+                if dnd[0]:
+                    real["high_first"].append(bool(amax[0] < amin[0]))
+                real["first_hour"].append(bool(fh[0]))
+                real["t_hi"].append(int(mins[amax[0]]))
+            else:
+                store["low_first"][0] += int((amin[upd] < amax[upd]).sum())
+                store["low_first"][1] += int(upd.sum())
+                store["high_first"][0] += int((amax[dnd] < amin[dnd]).sum())
+                store["high_first"][1] += int(dnd.sum())
+                store["first_hour"][0] += int(fh.sum())
+                store["first_hour"][1] += reps
+                store["t_hi"].extend(mins[amax].tolist())
+    bins = list(range(570, 961, 30))
+    rr = lambda xs: rate(int(sum(xs)), len(xs))
+    return {"method": f"real 1-minute moves with random signs, {reps} per day (same volatility through the day)",
+            "real": {"up_days_low_first": rr(real["low_first"]), "down_days_high_first": rr(real["high_first"]),
+                     "high_or_low_in_first_hour": rr(real["first_hour"])},
+            "chance": {"up_days_low_first": rate(*sim["low_first"]), "down_days_high_first": rate(*sim["high_first"]),
+                       "high_or_low_in_first_hour": rate(*sim["first_hour"])},
+            "time_of_high_real": np.histogram(real["t_hi"], bins=bins)[0].tolist(),
+            "time_of_high_chance": (np.histogram(sim["t_hi"], bins=bins)[0] / max(1, reps)).tolist()}
+
+
 def analyse(m: D.Minute, bars: dict, facts: dict, news_days: set | None = None) -> dict:
     out: dict = {}
     t = day_types(facts)
@@ -84,6 +138,7 @@ def analyse(m: D.Minute, bars: dict, facts: dict, news_days: set | None = None) 
     out["power_of_3"] = {"up_days_low_first": rate(int((tl[up] < th[up]).sum()), int(up.sum())),
                          "down_days_high_first": rate(int((th[dn] < tl[dn]).sum()), int(dn.sum())),
                          "high_or_low_in_first_hour": rate(int(((th[ok] < 630) | (tl[ok] < 630)).sum()), int(ok.sum()))}
+    out["chance"] = chance_levels(m, facts)
     # session ranges and which session makes the trading date's high / low
     days = np.unique(m.day)
     di = np.searchsorted(days, m.day)

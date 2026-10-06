@@ -2868,3 +2868,34 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   stand-ins, `tests/market_fixture.py`); BID prices; the 1-minute timeframe dominates time and memory (about 2 minutes per year of data, ~7 for four years,
   ~1.5 GB peak; measured ~100 s / 760 MB per synthetic year).
 - **Never:** a run, a trial, a holdout look, a protocol change, a change to backtests, rules, costs or configs.
+
+### ADR-107 Market simulator review fixes and the holdout prediction test (one look)
+- **Request (user):** check the first real analysis (summary.json, discovery 2021-09-28 ... 2024-12-31, 841 trading
+  dates) for flaws, say what can be used for a holdout prediction, fix all flaws and build the holdout test now.
+- **Review result:** every rate / count / interval consistent; seven flaws, all fixed: (1) the 423 confirmed edge
+  cells were ONE short-term reversal effect on 1-3 minute charts counted under hundreds of overlapping conditions and
+  none cleared its after-cost break-even -> `edges.finish` groups cells (kind, timeframe, outcome, side of the base
+  rate) and flags `tradeable` (the better side's confirmed rate > break-even); (2) "Power of 3" (87.7 %) and "high /
+  low in the first hour" (77.8 %) equal what chance gives -> `trend.chance_levels`: each regular session's real
+  1-minute moves with random signs (20 per day; same intraday volatility, no direction pattern), shown beside the real
+  numbers; (3) shocks were "3x the slot median" = ~20 a day -> the top 0.1 % of each timeframe (and >= 3x);
+  (4) costs used the all-hours median spread -> spread per SESSION + fixed costs (`cost_points.by_session`); (5) gaps had
+  no 50 % fill -> `ce_min` for NDOG / NWOG / RTH gap; (6) "NQ closed the gap" share was unstable -> each closed episode
+  is closed by NQ, ES or both (whichever moved more toward the other); (7) "similar situations" for levels compared
+  everything -> same level type only, on distance / time-left / volatility inputs. Found while testing: the direction
+  and daily-bias BASELINE (per-time-slot up-rate) was a weak opponent (on random data worse than a constant 50 %), so
+  models "beat" it without knowing anything -> the baseline is the training period's overall up-rate (walk-forward,
+  new days and the holdout test). `ANALYSIS_VERSION` 2 (old analyses are recomputed on the next run).
+- **Holdout prediction test** (`market/holdout.py`, companion role `market_sim` in `research/protocol.py`: 1 look, no
+  trials): checks first (analysis current for the same data / news / settings, one active protocol, settings = the
+  protocol's, look unused), trains every model on ALL discovery candles and freezes them (official model per target =
+  the one chosen on the discovery walk-forward; fingerprint of analysis key, choices, inputs, model settings, code
+  version), RECORDS the look (holdout access `HA_MARKET_...`), only then loads the holdout minutes (discovery minutes
+  before them are the live history), predicts every holdout 15-minute candle (up, size + bands from the discovery
+  out-of-sample residuals), daily bias and level reach, scores against the same baselines with day-bootstrap intervals
+  and per month; a failure after the look marks it failed (still spent); a second look -> HOLDOUT_LOOK_USED. Holdout
+  days are viewable in the day viewer only after the look. `GET/POST /api/market/holdout` (confirm "HOLDOUT").
+- **Tests:** ordering (look recorded before the first holdout read), only holdout candles predicted, second look
+  refused, chance levels match on a random walk, rare shocks, gap half-fills, grouped / cost-checked cells, constant
+  baseline; on random data the holdout test shows no skill. Phase 1 demo identical.
+- **Never:** a run, a trial, a change to backtests, rules, costs or configs; the parent protocol is untouched.

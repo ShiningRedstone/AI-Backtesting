@@ -13,7 +13,11 @@ Guarantees tested:
   releases are refused), the surprise uses only earlier releases, the API key lives in the user settings file (never
   the workspace) and is never returned;
 * the job reads the discovery period only (never the holdout), records no run, caches by its inputs; new days start
-  after the research data; the API answers.
+  after the research data; the API answers;
+* ADR-107: chance levels from sign-flipped real moves match the real statistics on a random walk; shocks are the top
+  0.1 % per timeframe; opening gaps get their 50 % fill; divergence closings split into NQ / ES / both; confirmed edge
+  cells are grouped and checked against costs; the holdout prediction test records its ONE look BEFORE any holdout
+  minute is loaded, predicts only holdout candles, refuses a second look and shows holdout days only after the look.
 """
 import json
 import os
@@ -107,6 +111,30 @@ class TestPatternsCausalAndUnbiased(unittest.TestCase):
             e = e[e != 0]
             self.assertLess(abs((e > 0).mean() - 0.5), 0.05, kind)
 
+    def test_chance_levels_match_on_random_walk(self):
+        from edgelab.market import trend as T
+        c = T.chance_levels(self.m, self.facts)
+        for k in ("up_days_low_first", "high_or_low_in_first_hour"):
+            real, ch = c["real"][k], c["chance"][k]
+            self.assertGreaterEqual(real["n"], 15)
+            self.assertTrue(real["ci"][0] - 0.03 <= ch["p"] <= real["ci"][1] + 0.03, (k, real, ch))
+
+    def test_gap_half_fill(self):
+        g = self.ev[self.ev["kind"].isin(["NDOG", "NWOG", "RTH_GAP"])]
+        if len(g):
+            fill, ce = g["fill_min"].to_numpy(float), g["ce_min"].to_numpy(float)
+            both = np.isfinite(fill) & np.isfinite(ce)
+            self.assertTrue((ce[both] <= fill[both]).all())        # half the gap closes no later than all of it
+            self.assertTrue((np.isfinite(ce) | ~np.isfinite(fill)).all())
+
+    def test_shocks_are_rare(self):
+        from edgelab.market import shocks as S
+        typ = {tf: D.typical_by_slot(b, b.h - b.l) for tf, b in self.bars.items() if tf != D.DAY}
+        sh = S.detect(self.m, self.bars, typ, None, None, None, [], P.day_levels(self.m))
+        days = len(np.unique(self.m.day))
+        self.assertLess(len(sh) / days, 3.0)                       # the old 3x rule gave ~20 a day on real data
+        self.assertGreater(len(sh), 0)
+
     def test_zone_stats(self):
         rows = P.summarize(self.ev, int(self.m.ts[-1]), 60)
         fvg = [r for r in rows if r["kind"] == "FVG" and r["tf"] == 15]
@@ -136,6 +164,16 @@ class TestEdgeScan(unittest.TestCase):
             cells += E.scan_group({"kind": f"K{g}", "tf": "5m", "dir": 1}, outs, base, ctx, sess, find, 10.0, 3.0, pvals,
                                   np.arange(n))
         return E.finish(cells, pvals)
+
+    def test_groups_and_costs(self):
+        planted = self._cells(0.15)
+        self.assertTrue(planted["groups"])
+        self.assertEqual(sum(g["cells"] for g in planted["groups"]), len(planted["candidates"]))
+        for c in planted["candidates"]:
+            if c["outcome"] == "edge":
+                better = c["rate_confirm"] if c["rate_find"] > c["base_find"] else 1 - c["rate_confirm"]
+                self.assertEqual(c["tradeable"], better > c["breakeven"])
+                self.assertAlmostEqual(c["breakeven"], 0.5 + 3.0 / (2 * 10.0))
 
     def test_nothing_on_noise_planted_effect_found(self):
         noise = self._cells(0.0)
@@ -182,6 +220,9 @@ class TestForecast(unittest.TestCase):
         self.assertGreater(early.sum(), 100)
         for k in F.MODELS:
             np.testing.assert_array_equal(a["pred"][k][early], b["pred"][k][early])
+        months = days.astype("datetime64[M]")                         # the baseline is ONE constant per month (the
+        for mo in np.unique(months[np.isfinite(a["pred"]["baseline"])]):   # overall up-rate): never a noisy slot rate
+            self.assertEqual(np.unique(a["pred"]["baseline"][months == mo]).size, 1)
         g1 = G.GBM(n_trees=20, seed=3).fit(X[:2000], y[:2000]).predict(X[2000:2100])
         g2 = G.GBM(n_trees=20, seed=3).fit(X[:2000], y[:2000]).predict(X[2000:2100])
         np.testing.assert_array_equal(g1, g2)
@@ -291,6 +332,10 @@ class TestMarketService(unittest.TestCase):
         self.assertEqual(r["edges"]["confirmed"], 0)                 # a random walk has no edge
         self.assertGreater(len(r["patterns"]), 50)
         self.assertIn("relationship", r["nqes"])
+        cb = r["nqes"]["divergence"]["closed_by"]
+        self.assertAlmostEqual(sum(v["p"] or 0 for v in cb.values()), 1.0, places=9)
+        self.assertIn("chance", r["trend"])
+        self.assertEqual(len(r["cost_points"]["by_session"]), 6)
         self.assertIn("by_cause", r["shocks"])
         self.assertTrue(r["forecast"]["up"]["months"])
         svc = Services(root=self.root)
@@ -319,6 +364,52 @@ class TestMarketService(unittest.TestCase):
             self.assertIn("logistic", sc["up"])
         finally:
             svc.store.close()
+
+    def test_holdout_test_one_look_recorded_first(self):
+        from edgelab.market import holdout as H
+        from edgelab.services import Services
+        from edgelab.web.app import create_app
+        c = create_app(self.root).test_client()
+        self.assertEqual(c.get("/api/market/days?src=holdout").get_json()["days"], [])     # nothing before the look
+        self.assertEqual(c.post("/api/market/holdout", json={"confirm": "nope"}).status_code, 422)
+        svc = Services(root=self.root)
+        events = []
+        real_cell, real_add = svc._cell_dataset, svc.store.add_holdout_access
+        hold = pd.Timestamp(self.res["source"]["holdout_start"])
+
+        def cell(ds_id, period=None, lock=None):
+            if period is not None and pd.Timestamp(period[0]) >= hold:
+                events.append("holdout data")
+            return real_cell(ds_id, period, lock)
+
+        def add(row):
+            events.append("look recorded")
+            return real_add(row)
+        svc._cell_dataset = cell
+        svc.store.add_holdout_access = add
+        try:
+            st0 = H.status(svc)
+            self.assertFalse(st0["used"])
+            res = H.run(svc, lock=svc.lock)
+            self.assertEqual(events[:2], ["look recorded", "holdout data"])          # the look first, then the holdout
+            self.assertGreater(res["candles"], 100)
+            self.assertEqual(set(res["targets"]), {"up", "size", "bias", "levels"})
+            self.assertEqual(res["targets"]["size"]["official_model"], self.res["forecast"]["size"]["chosen"])
+            with np.load(H.home(svc.data_root) / "predictions.npz") as z:
+                self.assertGreaterEqual(int(z["t"].min()), hold.value)                  # only holdout candles predicted
+            with self.assertRaises(H.HoldoutTestError) as e:
+                H.run(svc, lock=svc.lock)
+            self.assertEqual(e.exception.code, "HOLDOUT_LOOK_USED")
+            st = H.status(svc)
+            self.assertTrue(st["used"])
+            self.assertEqual(st["look"]["status"], "completed")
+        finally:
+            svc.store.close()
+        days = c.get("/api/market/days?src=holdout").get_json()["days"]
+        self.assertTrue(days)
+        d = c.get(f"/api/market/day/{days[0]}?src=holdout").get_json()
+        self.assertTrue(d["candles"])
+        self.assertEqual(c.post("/api/market/holdout", json={"confirm": "HOLDOUT"}).status_code, 202)   # job starts, then refuses
 
     def test_api(self):
         from edgelab.web.app import create_app

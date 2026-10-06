@@ -20,7 +20,7 @@ from edgelab.market import news as N
 from edgelab.market import newsfx, nqes, shocks, trend
 from edgelab.market import patterns as P
 
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2                    # 2: ADR-107 fixes (costs per session, stricter shocks, chance levels, constant baseline ...)
 SEED = 20261006
 BASE_SAMPLES = 4000
 KIND_WORDS = {
@@ -200,9 +200,10 @@ def run(svc, *, lock=None, progress=None, force: bool = False) -> dict:
     return res
 
 
-def _cost_points(svc, mk) -> float | None:
-    """Spread (median ASK - BID close of the discovery data) + commission, fees and slippage of one MNQ round trip from
-    the configured cost scenario, in index points. None when the costs are unconfigured."""
+def _cost_points(svc, mk) -> dict | None:
+    """Round-trip cost of one MNQ contract in index points PER SESSION: the median ASK - BID spread of that session's
+    minutes (spreads are much wider overnight than in New York hours) + commission, fees and slippage from the
+    configured cost scenario. {'all': ..., 'by_session': [6 values]}; None when the costs are unconfigured."""
     try:
         from edgelab.engine.costs import cost_model_from_config
         from edgelab.instruments import contract_for, execution_view
@@ -216,8 +217,14 @@ def _cost_points(svc, mk) -> float | None:
         px = float(np.median(ds.bars.close))
         base = costs.round_trip_base("market", "market", 1, inst, spread_points=None, entry_price=px, exit_price=px)
         usd = (base["commission_usd"] + base["fees_usd"] + base["slippage_usd"] + base["spread_usd"]) * costs.multiplier
-        spread = float(np.median(ds.bars.ask_close - ds.bars.close)) if ds.bars.has_ask_ohlc else 0.0
-        return spread + usd / inst.point_value
+        fixed = usd / inst.point_value
+        if not ds.bars.has_ask_ohlc:
+            return {"all": fixed, "by_session": [fixed] * len(P.SESSION_NAMES), "fixed": fixed}
+        spread = ds.bars.ask_close - ds.bars.close
+        sess = P.session_code(P.ny_minutes(ds.bars.ts_ns))
+        by = [float(np.median(spread[sess == s])) + fixed if (sess == s).any() else float(np.median(spread)) + fixed
+              for s in range(len(P.SESSION_NAMES))]
+        return {"all": float(np.median(spread)) + fixed, "by_session": by, "fixed": fixed}
     except Exception:                                                  # noqa: BLE001 - costs are optional here
         return None
 
@@ -299,8 +306,9 @@ def _process(out_dir: Path, name: str, f, m: D.Minute, fr: X.Frame, lv: dict, es
                 "rest15": eff.get("m15_rest", np.zeros(len(f), np.int8))[g]}
         ba = _base_arrays(base, tf, sess, np.full(len(g), dd, np.int8))
         atr_pts = float(np.median(f["atr"].to_numpy(float)[g]))
+        cost_rows = None if cost_pts is None else np.asarray(cost_pts["by_session"])[sess.astype(int)]
         key = {"kind": kind, "tf": D.TF_LABEL.get(tf, str(tf)), "dir": dd}
-        cells.extend(E.scan_group(key, outs, ba, {k: v[g] for k, v in ctx.items()}, sess, find[g], atr_pts, cost_pts,
+        cells.extend(E.scan_group(key, outs, ba, {k: v[g] for k, v in ctx.items()}, sess, find[g], atr_pts, cost_rows,
                                   pvals, act_ns[g] // (15 * D.MIN_NS)))
         row = {**key, "n": int(len(g)), "effects": []}
         for tf2 in D.TIMEFRAMES:

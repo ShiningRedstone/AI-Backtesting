@@ -190,8 +190,12 @@ every timeframe and the 15m chart, higher-timeframe context, NQ vs ES divergence
 PROVEN time zone; API key in the user settings file), edge scan (first event per 15-min window in time order, BH 5 % on the first 70 %,
 confirmed on the last 30 %; 0 finds on random data), live 15m forecasts (logistic / numpy boosting / similar situations vs baselines,
 monthly walk-forward, skill counts only beyond a day-bootstrap interval), new NQ / ES days after the research data. Never a run / try / look.
+ADR-107: Market simulator review of the first real analysis: grouped + cost-checked edge cells, sign-flip "chance" levels (Power of 3 = chance),
+top-0.1 % shocks, per-session spread costs, gap 50 % fill, divergence closed by NQ / ES / both, level-type similar model, constant (overall
+up-rate) direction baseline (the per-slot one was a weak opponent); `ANALYSIS_VERSION` 2. Holdout prediction test `market/holdout.py`
+(companion role `market_sim`, ONE look recorded BEFORE the holdout is read, models frozen on discovery, `/api/market/holdout`).
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-106.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-107.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -249,7 +253,7 @@ remains. Do not rely on this file alone.
     selected for Claude", favourites / rename, prop challenge chain, pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
     Strategy autotuner (step-by-step optimiser, ADR-101), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (2 strategies, each automatic then manual take / skip with a short result panel, ADR-102/103).
   - Market simulator (ADR-106): Overview (data, news key + download, analysis, new days), Trend & sessions, NQ vs ES, Patterns
-    (+ edge scan), News (+ shocks), Simulator (forecast scores, day viewer).
+    (+ edge scan), News (+ shocks), Simulator (forecast scores, day viewer, holdout prediction test = one look, ADR-107).
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -476,4 +480,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-106). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-107). Update `README.md` status for phases.

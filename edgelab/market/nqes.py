@@ -128,14 +128,18 @@ def move_gap(pn: D.Minute, pe: D.Minute) -> dict:
                 j += 1
             closed = j < n and di[j] == di[s] and np.isfinite(z[j]) and abs(z[j]) <= 0.5
             end = j if closed else j - 1
-            # who closed it: NQ's own move against the gap vs ES's move toward it (beta-scaled)
+            # who closed it: NQ's own move toward ES vs ES's (beta-scaled) move toward NQ, both in log points;
+            # the larger one closed it ('both' when they are within 25 % of each other)
             d = di[s]
             dn = (ln[end] - ln[s]) * -sign
             de = beta_d[d] * (le[end] - le[s]) * sign
-            share = dn / (dn + de) if closed and (dn + de) > 0 else None
+            who = None
+            if closed:
+                a_, b_ = max(dn, 0.0), max(de, 0.0)
+                who = "both" if min(a_, b_) >= 0.75 * max(a_, b_) > 0 else ("NQ" if a_ > b_ else "ES")
             nq_next = (bn.c[min(end + 12, n - 1)] - bn.c[end]) if closed else None
             episodes.append({"start": int(bn.ts[s]), "minutes": int((end - s) * 5), "peak_z": float(peak),
-                             "nq_ahead": bool(sign > 0), "closed": bool(closed), "nq_share": share,
+                             "nq_ahead": bool(sign > 0), "closed": bool(closed), "closed_by": who,
                              "session": P.SESSION_NAMES[int(P.session_code(P.ny_minutes([bn.ts[s]]))[0])],
                              "nq_next_hour_pts": None if nq_next is None else float(nq_next)})
             i = j + 1
@@ -143,7 +147,6 @@ def move_gap(pn: D.Minute, pe: D.Minute) -> dict:
             i += 1
     days_n = len(days)
     closed = [e for e in episodes if e["closed"]]
-    shares = np.array([e["nq_share"] for e in closed if e["nq_share"] is not None])
     by_sess = {}
     for e in episodes:
         by_sess.setdefault(e["session"], []).append(e)
@@ -154,8 +157,7 @@ def move_gap(pn: D.Minute, pe: D.Minute) -> dict:
             "closed": rate(len(closed), len(episodes)),
             "minutes_to_line_up": quantiles([e["minutes"] for e in closed]),
             "peak_z": quantiles([e["peak_z"] for e in episodes]),
-            "nq_closed_it": rate(int((shares > 0.5).sum()), len(shares)),
-            "nq_share": quantiles(shares),
+            "closed_by": {w: rate(sum(1 for e in closed if e["closed_by"] == w), len(closed)) for w in ("NQ", "ES", "both")},
             "nq_ahead": rate(sum(1 for e in episodes if e["nq_ahead"]), len(episodes)),
             "after_close_nq_keeps_reverting": rate(int((back > 0).sum()), int((back != 0).sum())),
             "by_session": [{"session": k, "n": len(v), "closed": rate(sum(1 for e in v if e["closed"]), len(v)),

@@ -5,13 +5,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { market } from "../api/market";
-import type { DayView, EdgeCell, Edges, EffectRow, MarketStatus, PatternRow, Quant, Rate, Score, Section, TargetEval } from "../api/market";
+import type { DayView, EdgeCell, EdgeGroup, Edges, EffectRow, HoldoutStatus, MarketStatus, PatternRow, Quant, Rate, Score, Section, TargetEval } from "../api/market";
 import type { MyJob } from "../api/my";
 import { useApi } from "../app/context";
 import { BarChart, LineChart } from "../components/charts";
 import { CandleChart } from "../components/candles";
 import type { Marker, PriceLine } from "../components/candles";
-import { Badge, Banner, Button, Card, Empty, ErrorPanel, Kpi, PageSkeleton, Select, TableWrap, TechDetails, pct } from "../components/ui";
+import { Badge, Banner, Button, Card, Confirm, Empty, ErrorPanel, Kpi, PageSkeleton, Select, TableWrap, TechDetails, TextInput, pct } from "../components/ui";
 import { PageHead } from "./MyStrategy";
 
 const TF_NAMES: Record<number, string> = { 1: "1m", 2: "2m", 3: "3m", 4: "4m", 5: "5m", 10: "10m", 15: "15m", 30: "30m", 60: "1h", 240: "4h", 1440: "1D" };
@@ -25,6 +25,8 @@ const q = (x: Quant | null | undefined, k: "q25" | "q50" | "q75" | "q10" | "q90"
 const num = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? "–" : v.toFixed(d));
 const dirWord = (d: number) => (d > 0 ? "bullish" : "bearish");
 const kindName = (kinds: Record<string, string> | undefined, k: string) => kinds?.[k] ?? k;
+const outside = (real: Rate | undefined, chance: number | null | undefined) =>
+  !!(real?.ci && chance != null && (chance < real.ci[0] || chance > real.ci[1]));
 
 function useMarketJob(onDone: () => void): [MyJob | null, (j: MyJob) => void] {
   const [job, setJob] = useState<MyJob | null>(null);
@@ -172,6 +174,7 @@ interface TrendData {
   m15_after_runs: { k: number; after: string; next_same: Rate }[]; m15_up_rate: Rate; m15_autocorr: { lag: number; corr: number; band: number; n: number }[];
   m15_profile: ({ t: string; up: Rate } & Quant)[]; weekdays: { weekday: string; range: Quant | null; up: Rate }[];
   news_days?: Record<string, { range: Quant | null; types: Record<string, Rate> }>;
+  chance?: { method: string; real: Record<string, Rate>; chance: Record<string, Rate>; time_of_high_real: number[]; time_of_high_chance: number[] };
 }
 
 export function MarketTrendPage() {
@@ -194,11 +197,20 @@ export function MarketTrendPage() {
           before changes anything.</p>
       </Card>
       <div className="grid-cards">
-        <Card title="When the regular session's high and low form">
+        <Card title="When the regular session's high and low form" testId="market-chance">
           <BarChart categories={t.time_bins} unit="days" signed={false}
-            series={[{ id: "h", label: "high", values: t.time_of_high }, { id: "l", label: "low", values: t.time_of_low }]} />
-          <p className="small">Up days with the low before the high (Power of 3): {r(t.power_of_3.up_days_low_first)}. Down days with the high first:
-            {" "}{r(t.power_of_3.down_days_high_first)}. High or low inside the first hour: {r(t.power_of_3.high_or_low_in_first_hour)}.</p>
+            series={[{ id: "h", label: "high", values: t.time_of_high }, { id: "l", label: "low", values: t.time_of_low },
+              ...(t.chance ? [{ id: "c", label: "high by chance", values: t.chance.time_of_high_chance }] : [])]} />
+          {t.chance ? <TableWrap><table className="dense"><thead><tr><th></th><th className="num">Real</th><th className="num">By chance</th></tr></thead>
+            <tbody>{([["up_days_low_first", "Up days: low before high (Power of 3)"], ["down_days_high_first", "Down days: high before low"],
+              ["high_or_low_in_first_hour", "High or low inside the first hour"]] as const).map(([k, w]) => (
+              <tr key={k}><td>{w}</td><td className="num">{r(t.chance!.real[k])}</td><td className="num">{pct(t.chance!.chance[k]?.p, 1)}
+                {outside(t.chance!.real[k], t.chance!.chance[k]?.p) ? " *" : ""}</td></tr>))}</tbody></table></TableWrap> :
+            <p className="small">Up days with the low before the high (Power of 3): {r(t.power_of_3.up_days_low_first)}. High or low inside the first hour:
+              {" "}{r(t.power_of_3.high_or_low_in_first_hour)}.</p>}
+          <p className="small muted">"By chance": {t.chance?.method ?? "run the analysis again"}. Only a clear gap between the two columns is a pattern
+            (* = the chance value lies outside the real number's 95 % range; with three rows, one * in about 7 runs is itself luck); equal numbers mean the
+            shape comes from how prices move, not from the time of day or a model.</p>
         </Card>
         <Card title="Sessions">
           <TableWrap><table className="dense"><thead><tr><th>Session</th><th className="num">Range (median pts)</th><th className="num">Share of day</th>
@@ -245,8 +257,9 @@ interface NqEsData {
   missing?: boolean; too_few?: boolean; paired_minutes?: number;
   relationship?: { tf: string; corr: number | null; beta: number | null; same_direction: Rate; by_year: Record<string, number> }[];
   lead_lag?: { lag_min: number; corr: number | null; band: number }[];
-  divergence?: { episodes: number; per_day: number; closed: Rate; minutes_to_line_up: Quant | null; peak_z: Quant | null; nq_closed_it: Rate;
-    nq_ahead: Rate; after_close_nq_keeps_reverting: Rate; by_session: { session: string; n: number; closed: Rate; minutes: Quant | null }[] };
+  divergence?: { episodes: number; per_day: number; closed: Rate; minutes_to_line_up: Quant | null; peak_z: Quant | null;
+    nq_ahead: Rate; after_close_nq_keeps_reverting: Rate; by_session: { session: string; n: number; closed: Rate; minutes: Quant | null }[];
+    nq_closed_it?: Rate; closed_by?: Record<"NQ" | "ES" | "both", Rate> };
 }
 
 export function MarketNqEsPage() {
@@ -279,7 +292,8 @@ export function MarketNqEsPage() {
         <div className="kpis">
           <Kpi label="Per day" value={dv.per_day.toFixed(1)} sub={`${dv.episodes} episodes (gap ≥ 2× its usual size)`} />
           <Kpi label="Lined up again" value={pct(dv.closed.p, 0)} sub={`median ${q(dv.minutes_to_line_up, "q50", 0)} min (q25 ${q(dv.minutes_to_line_up, "q25", 0)}, q75 ${q(dv.minutes_to_line_up, "q75", 0)})`} />
-          <Kpi label="NQ closed the gap" value={pct(dv.nq_closed_it.p, 0)} sub="share of closings where NQ moved more than ES" accent />
+          <Kpi label="Who closed the gap" value={dv.closed_by ? `NQ ${pct(dv.closed_by.NQ.p, 0)}` : pct(dv.nq_closed_it?.p, 0)} accent
+            sub={dv.closed_by ? `ES caught up ${pct(dv.closed_by.ES.p, 0)} · both ${pct(dv.closed_by.both.p, 0)}` : "run the analysis again"} />
           <Kpi label="After closing, NQ keeps going back" value={pct(dv.after_close_nq_keeps_reverting.p, 0)} sub="next hour, toward ES" />
         </div>
         <TableWrap><table className="dense"><thead><tr><th>Session</th><th className="num">Episodes</th><th className="num">Closed</th><th className="num">Minutes (median)</th></tr></thead>
@@ -360,6 +374,24 @@ function PatternCard({ p, kinds, eff }: { p: PatternRow; kinds: Record<string, s
   );
 }
 
+function EdgeGroups({ groups, kinds, tradeable, total }: { groups: EdgeGroup[]; kinds: Record<string, string>; tradeable: number; total: number }) {
+  return (
+    <>
+      <Banner tone={tradeable ? "ok" : "info"} testId="market-edge-groups">The {total} confirmed combinations are <b>{groups.length} distinct effects</b> (the
+        same effect under many conditions counts once here). Tradeable after costs: <b>{tradeable}</b>.</Banner>
+      <TableWrap><table className="dense"><thead><tr><th>Effect</th><th>Outcome</th><th className="num">Best: first 70 % → last 30 % (usual)</th>
+        <th className="num">Conditions</th><th>After costs</th></tr></thead>
+        <tbody>{groups.slice(0, 40).map((g, i) => (
+          <tr key={i}><td>{kindName(kinds, g.kind)} · {g.tf} · {g.more_often ? "works MORE often than usual" : "works LESS often (the opposite happens)"}</td>
+            <td className="small">{OUTCOME_WORDS[g.outcome]}</td>
+            <td className="num">{pct(g.best.rate_find, 1)} → {g.best.rate_confirm != null ? pct(g.best.rate_confirm, 1) : "–"} ({pct(g.best.base_find, 1)})</td>
+            <td className="num" title={g.conditions.join(" | ")}>{g.cells}</td>
+            <td>{g.outcome !== "edge" ? <span className="muted small">not a trade outcome</span> : g.tradeable ? <Badge tone="ok">clears costs</Badge> :
+              <Badge>below break-even</Badge>}</td></tr>))}</tbody></table></TableWrap>
+    </>
+  );
+}
+
 function EdgeScan({ edges, kinds }: { edges?: Edges; kinds: Record<string, string> }) {
   if (!edges) return null;
   const line = (c: EdgeCell) => `${kindName(kinds, c.kind)} · ${c.tf} · ${dirWord(c.dir)} · ${c.condition}`;
@@ -368,6 +400,7 @@ function EdgeScan({ edges, kinds }: { edges?: Edges; kinds: Record<string, strin
       <p className="small">{edges.cells_tested.toLocaleString()} combinations were tested on the first {pct(edges.find_share, 0)} of the discovery period
         (only the first event per 15 minutes counts, each compared with the usual rate at the same time of day). {edges.passed_find} survived the
         false-discovery correction; <b>{edges.confirmed}</b> then went the same way on the last {pct(1 - edges.find_share, 0)}, which the scan never saw.</p>
+      {edges.groups && edges.candidates.length > 0 && <EdgeGroups groups={edges.groups} kinds={kinds} tradeable={edges.tradeable ?? 0} total={edges.confirmed} />}
       {!edges.candidates.length ? <Banner tone="info">No edge candidates: nothing in these patterns did better than the usual rate by more than chance
         explains, once the number of combinations is taken into account.</Banner> :
         <TableWrap><table className="dense"><thead><tr><th>Pattern and condition</th><th>Outcome</th><th className="num">First 70 %</th><th className="num">Usual</th>
@@ -376,9 +409,9 @@ function EdgeScan({ edges, kinds }: { edges?: Edges; kinds: Record<string, strin
             <tr key={i}><td>{line(c)}</td><td className="small">{OUTCOME_WORDS[c.outcome]}</td>
               <td className="num">{pct(c.rate_find, 1)} ({c.n_find})</td><td className="num">{pct(c.base_find, 1)}</td>
               <td className="num">{c.rate_confirm != null ? `${pct(c.rate_confirm, 1)} (${c.n_confirm})` : "–"}</td>
-              <td className="num">{c.breakeven != null ? pct(c.breakeven, 1) : "–"}</td></tr>))}</tbody></table></TableWrap>}
-      <p className="small muted">"Needed after costs": the win rate a 1:1 trade at one ATR of that chart needs to cover the spread, commission and slippage of one
-        MNQ contract. A candidate is not a strategy: it is something to test once, forward.</p>
+              <td className="num">{c.breakeven != null ? pct(c.breakeven, 1) : "–"}{c.tradeable === true ? " ✓" : ""}</td></tr>))}</tbody></table></TableWrap>}
+      <p className="small muted">"Needed after costs": the win rate a 1:1 trade at one ATR of that chart needs to cover the spread of the session the events
+        happened in plus commission and slippage of one MNQ contract (✓ = the better side clears it). A candidate is not a strategy: it is something to test once, forward.</p>
     </Card>
   );
 }
@@ -447,7 +480,7 @@ function ShockTable({ rows, first }: { rows: (ShockBlock & { name: string })[]; 
 // =============================================================================================== simulator (day viewer)
 export function MarketSimulatorPage() {
   const fc = useSection<Record<string, TargetEval>>("forecast");
-  const [src, setSrc] = useState<"discovery" | "new">("discovery");
+  const [src, setSrc] = useState<"discovery" | "new" | "holdout">("discovery");
   const days = useApi<{ days: string[] }>(fc.data ? market.daysUrl(src) : null, [src, fc.data?.key]);
   const [day, setDay] = useState<string>("");
   useEffect(() => { if (days.data && !days.data.days.includes(day)) setDay(days.data.days[days.data.days.length - 1] ?? ""); }, [days.data]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -465,15 +498,18 @@ export function MarketSimulatorPage() {
       </Card>
       <Card title="Pick a day" testId="market-day-pick">
         <div className="row gap">
-          <Select value={src} onChange={(v) => setSrc(v as "discovery" | "new")} ariaLabel="Days"
-            options={[{ value: "discovery", label: "Discovery (walk-forward predictions)" }, { value: "new", label: "New days (live)" }]} />
+          <Select value={src} onChange={(v) => setSrc(v as "discovery" | "new" | "holdout")} ariaLabel="Days" testId="market-src"
+            options={[{ value: "discovery", label: "Discovery (walk-forward predictions)" }, { value: "new", label: "New days (live)" },
+              { value: "holdout", label: "Holdout (after the one look)" }]} />
           {days.data && days.data.days.length > 0 ?
             <Select value={day} onChange={setDay} ariaLabel="Day" testId="market-day-select"
               options={[...days.data.days].reverse().map((d) => ({ value: d, label: d }))} /> :
-            <span className="muted small">{src === "new" ? "No new days scored yet (Overview → New days)." : "No predicted days."}</span>}
+            <span className="muted small">{src === "new" ? "No new days scored yet (Overview → New days)." : src === "holdout" ?
+              "The holdout test has not been run." : "No predicted days."}</span>}
         </div>
       </Card>
       {day && <DayCard key={`${src}/${day}`} day={day} src={src} />}
+      <HoldoutTestCard />
     </div>
   );
 }
@@ -563,3 +599,65 @@ function DayCard({ day, src }: { day: string; src: string }) {
   );
 }
 
+
+// =============================================================================================== holdout prediction test (ADR-107)
+const HOLDOUT_TARGETS: [string, string][] = [["size", "Size of the next 15-min candle"], ["levels", "Level reached before the session ends"],
+  ["up", "Next 15-min candle up or down"], ["bias", "Session closes above the current price"]];
+
+function HoldoutTestCard() {
+  const { data, error, reload } = useApi<HoldoutStatus>(market.holdoutUrl);
+  const [job, setJob] = useMarketJob(reload);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [err, setErr] = useState<ApiError | null>(null);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data) return null;
+  const running = job?.state === "running";
+  const start = async () => { setErr(null); try { setJob(await market.runHoldout(typed)); setOpen(false); setTyped(""); } catch (e) { setErr(e as ApiError); } };
+  const res = data.result;
+  return (
+    <Card title="Holdout prediction test (one look)" testId="market-holdout">
+      {!data.available ? <Banner tone="warn">{data.problem}</Banner> : !data.used ? (
+        <>
+          <p>Freezes the models trained on the whole discovery period, then predicts every 15-minute candle of your holdout
+            ({data.holdout?.start.slice(0, 10)} – {data.holdout?.end.slice(0, 10)}) with live knowledge only and scores them against the same baselines.
+            For each forecast the model chosen on discovery is the official one; the others are shown, marked as not chosen in advance.</p>
+          <ul className="small edge-list">
+            <li>It is <b>one recorded look</b> at the holdout (its own entry in the protocol ledger). It cannot be repeated or redone with changes.</li>
+            <li>Run the analysis again first if anything changed (data, news, settings): the test refuses an outdated analysis.</li>
+            <li>What discovery says to expect: the candle SIZE well (about +24 % better than usual), levels a little (+4 %), direction not at all.</li>
+          </ul>
+          {running && <Banner tone="info"><span className="spinner" /> {job?.step}</Banner>}
+          {job?.state === "failed" && <Banner tone="error">{job.error?.message}</Banner>}
+          <ErrorPanel error={err} />
+          <Button kind="primary" onClick={() => setOpen(true)} disabled={running} testId="market-holdout-btn">Run the holdout test</Button>
+          <Confirm open={open} title="Use the one holdout look of the Market simulator?" confirmLabel="Start" danger busy={running}
+            onCancel={() => { setOpen(false); setTyped(""); }} onConfirm={() => void start()}>
+            <p>This spends the Market simulator's single holdout look. It cannot be undone. Type <b>HOLDOUT</b> to confirm.</p>
+            <TextInput value={typed} onChange={setTyped} ariaLabel="Type HOLDOUT" testId="market-holdout-typed" />
+          </Confirm>
+        </>) : !res ? (
+          <Banner tone={data.look?.status === "failed" ? "error" : "info"}>
+            {data.look?.status === "failed" ? "The look was recorded but the test failed; the look stays spent." : <><span className="spinner" /> Running…</>}</Banner>
+        ) : (
+        <>
+          <p className="small">Look {res.access_id} · {res.days} holdout days · {res.candles.toLocaleString()} candles · models frozen on discovery
+            (fingerprint {res.fingerprint}). Skill = better than the baseline; "real" = its 95 % range (resampling whole days) stays above 0.</p>
+          <TableWrap><table className="dense" data-testid="market-holdout-result"><thead><tr><th>Forecast</th><th>Official model</th>
+            <th className="num">Skill on the holdout</th><th className="num">Hit rate</th><th>Real?</th><th>Other models (not chosen in advance)</th></tr></thead>
+            <tbody>{HOLDOUT_TARGETS.map(([k, w]) => { const tg = res.targets[k]; if (!tg) return null; const s = tg.official;
+              return (
+                <tr key={k}><td>{w}</td><td>{MODEL_WORDS[tg.official_model]}</td><td className="num">{skill(s)}</td>
+                  <td className="num">{s?.accuracy != null ? pct(s.accuracy, 1) : "–"}</td><td><RealBadge s={s} /></td>
+                  <td className="small">{Object.entries(tg.models).filter(([m]) => m !== tg.official_model && m !== "baseline")
+                    .map(([m, x]) => `${MODEL_WORDS[m]} ${x?.skill != null ? (x.skill * 100).toFixed(1) + " %" : "–"}`).join(" · ")}</td></tr>);
+            })}</tbody></table></TableWrap>
+          {res.targets.size?.bands && <p className="small">Size bands on the holdout: {pct(res.targets.size.bands.inside_50, 0)} of candles inside the 50 % band,
+            {" "}{pct(res.targets.size.bands.inside_80, 0)} inside the 80 % band (calibrated = 50 % and 80 %).</p>}
+          <TechDetails summary="Skill by month (official models)" rows={HOLDOUT_TARGETS.filter(([k]) => res.targets[k]).map(([k, w]) =>
+            [w, res.targets[k].by_month.map((x) => `${x.month}: ${x.skill != null ? (x.skill * 100).toFixed(1) : "–"} %`).join(" · ")])} />
+          <p className="small muted">Pick "Holdout (after the one look)" above to see each holdout day candle by candle.</p>
+        </>)}
+    </Card>
+  );
+}

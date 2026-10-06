@@ -539,10 +539,12 @@ def add_day_patterns(ev: Events, m: D.Minute, lv: dict, a_day: dict) -> dict:
         dd = np.sign(pc - op).astype(np.int8)
         kn = m.ts[gi]
         fill_j = D.first_touch(m, gi, pc, dd)
+        ce_j = D.first_touch(m, gi, (pc + op) / 2, dd)                  # half the gap closed
         top, bot = np.maximum(pc, op), np.minimum(pc, op)
         ev.add(kind=kinds, tf=1, dir=dd, known_ns=kn, i_min=gi, entry_i=gi, day=m.day[gi].astype(np.int64),
                session=session_code(m.ny_min[gi]), top=top, bottom=bot, atr=atr15[gi], size_atr=(top - bot) / atr15[gi],
                fill_min=np.where(fill_j >= 0, (m.ts[np.maximum(fill_j, 0)] - kn) / D.MIN_NS, np.nan),
+               ce_min=np.where(ce_j >= 0, (m.ts[np.maximum(ce_j, 0)] - kn) / D.MIN_NS, np.nan),
                touch_min=np.zeros(len(gi)), edge=edge_outcome(m, gi, dd, atr15[gi], 15))
     if orb:
         width, i0, oh, ol, r1 = (np.array(v) for v in zip(*orb))

@@ -158,10 +158,7 @@ def predict(svc, analysis_key: str, progress=None) -> dict:
     out = {"t": crn["t"][sel], "up": crn["up"][sel], "size": crn["size"][sel]}
     p = {k: m.predict(Xn) for k, m in models.items()}
     slot = crn["slot"][sel]
-    st = crd["slot"][upm]
-    cnt = np.bincount(st, minlength=int(max(st.max(), slot.max())) + 1)
-    pos = np.bincount(st, weights=yb[upm], minlength=len(cnt))
-    p["baseline"] = ((pos + 20 * yb[upm].mean()) / (cnt + 20))[slot]
+    p["baseline"] = np.full(int(sel.sum()), (yb[upm].sum() + 1) / (upm.sum() + 2))    # overall up-rate (forecast.py)
     p["similar"] = F._similar(Xd[upm], yb[upm], crd["slot"][upm], Xn, slot, "binary")
     sz = {k: m.predict(Xn) for k, m in size_models.items()}
     sz["similar"] = F._similar(Xd, crd["size"], crd["slot"], Xn, slot, "real")

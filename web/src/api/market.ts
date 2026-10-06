@@ -16,7 +16,8 @@ export interface NewsStatus { key: { set: boolean; hint: string | null }; source
   meta?: { source: string; sha256: string; downloaded_at: string; bytes: number }; events?: number; high?: number; first?: string; last?: string;
   timezone?: { zone: string | null; match?: number; anchors: number; reason?: string; candidates?: { zone: string; match: number }[] };
   refused?: { code: string; message: string } | null }
-export interface AnalysisHead { key: string; computed_at: string; days: number; cost_points: number | null;
+export interface AnalysisHead { key: string; computed_at: string; days: number;
+  cost_points: { all: number; by_session: number[]; fixed: number } | number | null;
   source: { nq: { dataset_id: string; content_hash: string }; es: { content_hash: string; bars_in_window: number } | null;
     window: { start: string; end: string }; holdout_start: string };
   news: { used: boolean; events: number; high: number };
@@ -35,9 +36,18 @@ export interface EffectRow { kind: string; tf: string; dir: number; n: number; e
   size_median: number | null; size_q90: number | null }[]; m15_bos?: number; m15_4_atr?: { q25: number; q50: number; q75: number } | null }
 export interface EdgeCell { kind: string; tf: string; dir: number; condition: string; outcome: "edge" | "next15" | "rest15"; n_find: number;
   rate_find: number; base_find: number; n_confirm: number; rate_confirm: number | null; base_confirm: number | null; p: number;
-  p_confirm: number | null; direction?: string; breakeven: number | null; atr_pts: number | null }
+  p_confirm: number | null; direction?: string; breakeven: number | null; atr_pts: number | null; cost_pts?: number | null;
+  tradeable?: boolean | null }
+export interface EdgeGroup { kind: string; tf: string; outcome: EdgeCell["outcome"]; more_often: boolean; cells: number; best: EdgeCell;
+  conditions: string[]; tradeable: boolean; dirs: number[] }
 export interface Edges { cells_tested: number; passed_find: number; confirmed: number; failed: number; p_cut: number | null;
-  candidates: EdgeCell[]; failed_confirm: EdgeCell[]; fdr_q: number; find_share: number }
+  candidates: EdgeCell[]; failed_confirm: EdgeCell[]; fdr_q: number; find_share: number; groups?: EdgeGroup[]; tradeable?: number }
+export interface HoldoutModelScore { official_model: string; models: Record<string, Score | null>; official: Score | null;
+  by_month: { month: string; n: number; skill: number | null; accuracy?: number | null }[]; bands?: { inside_50: number; inside_80: number; n: number } }
+export interface HoldoutStatus { available: boolean; problem?: string; used?: boolean; holdout?: { start: string; end: string };
+  look?: { access_id: string; status: string; created_at: string } | null;
+  result?: { access_id: string; fingerprint: string; chosen: Record<string, string>; computed_at: string; candles: number; days: number;
+    holdout: { start: string; end: string }; targets: Record<string, HoldoutModelScore> } | null }
 export interface Section<T> { key: string; name: string; data: T; kinds: Record<string, string>; sessions: string[] }
 
 export interface DayCandle { t: number; o: number; h: number; l: number; c: number; p_up?: Record<string, number | null>;
@@ -58,4 +68,6 @@ export const market = {
   analyze: (force = false) => api.post<MyJob>("/api/market/analyze", { force }),
   newdays: () => api.post<MyJob>("/api/market/newdays", {}),
   job: (id: string) => api.get<MyJob & { done: boolean }>(`/api/market/jobs/${enc(id)}`),
+  holdoutUrl: "/api/market/holdout",
+  runHoldout: (confirm: string) => api.post<MyJob>("/api/market/holdout", { confirm }),
 };

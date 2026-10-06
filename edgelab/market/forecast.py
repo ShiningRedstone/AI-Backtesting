@@ -9,8 +9,8 @@ Targets: UP (the candle closes above its open), SIZE (log of its high-low agains
 previous 20 trading dates), BIAS (at 9:30 ... 15:30 every 30 minutes: does the session close above the current price)
 and LEVELS (at 9:30, 10:00, 11:00 ... 15:00: is each reference level / open FVG edge traded before the session ends).
 
-Models: the BASELINE (the opponent: the up-rate of that slot in the training data; 'usual size' for SIZE; distance
-only for LEVELS), LOGISTIC (ridge for SIZE), GRADIENT BOOSTING (numpy, see gbm.py) and SIMILAR SITUATIONS (the 40
+Models: the BASELINE (the opponent: the overall up-rate of the training data; 'usual size' of that slot for SIZE;
+distance only for LEVELS), LOGISTIC (ridge for SIZE), GRADIENT BOOSTING (numpy, see gbm.py) and SIMILAR SITUATIONS (the 40
 nearest past candles of the same time of day, compared on every input). Walk-forward: every month is predicted by
 models trained only on the trading dates before it (logistic and similar situations retrained monthly, boosting every
 3 months). The model shown by default is chosen on the first 70 % of the predicted months and its score is reported
@@ -432,7 +432,7 @@ def _months(days: np.ndarray) -> np.ndarray:
 
 def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarray | None, kind: str,
                  progress=None, label: str = "", base_X: np.ndarray | None = None,
-                 onehot: np.ndarray | None = None) -> dict:
+                 onehot: np.ndarray | None = None, sim_cols: list | None = None, sim_exact: bool = False) -> dict:
     """Predictions for every row of every month after MIN_TRAIN_DAYS of history. kind: 'binary' (y in {0, 1}) or
     'real'. Returns per-model predictions (NaN where not predicted) and, for 'binary', logistic contributions."""
     n = len(y)
@@ -457,13 +457,11 @@ def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarra
         if kind == "binary":
             if base_X is not None:
                 preds["baseline"][test] = G.Logistic(l2=1.0).fit(base_X[train], ytr).predict(base_X[test])
-            elif slot is not None:
-                p_all = (ytr.sum() + 1) / (len(ytr) + 2)
-                st, ss = slot[train], slot[test]
-                cnt = np.bincount(st, minlength=int(slot.max()) + 1)
-                pos = np.bincount(st, weights=ytr, minlength=int(slot.max()) + 1)
-                rate = (pos + 20 * p_all) / (cnt + 20)                  # shrunk toward the overall rate
-                preds["baseline"][test] = rate[ss]
+            else:
+                # the training period's overall up-rate: the strongest simple 'usual'. (A per-time-slot rate was tried
+                # and is a WEAK opponent: on random data its slot noise scores worse than a constant, so any model
+                # 'beat' it without knowing anything - ADR-107.)
+                preds["baseline"][test] = (ytr.sum() + 1) / (len(ytr) + 2)
             lg = G.Logistic(l2=1.0).fit(Xtr, ytr)
             preds["logistic"][test] = lg.predict(Xte)
             c = lg.contributions(Xte)
@@ -478,17 +476,18 @@ def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarra
         if gbm is None or (mi - first_pred) % GBM_EVERY == 0:
             gbm = G.GBM(loss="logloss" if kind == "binary" else "l2", n_trees=90, seed=mi).fit(Xtr, ytr)
         preds["boosting"][test] = gbm.predict(Xte)
+        Str, Ste = (Xtr, Xte) if sim_cols is None else (Xtr[:, sim_cols], Xte[:, sim_cols])
         if slot is not None:
-            preds["similar"][test] = _similar(Xtr, ytr, slot[train], Xte, slot[test], kind)
+            preds["similar"][test] = _similar(Str, ytr, slot[train], Ste, slot[test], kind, exact=sim_exact)
         else:
-            preds["similar"][test] = _similar(Xtr, ytr, None, Xte, None, kind)
+            preds["similar"][test] = _similar(Str, ytr, None, Ste, None, kind)
     out = {"pred": preds}
     if kind == "binary":
         out["contrib_idx"], out["contrib_val"] = contrib_idx, contrib_val
     return out
 
 
-def _similar(Xtr, ytr, str_, Xte, ste, kind) -> np.ndarray:
+def _similar(Xtr, ytr, str_, Xte, ste, kind, exact: bool = False) -> np.ndarray:
     mu = Xtr.mean(0)
     sd = Xtr.std(0)
     sd[~(sd > 0)] = 1
@@ -497,7 +496,7 @@ def _similar(Xtr, ytr, str_, Xte, ste, kind) -> np.ndarray:
     groups = [None] if ste is None else np.unique(ste)
     for s in groups:
         te = np.arange(len(Xte)) if s is None else np.flatnonzero(ste == s)
-        tr = np.arange(len(Xtr)) if s is None else np.flatnonzero(np.abs(str_.astype(int) - int(s)) <= 1)
+        tr = np.arange(len(Xtr)) if s is None else np.flatnonzero(np.abs(str_.astype(int) - int(s)) <= (0 if exact else 1))
         if len(tr) < NEIGHBOURS:
             continue
         if len(tr) > 20000:
@@ -665,7 +664,11 @@ def run(cx: Context, out_dir, progress=None) -> dict:
         XL, lnames = level_matrix(lr)
         base_cols = XL[:, :5]
         ld = lr["day"].astype("datetime64[D]")
-        wf_l = walk_forward(XL, lr["reached"].astype(float), ld, None, "binary", step, "Levels", base_X=base_cols)
+        ltype = np.array([LEVEL_KEYS.index(k) for k in lr["level"]])
+        keep = ["abs_dist", "side", "log_dist", "time_left", "dist_per_sqrt_time", "size60", "size15_lag1", "move_day"]
+        sim_cols = [lnames.index(c) for c in keep if c in lnames]
+        wf_l = walk_forward(XL, lr["reached"].astype(float), ld, ltype, "binary", step, "Levels", base_X=base_cols,
+                            sim_cols=sim_cols, sim_exact=True)
         res["levels"] = evaluate(wf_l["pred"], lr["reached"].astype(float), _months(ld), "binary", ld)
         by = []
         for key in LEVEL_KEYS:

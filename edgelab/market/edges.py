@@ -15,8 +15,10 @@ timeframe and direction, measured from random minutes - not with an overall aver
 Find early, confirm late: cells are tested on the FIRST 70 % of the discovery period (two-sided z-test of the rate
 against the base rate) with Benjamini-Hochberg false-discovery control at 5 % over ALL tested cells; a cell is an
 EDGE CANDIDATE only if it then goes the same way on the LAST 30 % (one-sided p < 0.05), which the scan never saw.
-The 1:1 outcome also shows the win rate needed to cover costs (spread + commission + slippage of one MNQ contract, in
-points, against the pattern's typical ATR).
+The 1:1 outcome also shows the win rate needed to cover costs (the spread of the SESSION each event happened in +
+commission + slippage of one MNQ contract, in points, against the pattern's typical ATR) and whether the confirmed
+rate (taking the better side) clears it. Overlapping cells describing one effect (same kind, timeframe, outcome and
+side of the base rate) are GROUPED, so many conditions of one effect are not read as many edges.
 """
 from __future__ import annotations
 
@@ -70,7 +72,7 @@ def conditions(ctx: dict, session: np.ndarray) -> list[tuple[str, np.ndarray]]:
 
 
 def scan_group(key: dict, outcomes: dict, base: dict, ctx: dict, session: np.ndarray, find: np.ndarray,
-               atr_pts: float | None, cost_pts: float | None, pvals: list, window: np.ndarray) -> list[dict]:
+               atr_pts: float | None, cost_pts, pvals: list, window: np.ndarray) -> list[dict]:
     """All cells of one (kind, timeframe, direction) group. ``outcomes[o]`` int8 arrays (+1 / -1 / 0),
     ``base[o]`` per-row base rate of a +1 (by session). Every p-value is appended to ``pvals`` (the false-discovery
     control counts them all); only cells with p <= FDR_Q are returned in full (no other cell can pass)."""
@@ -104,12 +106,16 @@ def scan_group(key: dict, outcomes: dict, base: dict, ctx: dict, session: np.nda
             pc0 = float(np.mean(base[o][mc])) if nc else None
             pv = _p_two(z)
             pvals.append(pv)
+            cost = None
+            if cost_pts is not None:
+                cost = float(np.mean(np.asarray(cost_pts)[mf])) if np.ndim(cost_pts) else float(cost_pts)
             if pv > FDR_Q:
                 continue
             cells.append({**key, "condition": cname, "outcome": o, "n_find": nf, "rate_find": kf / nf, "base_find": p0,
                           "z": z, "p": _p_two(z), "n_confirm": nc, "rate_confirm": kc / nc if nc else None,
                           "base_confirm": pc0, "kc": kc, "atr_pts": atr_pts,
-                          "breakeven": (0.5 + cost_pts / (2 * atr_pts)) if (o == "edge" and atr_pts and cost_pts) else None})
+                          "cost_pts": cost,
+                          "breakeven": (0.5 + cost / (2 * atr_pts)) if (o == "edge" and atr_pts and cost) else None})
     return cells
 
 
@@ -134,10 +140,31 @@ def finish(cells: list[dict], pvals: list) -> dict:
             zc = (c["kc"] - nc * pc0) / math.sqrt(nc * pc0 * (1 - pc0)) * sign
             c["z_confirm"], c["p_confirm"] = zc, _p_one(zc)
             c["direction"] = "more often than usual" if sign > 0 else "less often than usual (the opposite is the edge)"
+            better = c["rate_confirm"] if sign > 0 else 1 - c["rate_confirm"]
+            c["tradeable"] = (better > c["breakeven"]) if c.get("breakeven") is not None else None
             (cands if c["p_confirm"] < 0.05 else failed).append(c)
         else:
             c["p_confirm"] = None
             failed.append(c)
+    groups: dict = {}
+    for c in cands:
+        base_kind = c["kind"].replace("_FORMED", "")
+        k = (base_kind, c["tf"], c["outcome"], c["rate_find"] > c["base_find"])
+        g = groups.setdefault(k, {"kind": base_kind, "tf": c["tf"], "outcome": c["outcome"],
+                                  "more_often": c["rate_find"] > c["base_find"], "cells": 0, "best": c,
+                                  "conditions": [], "tradeable": False, "dirs": set()})
+        g["cells"] += 1
+        g["dirs"].add(c["dir"])
+        g["tradeable"] = g["tradeable"] or bool(c.get("tradeable"))
+        if len(g["conditions"]) < 6:
+            g["conditions"].append(c["condition"])
+        if c["p"] < g["best"]["p"]:
+            g["best"] = c
+    glist = sorted(groups.values(), key=lambda g: g["best"]["p"])
+    for g in glist:
+        g["dirs"] = sorted(g["dirs"])
+    out["groups"] = glist
+    out["tradeable"] = sum(1 for c in cands if c.get("tradeable"))
     out.update(passed_find=len(passed), candidates=cands[:300], failed_confirm=failed[:300],
                confirmed=len(cands), failed=len(failed))
     return out

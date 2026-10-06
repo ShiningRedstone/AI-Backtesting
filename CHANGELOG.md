@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Market simulator: review fixes + holdout prediction test (ADR-107)
+
+| Item | Status |
+|---|---|
+| Edge candidates grouped into distinct effects, each checked against costs (your 423 = one 1-3 minute reversal effect, not tradeable) | IMPLEMENTED, TESTED |
+| "By chance" column for Power of 3 / first-hour high or low / time of high (your real data: equal to chance) | IMPLEMENTED, TESTED |
+| Stricter shocks (top 0.1 % per timeframe), costs per session spread, gap 50 % fill, who closed a divergence (NQ / ES / both), better levels model | IMPLEMENTED, TESTED |
+| Fairer direction baseline (overall up-rate; the per-slot rate was beatable by chance) | IMPLEMENTED, TESTED |
+| Holdout prediction test: models frozen on discovery, ONE recorded look, every holdout candle predicted live and scored | IMPLEMENTED, TESTED (synthetic; look recorded before the holdout is read) |
+| Results on your real holdout | REQUIRES REAL DATA (re-run the analysis, then run the test once in the app) |
+| Backtests, rules, costs, configs, tries, the research protocol | UNCHANGED |
+
 ## Market simulator (ADR-106)
 
 | Item | Status |

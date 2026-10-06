@@ -183,8 +183,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         from edgelab.market.data import MarketDataError
         from edgelab.market.news import NewsError
         from edgelab.market.newdays import NewDaysError
-        if isinstance(e, (MarketDataError, NewsError, NewDaysError)):      # ADR-106
-            return jsonify({"error": {"kind": "market", "code": e.code, "message": e.message}}), 422
+        from edgelab.market.holdout import HoldoutTestError
+        if isinstance(e, (MarketDataError, NewsError, NewDaysError, HoldoutTestError)):      # ADR-106 / ADR-107
+            return jsonify({"error": {"kind": "market", "code": e.code, "message": e.message}}), \
+                409 if e.code == "HOLDOUT_LOOK_USED" else 422
         from edgelab.mystrategy.params import SettingsError
         from edgelab.mystrategy.runner import MyStrategyError
         if isinstance(e, SettingsError):                     # ADR-93
@@ -1226,6 +1228,18 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     def market_newdays():
         return jsonify(call(svc.market_newdays)), 202
 
+    @app.get("/api/market/holdout")                    # ADR-107: holdout prediction test (one look)
+    def market_holdout():
+        return jsonify(call(svc.market_holdout))
+
+    @app.post("/api/market/holdout")
+    def market_holdout_run():
+        body = request.get_json(silent=True) or {}
+        confirm = body.get("confirm")
+        if not isinstance(confirm, str):
+            raise _bad("confirm must be text")
+        return jsonify(call(svc.market_holdout_run, confirm)), 202
+
     @app.get("/api/market/jobs/<jid>")
     def market_job(jid):
         return jsonify(call(svc.market_job, _id(jid, MY_JOB_ID, "job id")))
@@ -1233,15 +1247,15 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.get("/api/market/days")
     def market_days():
         src = request.args.get("src", "discovery")
-        if src not in ("discovery", "new"):
-            raise _bad("src must be discovery or new")
+        if src not in ("discovery", "new", "holdout"):
+            raise _bad("src must be discovery, new or holdout")
         return jsonify(call(svc.market_days, src))
 
     @app.get("/api/market/day/<day>")
     def market_day(day):
         src = request.args.get("src", "discovery")
-        if src not in ("discovery", "new"):
-            raise _bad("src must be discovery or new")
+        if src not in ("discovery", "new", "holdout"):
+            raise _bad("src must be discovery, new or holdout")
         return jsonify(call(svc.market_day, _id(day, MARKET_DAY, "date"), src))
 
     @app.get("/api/edge/anatomy/<rid>")
