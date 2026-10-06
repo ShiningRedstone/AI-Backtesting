@@ -2720,3 +2720,25 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   settings, every-try chart, path with lookahead badges and "Save as backtest"); Backtest tab: star, rename, "Favourites
   only", "Prop challenges" column / KPI / per-account table.
 - **Unchanged:** engine, fills, costs, sizing, prop rules, configs, My strategy rules and settings hashes, research runs.
+
+### ADR-102 My strategy holdout: one strategy, an automatic look then a manual look; any tested strategy; typing fix
+- **Request (user):** typing HOLDOUT moved the cursor to Cancel after every letter; pick which strategy goes to the holdout
+  (also autotuner results); two holdouts - one with manual trades and one without; reset the holdout limit to those 2.
+  Choices: the SAME strategy both ways; a new allowance of exactly 2, with no note about earlier looks on the results;
+  candidates = discovery backtests + autotuner bests that passed the lookahead check; the automatic result is shown
+  BEFORE the manual review (and again next to it at the end).
+- **Typing fix** (`components/ui` `Confirm`): the dialog focused its first button on every redraw (its effect depended on
+  the caller's `onCancel`, a new function each render); it now focuses once on open (a text field first).
+- **Allowance** (`mystrategy/review.py`): companion protocol role `my_holdout` (scope `...#my_holdout`, `is_companion`) with
+  `holdout_budget` 2 (`looks: automatic, manual`), declared trial budget = the source protocols' budgets (My strategy +
+  autotuner: the family the strategy was chosen from; no trial is counted under it), and an internal exposure statement
+  with the number of looks spent earlier (not shown on results). `candidates` / `_resolve_ref` (`bt:<BT>` or
+  `opt:<OPT>:<n>`); only settings counted as a try in a source protocol (`NOT_BACKTESTED`). `start_automatic`: one look
+  (`HA_AUTOMATIC_...`), `run_window(stage="holdout", protocol=allowance)` with the lookahead check, OUT_OF_SAMPLE run,
+  report `HO_...` shown at once. `start_manual`: needs the automatic look, same settings, second look (`HA_MANUAL_...`), a
+  review state whose mechanical report is the automatic one; decisions as before (`open_review`). State in
+  `<data>/my_strategy/holdout_allowance.json`. Earlier reviews, reports and the old protocols' looks are unchanged.
+- **API:** `GET /api/my/holdout`, `POST /api/my/holdout/automatic {ref}` (job), `POST /api/my/holdout/manual`;
+  `/api/my/review/decide` goes to the allowance's review. **UI:** Holdout review = look status, strategy picker (favourites
+  first, source badge), typed HOLDOUT confirmation, automatic report, manual take / skip, both results at the end.
+- **Unchanged:** engine, rules, settings hashes, tries, the discovery protocols and their records.

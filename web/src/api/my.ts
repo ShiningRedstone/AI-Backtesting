@@ -102,6 +102,17 @@ export interface ReviewView {
   progress?: { decided: number; taken: number; skipped: number; taken_net_r: number; taken_wins: number };
   candidate?: Candidate | null; finished?: Report;
 }
+/** ADR-102: one strategy, two holdout looks (automatic, then manual). */
+export interface HoldoutCandidate { ref: string; source: "backtest" | "autotuner"; label: string; favorite: boolean; created_at: string | null;
+  settings_hash: string; trade_count: number | null; metrics: Metrics | null; settings_changed: Record<string, unknown> | null }
+export interface HoldoutAllowance extends ReviewView {
+  ready: boolean; problem?: string; looks: string[]; protocol_id: string | null; config_ok?: boolean;
+  holdout?: { start: string; end: string }; discovery?: { start: string; end: string };
+  automatic: { access_id: string; report: string; at: string; run_id: string } | null;
+  manual: { access_id: string; review: string; at: string } | null;
+  source_label: string | null; settings_hash: string | null; settings_changed: Record<string, unknown> | null;
+  candidates: HoldoutCandidate[]; job: MyJob | null;
+}
 export interface Decision { signal_bar: number; take: boolean; outcome?: TradeRow & { candles: Record<string, Candle[]>; exit_bar: number } }
 
 export interface PlanVariant { label: string; overrides: Record<string, unknown>; settings_hash: string }
@@ -181,6 +192,9 @@ export const my = {
   esUrl: "/api/my/es",
   importEs: (path: string, identity_confirmed: boolean) => api.post<MyJob>("/api/my/es/import", { path, identity_confirmed }),
   reviewUrl: "/api/my/review",
+  holdoutUrl: "/api/my/holdout",
+  holdoutAutomatic: (ref: string) => api.post<MyJob>("/api/my/holdout/automatic", { ref }),
+  holdoutManual: () => api.post<{ id: string }>("/api/my/holdout/manual", {}),
   reportUrl: (id: string) => `/api/my/reports/${enc(id)}`,
   tradeUrl: (id: string, n: number) => `/api/my/reports/${enc(id)}/trades/${n}`,
   planResultUrl: (id: string) => `/api/my/plan-results/${enc(id)}`,

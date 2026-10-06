@@ -2687,6 +2687,29 @@ class Services:
         ov = dict(overrides) if overrides is not None else R.load_overrides(self)
         return R.jobs_of(self).start("holdout", lambda step: RV.start(self, ov, lock=self.lock, progress=step))
 
+    def my_holdout(self) -> dict:
+        """ADR-102: the 2-look holdout allowance (automatic, then manual), the strategy picker and the review."""
+        from edgelab.mystrategy import review as RV
+        out = RV.allowance_view(self, self.lock)
+        out["job"] = None
+        from edgelab.mystrategy import runner as R
+        j = R.jobs_of(self).active()
+        if j and j.get("kind") == "holdout_automatic":
+            out["job"] = j
+        return out
+
+    def my_holdout_start_automatic(self, ref: str) -> dict:
+        from edgelab.mystrategy import review as RV, runner as R
+        parent, _ = RV.holdout_protocol(self, self.lock, create=False)
+        s, _label = RV._resolve_ref(self, ref)                 # refused before a job starts (and before a look is spent)
+        R.es_for(self, s)
+        return R.jobs_of(self).start("holdout_automatic", lambda step: RV.start_automatic(self, ref, lock=self.lock,
+                                                                                          progress=step))
+
+    def my_holdout_start_manual(self) -> dict:
+        from edgelab.mystrategy import review as RV
+        return _jsonable(RV.start_manual(self, lock=self.lock))
+
     def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
         from edgelab.mystrategy import review as RV
         return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock))

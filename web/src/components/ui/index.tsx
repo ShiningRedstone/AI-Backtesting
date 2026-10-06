@@ -149,13 +149,17 @@ export function Confirm({ open, title, children, confirmLabel, danger, onConfirm
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const id = useId();
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel.current(); };
     window.addEventListener("keydown", onKey);
-    ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    // focus ONCE when the dialog opens (a text field first, else the first button); never again on later redraws, so
+    // typing in the dialog (Shift, Caps Lock, every letter) keeps the cursor where it is
+    (ref.current?.querySelector<HTMLElement>("input, textarea") ?? ref.current?.querySelector<HTMLButtonElement>("button"))?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
+  }, [open]);
   if (!open) return null;
   return (
     <div className="modal-backdrop" onClick={onCancel}>

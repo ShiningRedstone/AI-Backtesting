@@ -1169,6 +1169,21 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("overrides must be an object")
         return jsonify(call(svc.my_strategy_start_review, ov)), 202
 
+    @app.get("/api/my/holdout")                        # ADR-102: automatic + manual holdout of one strategy
+    def my_holdout():
+        return jsonify(call(svc.my_holdout))
+
+    @app.post("/api/my/holdout/automatic")
+    def my_holdout_automatic():
+        ref = body().get("ref")
+        if not isinstance(ref, str) or not re.fullmatch(r"bt:BT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}|opt:OPT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}:[0-9]{1,4}", ref):
+            raise _bad("ref must name one of your backtests or an autotuner result")
+        return jsonify(call(svc.my_holdout_start_automatic, ref)), 202
+
+    @app.post("/api/my/holdout/manual")
+    def my_holdout_manual():
+        return jsonify(call(svc.my_holdout_start_manual))
+
     @app.post("/api/my/review/decide")
     def my_review_decide():
         b = body()

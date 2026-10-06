@@ -172,8 +172,11 @@ AND last 30 % of discovery; score = goals, then challenge-chain net, then net R;
 each new best is checked, the final best backtested normally; tries cached in `optimizer/tries.jsonl`. Prop challenge chain
 `mystrategy/challenge.py` (fail -> next challenge, pass -> payouts, fees from Settings at read time; per-challenge re-sizing
 bit-identical to `equity_from_ts`) stored in every new My strategy report. Backtest tab: favourite / rename (`runner.set_meta`).
+ADR-102: My strategy holdout allowance (`review.py`: companion `my_holdout`, 2 looks = AUTOMATIC then MANUAL of ONE strategy,
+picked from discovery backtests or passed autotuner bests; automatic result shown before the manual take / skip; state
+`holdout_allowance.json`; `/api/my/holdout*`); `Confirm` focuses once on open (typing no longer jumps to Cancel).
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-101.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-102.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -229,7 +232,7 @@ remains. Do not rely on this file alone.
     prop check (the old simulator)
   - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", favourites / rename, prop challenge chain, pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
-    Strategy autotuner (step-by-step optimiser, ADR-101), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (take / skip).
+    Strategy autotuner (step-by-step optimiser, ADR-101), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (pick a strategy; automatic look, then manual take / skip, ADR-102).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
     then about/updates, workspace, pass-criteria account + Live 50K drawdown limit, CPU cores, prop account fees +
     discounts, delete-all.
@@ -454,4 +457,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-101). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-102). Update `README.md` status for phases.

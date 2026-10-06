@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## My strategy holdout: automatic + manual look of one strategy, any tested strategy, typing fix (ADR-102)
+
+| Item | Status |
+|---|---|
+| Typing HOLDOUT no longer jumps the cursor to Cancel (Shift / Caps Lock / every letter) | IMPLEMENTED, TESTED (browser) |
+| Pick the strategy for the holdout: your discovery backtests and autotuner results that passed the lookahead check | IMPLEMENTED, TESTED |
+| Two holdout looks of the same strategy: automatic (shown first), then manual take / skip; both results side by side | IMPLEMENTED, TESTED |
+| New holdout allowance of exactly these 2 looks (own protocol); earlier looks stay recorded, results carry no note | IMPLEMENTED, TESTED |
+| Engine, rules, tries and the discovery protocols | UNCHANGED |
+
 ## Strategy autotuner rebuilt as a step-by-step optimiser; prop challenge chain; backtest favourites (ADR-101)
 
 | Item | Status |

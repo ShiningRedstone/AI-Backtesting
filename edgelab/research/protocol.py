@@ -165,12 +165,15 @@ AUTOTUNE_FLIP_ROLE = "my_autotune_flip"
 AUTOTUNE_FLIP_SCOPE_SUFFIX = "#my_autotune_flip"
 OPTIMIZER_ROLE = "my_optimizer"               # ADR-101: the Strategy autotuner's step-by-step optimiser (own budget)
 OPTIMIZER_SCOPE_SUFFIX = "#my_optimizer"
+MY_HOLDOUT_ROLE = "my_holdout"                # ADR-102: My strategy holdout allowance (1 automatic + 1 manual look)
+MY_HOLDOUT_SCOPE_SUFFIX = "#my_holdout"
 
 
 def is_companion(rec: Mapping) -> bool:
     """True for a companion protocol (flip, My strategy, autotuner): it never governs library strategies or campaigns."""
     mat = rec.get("material", rec)
-    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE, OPTIMIZER_ROLE)
+    return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE, OPTIMIZER_ROLE,
+                               MY_HOLDOUT_ROLE)
 
 
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,

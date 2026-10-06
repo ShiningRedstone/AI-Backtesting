@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
-import type { Candle, ChallengeSummary, Decision, EsStatus, ExportResult, Explanation, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
+import type { Candle, ChallengeSummary, Decision, EsStatus, ExportResult, Explanation, HoldoutAllowance, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
   SettingDef, SettingsPayload, SetupReviews, SetupStats, SetupView, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
@@ -812,19 +812,25 @@ export function TradeCharts({ doc, until }: { doc: { explanation: Explanation; c
 
 // =============================================================================================== holdout review
 export function MyHoldoutPage() {
-  const { data: ov, reload: reloadOv } = useApi<Overview>(my.overviewUrl);
-  const { data, error, reload } = useApi<ReviewView>(my.reviewUrl);
-  const [confirm, setConfirm] = useState(false);
+  const { data, error, reload } = useApi<HoldoutAllowance>(my.holdoutUrl);
+  const [confirm, setConfirm] = useState<null | "automatic" | "manual">(null);
   const [typed, setTyped] = useState("");
+  const [pick, setPick] = useState<string | null>(null);
+  const [favOnly, setFavOnly] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<Decision | null>(null);
   const [lastCandidate, setLastCandidate] = useState<ReviewView["candidate"]>(null);
-  const [job, setJob] = useJob(() => { reload(); reloadOv(); });
-  useEffect(() => { if (ov?.job && ov.job.kind === "holdout" && !job) setJob(ov.job); }, [ov?.job]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [job, setJob] = useJob(() => reload());
+  useEffect(() => { if (data?.job && !job) setJob(data.job); }, [data?.job]); // eslint-disable-line react-hooks/exhaustive-deps
+  const closeConfirm = () => { setConfirm(null); setTyped(""); };
   const start = async () => {
+    if (typed !== "HOLDOUT") return;
     setErr(null);
-    try { setJob(await my.startReview()); setConfirm(false); setTyped(""); } catch (e) { setErr(e as ApiError); setConfirm(false); }
+    try {
+      if (confirm === "automatic" && pick) setJob(await my.holdoutAutomatic(pick));
+      else if (confirm === "manual") { setBusy(true); await my.holdoutManual(); reload(); }
+    } catch (e) { setErr(e as ApiError); } finally { setBusy(false); closeConfirm(); }
   };
   const decide = async (take: boolean) => {
     if (!data?.candidate) return;
@@ -836,32 +842,73 @@ export function MyHoldoutPage() {
       reload();
     } catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
   };
-  const p = ov?.protocol;
-  const rv = data?.review;
+  if (error) return <div className="page"><PageHead title="Holdout review" /><ErrorPanel error={error} /></div>;
+  if (!data) return <div className="page"><PageHead title="Holdout review" /><PageSkeleton layout="overview" label="Loading the holdout" /></div>;
+  const rv = data.review;
+  const running = job?.state === "running";
+  const rows = favOnly ? data.candidates.filter((c) => c.favorite) : data.candidates;
+  const chosen = data.candidates.find((c) => c.ref === pick) ?? null;
+  const done = rv && (rv.status === "complete" || data.finished);
   return (
     <div className="page" data-testid="my-holdout-page">
       <PageHead title="Holdout review" />
-      {error && <ErrorPanel error={error} />}
+      {!data.ready && <Banner tone="warn">{data.problem}</Banner>}
+      {data.ready && data.config_ok === false && <Banner tone="error">The research settings differ from the protocol's. Restore them under
+        Run backtest → Research runs first.</Banner>}
       <ErrorPanel error={err} />
       <JobLine job={job} />
-      {!rv && p && (
-        <Card title="Test the frozen settings on the locked holdout" testId="my-holdout-start">
-          <p>The holdout ({p.holdout ? `${day(p.holdout.start)} – ${day(p.holdout.end)}` : "–"}) has never been seen by this strategy.
-            The protocol allows <b>{p.holdout_looks} look</b> ({p.holdout_looks_used} used). Use it once, at the end, with the settings
-            you backtested last on the discovery period: tuning on the holdout would hide overfitting.</p>
-          <p>Starting it: 1) the engine computes the mechanical result (every signal); 2) you then see each setup with a chart that stops
-            at the entry and decide <b>Take</b> or <b>Skip</b>; the result shows right after each decision; 3) at the end both results are
-            shown side by side. Your decisions are kept separate from the automated result.</p>
-          <Button kind="primary" onClick={() => setConfirm(true)} disabled={!p.ready || (p.holdout_looks_used ?? 0) >= (p.holdout_looks ?? 1)}
-            testId="my-holdout-open">Start the holdout review…</Button>
+      <div className="kpis" data-testid="my-holdout-looks">
+        <Kpi label="Holdout period" value={data.holdout ? day(data.holdout.start) : "–"} sub={data.holdout ? `to ${day(data.holdout.end)}` : undefined} />
+        <Kpi label="1. Automatic look" value={data.automatic ? "used" : "unused"} sub="every signal traded by the engine" accent={!data.automatic} />
+        <Kpi label="2. Manual look" value={data.manual ? (done ? "used" : "in progress") : "unused"} sub="your take / skip on each setup, same strategy"
+          accent={!!data.automatic && !data.manual} />
+      </div>
+      {!data.automatic && (
+        <Card title="1. Pick the strategy to test" testId="my-holdout-pick" actions={<div className="inline">
+          <Checkbox checked={favOnly} onChange={setFavOnly} label="Favourites only" testId="my-holdout-fav-only" />
+          <Button kind="primary" onClick={() => setConfirm("automatic")} disabled={!data.ready || !pick || running}
+            testId="my-holdout-open">Run the automatic holdout…</Button></div>}>
+          <p className="muted small">Your discovery backtests (favourites first) and every autotuner result that passed the lookahead check. The same
+            strategy is then tested twice on the holdout: first automatically (result shown right away), then manually with your take / skip decisions.</p>
+          {!rows.length ? <Empty>{favOnly ? "No favourite. Star a backtest in the Backtest tab." : "No strategy yet: run a backtest or the autotuner first."}</Empty> : (
+            <TableWrap className="my-report-scroll" testId="my-holdout-candidates"><table className="dense">
+              <thead><tr><th style={{ width: 28 }} /><th>★</th><th>Strategy</th><th>From</th><th className="num">Trades</th><th className="num">Per week</th>
+                <th className="num">Win rate</th><th className="num">Net R</th><th className="num">Losing months</th></tr></thead>
+              <tbody>{rows.map((c) => (
+                <tr key={c.ref} className={c.ref === pick ? "selected" : ""} onClick={() => setPick(c.ref)} style={{ cursor: "pointer" }}>
+                  <td><input type="radio" name="my-holdout-pick" checked={c.ref === pick} onChange={() => setPick(c.ref)}
+                    aria-label={`Test ${c.label}`} data-testid={`my-holdout-pick-${c.ref.replace(/[:]/g, "-")}`} /></td>
+                  <td>{c.favorite ? <span className="at-star on" aria-label="favourite">★</span> : ""}</td>
+                  <td>{c.label || "–"}</td>
+                  <td><Badge tone={c.source === "autotuner" ? "info" : "neutral"}>{c.source === "autotuner" ? "Autotuner" : "Backtest"}</Badge></td>
+                  <td className="num">{c.trade_count ?? "–"}</td><td className="num">{n(c.metrics?.trades_per_week, 2)}</td>
+                  <td className="num">{pct(c.metrics?.win_rate)}</td><td className={`num ${signCls(c.metrics?.net_r)}`}>{r(c.metrics?.net_r, 1)}</td>
+                  <td className="num">{c.metrics?.months_losing ?? 0} / {c.metrics?.months_total ?? 0}</td>
+                </tr>))}</tbody></table></TableWrap>)}
         </Card>
       )}
-      <Confirm open={confirm} title="Use the holdout look?" confirmLabel="Start" danger busy={job?.state === "running"}
-        onCancel={() => setConfirm(false)} onConfirm={() => typed === "HOLDOUT" && start()}>
-        <p>This spends the only holdout look of My strategy with the saved settings. It cannot be undone. Type <b>HOLDOUT</b> to confirm.</p>
+      {data.automatic && (
+        <Card title={`Tested strategy: ${data.source_label ?? ""}`} testId="my-holdout-strategy">
+          {data.settings_changed && Object.keys(data.settings_changed).length > 0 ? <dl className="kv">{Object.entries(data.settings_changed).map(([k, v]) => (
+            <div key={k} className="kv-row"><dt>{k}</dt><dd>{String(v)}</dd></div>))}</dl> : <p className="muted">All defaults.</p>}
+        </Card>
+      )}
+      {data.automatic && !data.manual && (
+        <Card title="2. Manual holdout of the same strategy" testId="my-holdout-manual-start">
+          <p>You see each setup with a chart that stops at the entry and decide <b>Take</b> or <b>Skip</b>; the result of a taken trade shows right
+            after. At the end your result is shown next to the automatic one. Your decisions are kept separate from the automated result.</p>
+          <Button kind="primary" onClick={() => setConfirm("manual")} disabled={busy} testId="my-holdout-manual-open">Start the manual holdout…</Button>
+        </Card>
+      )}
+      <Confirm open={confirm !== null} title={confirm === "manual" ? "Use the manual holdout look?" : "Use the automatic holdout look?"}
+        confirmLabel="Start" danger busy={running || busy} onCancel={closeConfirm} onConfirm={() => void start()}>
+        <p>{confirm === "manual"
+          ? <>This spends the manual holdout look on <b>{data.source_label}</b>. It cannot be undone.</>
+          : <>This spends the automatic holdout look on <b>{chosen?.label}</b>; the manual look then tests the same strategy. It cannot be undone.</>}
+          {" "}Type <b>HOLDOUT</b> to confirm.</p>
         <TextInput value={typed} onChange={setTyped} ariaLabel="Type HOLDOUT" testId="my-holdout-typed" />
       </Confirm>
-      {rv && data?.progress && rv.status === "in_progress" && (
+      {rv && data.progress && rv.status === "in_progress" && (
         <div className="kpis">
           <Kpi label="Setups decided" value={data.progress.decided} sub={`${data.progress.taken} taken · ${data.progress.skipped} skipped`} />
           <Kpi label="Your trades" value={r(data.progress.taken_net_r, 2)} tone={signCls(data.progress.taken_net_r)}
@@ -877,7 +924,7 @@ export function MyHoldoutPage() {
             entry_price_theo: last.outcome.entry_price_theo, stop_price: last.outcome.stop_price, target_price: last.outcome.target_price }} />
         </Card>
       )}
-      {rv?.status === "in_progress" && data?.candidate && (
+      {rv?.status === "in_progress" && data.candidate && (
         <>
           <Card title={`Setup: ${dirWord(data.candidate.explanation.direction)} at ${nyTime(sec(data.candidate.signal_ts) + 60)}`} testId="my-candidate"
             actions={<div className="inline">
@@ -890,17 +937,9 @@ export function MyHoldoutPage() {
           <TradeExplain e={data.candidate.explanation} />
         </>
       )}
-      {rv && (rv.status === "complete" || data?.finished) && (
-        <>
-          <Banner tone="ok">The holdout review is complete.</Banner>
-          <div className="grid-cards my-compare">
-            <ReportView id={rv.mechanical_report} title="Holdout - mechanical (every signal)" />
-          </div>
-          {(rv.final_report || data?.finished?.id) && <ReportView id={(rv.final_report || data?.finished?.id) as string} title="Holdout - with your decisions" />}
-        </>
-      )}
-      {rv?.status === "in_progress" && <p className="muted small">The mechanical holdout result stays hidden until you have decided
-        every setup, so it cannot influence your decisions.</p>}
+      {done && <Banner tone="ok" testId="my-holdout-done">Both holdout looks are done.</Banner>}
+      {done && (rv?.final_report || data.finished?.id) && <ReportView id={(rv?.final_report || data.finished?.id) as string} title="Holdout - with your decisions (manual)" />}
+      {data.automatic && <ReportView id={data.automatic.report} title="Holdout - automatic (every signal)" />}
     </div>
   );
 }
