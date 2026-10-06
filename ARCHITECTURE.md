@@ -2789,3 +2789,33 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **API / UI:** `GET /api/edge`, `POST /api/edge/check` (job), `GET /api/edge/jobs/<id>`, `GET /api/edge/anatomy/<report>`;
   new top-level tab "Edge lab" (Edge check | Trade anatomy).
 - **Never:** a run, a trial, a holdout look, a change to backtests, rules, costs or configs.
+
+### ADR-105 Edge lab v2: end-of-day ideas, older data as an independent sample, trade anatomy corrected for the tries
+- **Request (user):** after all four ideas came back "no evidence" and the best My strategy backtest (trade anatomy: gross
+  +0.138 R, 95 % 0.04 ... 0.24) failed its holdout badly: add both offered follow-ups: (a) the trade anatomy's chance after
+  correcting for the number of tries; (b) the two published end-of-day ideas, and the option to run the edge check on
+  older data the user imports.
+- **Hypothesis set version 2** (`edge/hypotheses.py`, fingerprint 146fc4823b8e6622): H1-H4 unchanged (test: version-1
+  known answers on the synthetic walk, bit-identical), plus H5 "first half hour predicts the last half hour" (Gao, Han,
+  Li & Zhou 2018: sign of yesterday's 15:59 close -> today's 9:59 close; entry 15:30 open, exit 15:59 close) and H6 "rest
+  of the day predicts the last half hour" (Baltussen, Da, Lammers & Martens 2021: yesterday's close -> 15:29 close),
+  each with written reasons against (publication decay, small effect vs costs, crisis-driven, overlap with H1 / H2 and
+  with each other, outside the 9:30-11:00 window and held into the close). Bonferroni family = 6 (every idea ever tested).
+  `Hypothesis.exit_slot` per idea; the day table now holds the whole regular session (days x 390 slots, 9:30-15:59; the
+  morning window = the first 90 slots; `window_ok`, the typical range and the set of days are unchanged); a day counts
+  for an idea only when its entry open and exit close (BID and ASK) exist; costs use the idea's own exit time.
+- **Another dataset** (`check.sources`, `inputs(source)`): besides the protocol's discovery period, any other 1-minute
+  dataset of the SAME instrument with ASK OHLC that holds at least 60 trading days before the discovery period; only its
+  bars strictly BEFORE the first discovery bar are used (`_cell_dataset(ds, (first bar, discovery start - 1 ns))`,
+  re-validated; a defensive check refuses any discovery bar), so never a discovery or holdout day. Unusable datasets are
+  listed with the reason. Results are cached per (set, data content, window, config, ES) and remembered per source
+  (`latest.json` `{by_source}`; the ADR-104 pointer reads as the discovery result). `POST /api/edge/check {source}`.
+- **Trade anatomy correction** (`anatomy.tries_of`, `selection`): every counted try of the My strategy family under the
+  active research protocol (roles my_strategy, my_autotune, my_autotune_flip, my_optimizer; active AND retired protocols)
+  is the family a discovery report was chosen from. Two-sided normal p of the mean (gross and net), x the number of tries
+  (Bonferroni; strict when tries are similar, so the truth lies between the one-try and corrected numbers), and the t
+  needed. Verdict SELECTION replaces COSTS / POSITIVE when the gross result is significant alone but not after the
+  correction. A holdout report is one look: no correction.
+- **UI:** Edge check: data picker (discovery / earlier days of another dataset, with how to import older data), a note
+  when a result is from version 1, "Added in version 2" on H5 / H6. Trade anatomy: "Correcting for your tries" card.
+- **Never:** a run, a trial, a holdout look, a protocol change, a change to backtests, rules, costs or configs.

@@ -70,6 +70,9 @@ def strategy_source(x: Any) -> Any:
     raise _bad("a strategy must be a JSON object (DSL document) or a strategy id like STR_0123456789AB")
 
 
+EDGE_SOURCE = re.compile(r"\A[A-Za-z0-9_.:\-]{1,200}\Z")      # ADR-105: "discovery" or a dataset id
+
+
 def _id(x: Any, pattern: re.Pattern, what: str) -> str:
     if not isinstance(x, str) or not pattern.match(x):
         raise _bad(f"invalid {what}")
@@ -1175,7 +1178,9 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
 
     @app.post("/api/edge/check")
     def edge_run():
-        return jsonify(call(svc.edge_run)), 202
+        body = request.get_json(silent=True) or {}
+        src = _id(body.get("source") or "discovery", EDGE_SOURCE, "data source (discovery or a dataset id)")
+        return jsonify(call(svc.edge_run, src)), 202
 
     @app.get("/api/edge/jobs/<jid>")
     def edge_job(jid):

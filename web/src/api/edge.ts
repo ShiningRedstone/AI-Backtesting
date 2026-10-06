@@ -1,4 +1,5 @@
-/** Edge lab (ADR-104): the edge check (frozen hypotheses on NQ 9:30-11:00) and the trade anatomy of My strategy reports. */
+/** Edge lab (ADR-104/105): the edge check (frozen hypotheses on NQ: 9:30-11:00 and the last half hour) and the trade anatomy
+ *  of My strategy reports. */
 import { api } from "./client";
 import type { MyJob } from "./my";
 
@@ -7,7 +8,7 @@ const enc = encodeURIComponent;
 export interface Summary { n: number; mean: number | null; sd: number | null; se: number | null; t: number | null }
 export interface Hist { edges: number[]; counts: number[]; n: number }
 export interface HypothesisDef { id: string; name: string; idea: string; rule: string; direction_meaning: string; against: string[];
-  parameters: Record<string, string> }
+  parameters: Record<string, string>; exit?: string; added_in?: number }
 export interface EdgeSet { version: number; fingerprint: string; family: number; window: string; hypotheses: HypothesisDef[] }
 export type Verdict = "TOO_FEW" | "NO_EVIDENCE" | "NOT_TRADEABLE" | "INCONSISTENT" | "CANDIDATE";
 export interface HypResult {
@@ -20,17 +21,21 @@ export interface HypResult {
   by_year?: { year: number; n: number; gross_pts: number; gross_norm: number }[]; years_same_sign?: number; years_counted?: number;
   es?: { n: number; too_few?: boolean; gross_norm?: Summary; gross_pts?: Summary; p?: number; same_sign?: boolean };
 }
+export interface EdgeSource { key: string; dataset_id: string; name: string; label: string; usable: boolean; reason?: string | null;
+  first_day?: string; last_day?: string; dataset_start?: string; dataset_end?: string }
 export interface EdgeResult {
   set: EdgeSet; computed_at: string; app_version: string; key: string;
+  source?: { key: string; label: string; independent: boolean };
   window: { start: string; end: string; first_day: string; last_day: string };
-  dataset: { dataset_id: string; content_hash: string; instrument: string; provider: string };
+  dataset: { dataset_id: string; content_hash: string; instrument: string; provider: string; name?: string };
   days: { in_window: number; usable: number; skipped_missing_minutes: number; skipped_first_20_days: number };
   costs: { scenario: string | null; contract: string; note: string }; es: { content_hash: string; usable_days: number } | null;
   family: number; alpha: number; results: HypResult[];
 }
 export interface ReportPick { id: string; label: string; kind: string; created_at: string; trade_count: number; favorite?: boolean;
   window: { start: string; end: string } }
-export interface EdgeStatus { set: EdgeSet; latest: EdgeResult | null; job: MyJob | null; reports: ReportPick[] }
+export interface EdgeStatus { set: EdgeSet; latest: EdgeResult | null; results: Record<string, EdgeResult>; sources: EdgeSource[];
+  job: (MyJob & { source?: string }) | null; reports: ReportPick[] }
 
 export interface Block { n: number; gross_r?: Summary; net_r?: Summary; cost_r?: number; gross_win?: number; net_win?: number;
   gross_ci95?: [number, number] | null; net_ci95?: [number, number] | null }
@@ -40,11 +45,16 @@ export interface Anatomy {
   excursion?: { reached: Record<string, { all: number; losers: number | null }>; never_moved: number; losers_never_moved: number | null;
     winners_heat_half_r: number | null; mfe_hist: Hist; mae_hist: Hist; median_mfe_losers: number | null; median_mfe_winners: number | null };
   by?: Record<"direction" | "model" | "exit", (Block & { group: string })[]>;
+  selection?: Selection | null;
 }
+export interface SelectionTest { t: number; p: number; p_corrected: number }
+export type Selection = { applies: false; reason: string | null } | {
+  applies: true; tries: number; by: { role: string; name: string; tries: number }[]; t_needed: number; t_needed_one: number;
+  gross_r: SelectionTest | null; net_r: SelectionTest | null };
 
 export const edge = {
   statusUrl: "/api/edge",
   anatomyUrl: (id: string) => `/api/edge/anatomy/${enc(id)}`,
-  run: () => api.post<MyJob>("/api/edge/check", {}),
+  run: (source: string) => api.post<MyJob>("/api/edge/check", { source }),
   job: (id: string) => api.get<MyJob>(`/api/edge/jobs/${enc(id)}`),
 };

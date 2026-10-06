@@ -1,11 +1,16 @@
-"""The frozen hypothesis set of the edge check (ADR-104). Written BEFORE any result was seen; changing it is a new version
-(every hypothesis ever tested stays in the Bonferroni family: never drop a failed one to make the rest look better).
+"""The frozen hypothesis set of the edge check (ADR-104, version 2 = ADR-105). Written BEFORE any result was seen;
+changing it is a new version (every hypothesis ever tested stays in the Bonferroni family: never drop a failed one to make
+the rest look better). Version 1 (H1-H4) was tested on the discovery period, all four "no evidence"; version 2 keeps
+them unchanged and adds H5 and H6, so the family is 6.
 
-Window: 9:30-11:00 New York time (the user's choice), one decision per hypothesis per day, every trade closed at the close
-of the 10:59 bar. All signals use bars that are complete at the decision; the trade enters at the NEXT bar's open.
+H1-H4: window 9:30-11:00 New York time (the user's choice), every trade closed at the close of the 10:59 bar.
+H5-H6: the two PUBLISHED end-of-day ideas, added at the user's request after H1-H4 failed: entry 15:30, exit at the close
+of the 15:59 bar. One decision per hypothesis per day. All signals use bars that are complete at the decision; the trade
+enters at the NEXT bar's open.
 
 Day table (built by ``check.day_table``):
-  o, h, l, c   (days x 90) BID prices of the window minutes 9:30 ... 10:59 (NaN = missing minute)
+  o, h, l, c   (days x 390) BID prices of the regular-session minutes 9:30 ... 15:59 (NaN = missing minute); slots
+               0..89 = the 9:30-11:00 window, 359 = 15:29, 360 = 15:30, 389 = 15:59
   prev_close   yesterday's regular-session close (close of the 15:59 bar)
   prev_high/low  yesterday's regular-session (9:30-15:59) high / low
 A hypothesis returns, per day, a direction (+1 long, -1 short, 0 no signal) and the entry minute (slot 0..89).
@@ -16,9 +21,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-VERSION = 1
-SLOTS = 90                 # 9:30 ... 10:59
-EXIT_SLOT = 89             # every trade closes at the close of the 10:59 bar
+VERSION = 2
+SLOTS = 90                 # 9:30 ... 10:59 (the morning window)
+DAY_SLOTS = 390            # 9:30 ... 15:59 (the day table's width)
+EXIT_SLOT = 89             # H1-H4 close at the close of the 10:59 bar
+LAST_SLOT = 389            # H5-H6 close at the close of the 15:59 bar
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,7 @@ class Hypothesis:
     direction_meaning: str           # what a POSITIVE average means; a negative one means the opposite trade
     against: tuple[str, ...]         # reasons it may NOT work, written before the test
     parameters: dict = field(default_factory=dict)
+    exit_slot: int = EXIT_SLOT       # the trade closes at this slot's close
 
 
 H = [
@@ -93,6 +101,47 @@ H = [
          "sweeps that reversed.",
          "On the CFD stand-in for NQ, yesterday's high can differ slightly from the futures' high."),
         {"sweep": "9:30-10:29", "back_inside_within": "15 minutes", "level": "yesterday 9:30-15:59 high / low"}),
+    Hypothesis(
+        "H5", "First half hour predicts the last half hour",
+        "The market's move from yesterday's close to 10:00 continues in the last 30 minutes of the day (Gao, Han, Li & "
+        "Zhou, 2018: 'Market intraday momentum', S&P 500 ETF 1993-2013).",
+        "Signal at the close of the 9:59 bar: long if the 9:59 close is above yesterday's regular-session close (close "
+        "of the 15:59 bar), short if below. Enter at the 15:30 open, exit at the 15:59 close. Every move counts (no "
+        "threshold).",
+        "positive = the morning's direction continues into the close; negative = it reverses",
+        ("Published in 2018 on data up to 2013; effects usually shrink or vanish once published, and NQ 2021+ is far "
+         "from that sample.",
+         "The paper's effect is small (a few basis points per day): even if it is still there it can be smaller than the "
+         "spread and costs of a 30-minute trade.",
+         "The paper finds the effect strongest on volatile days and in crisis periods (such as 2008); in calm years it "
+         "can be absent, so a handful of days can carry the average.",
+         "The signal's first part is the overnight move (H2's information) and its second part the first 30 minutes "
+         "(H1's): the tests overlap, and H1 and H2 found nothing.",
+         "Outside the user's 9:30-11:00 window and held into the close; a prop account that must be flat before 16:00 "
+         "or reduces size into the close may not be able to trade it as tested."),
+        {"decision": "9:59 close", "from": "yesterday's 15:59 close", "entry": "15:30 open", "exit": "15:59 close",
+         "threshold": "none"},
+        exit_slot=LAST_SLOT),
+    Hypothesis(
+        "H6", "Rest of the day predicts the last half hour",
+        "The market's move from yesterday's close to 15:30 continues in the last 30 minutes: dealers hedging short "
+        "options (gamma) and leveraged ETFs rebalancing trade in the direction of the day's move into the close "
+        "(Baltussen, Da, Lammers & Martens, 2021: 'Hedging demand and market intraday momentum').",
+        "Signal at the close of the 15:29 bar: long if the 15:29 close is above yesterday's regular-session close, short "
+        "if below. Enter at the 15:30 open, exit at the 15:59 close. Every move counts (no threshold).",
+        "positive = the day's direction continues into the close; negative = it reverses",
+        ("Published in 2021 and widely discussed since; hedging flows into the close are now anticipated by other "
+         "traders, which can move the price before 15:30 instead of after it.",
+         "The paper says the effect depends on how much negative gamma dealers hold; that changes over time and is not "
+         "measured here, so a real but time-varying effect can average out.",
+         "Most days' moves are small; the effect in the paper comes mostly from large-move days, which are few.",
+         "It shares the last half hour and much of the signal with H5: if H5 is chance, H6 is likely chance too (the "
+         "two tests are strongly correlated).",
+         "Outside the user's 9:30-11:00 window and held into the close (see H5); the CFD stand-in's close can differ "
+         "from the futures' close."),
+        {"decision": "15:29 close", "from": "yesterday's 15:59 close", "entry": "15:30 open", "exit": "15:59 close",
+         "threshold": "none"},
+        exit_slot=LAST_SLOT),
 ]
 BY_ID = {x.id: x for x in H}
 FAMILY = len(H)                      # Bonferroni family = every hypothesis of the set
@@ -133,6 +182,11 @@ def signals(hid: str, t: dict) -> tuple[np.ndarray, np.ndarray]:
                 if x < lo:
                     d[i], e[i] = -1, s + 1
                     break
+        elif hid in ("H5", "H6"):
+            a, b = t["prev_close"][i], c[i, 29 if hid == "H5" else 359]
+            if _nan(a) or _nan(b) or a == b:
+                continue
+            d[i], e[i] = (1 if b > a else -1), 360
         elif hid == "H4":
             ph, pl, op = t["prev_high"][i], t["prev_low"][i], o[i, 0]
             if _nan(ph) or _nan(pl) or _nan(op) or not (pl <= op <= ph):
@@ -159,12 +213,15 @@ def signals(hid: str, t: dict) -> tuple[np.ndarray, np.ndarray]:
 
 def fingerprint() -> str:
     from edgelab.core.identity import hash_obj
-    return hash_obj({"version": VERSION, "slots": SLOTS, "exit": EXIT_SLOT,
-                     "hypotheses": [{"id": x.id, "rule": x.rule, "parameters": x.parameters} for x in H]}, 16)
+    return hash_obj({"version": VERSION, "slots": SLOTS, "day_slots": DAY_SLOTS,
+                     "hypotheses": [{"id": x.id, "rule": x.rule, "parameters": x.parameters, "exit": x.exit_slot}
+                                    for x in H]}, 16)
 
 
 def manifest() -> dict:
-    return {"version": VERSION, "fingerprint": fingerprint(), "family": FAMILY, "window": "9:30-11:00 New York",
+    return {"version": VERSION, "fingerprint": fingerprint(), "family": FAMILY,
+            "window": "H1-H4: 9:30-11:00 New York; H5-H6: 15:30-16:00",
             "hypotheses": [{"id": x.id, "name": x.name, "idea": x.idea, "rule": x.rule,
                             "direction_meaning": x.direction_meaning, "against": list(x.against),
-                            "parameters": x.parameters} for x in H]}
+                            "parameters": x.parameters, "exit": "10:59 close" if x.exit_slot == EXIT_SLOT else "15:59 close",
+                            "added_in": 1 if x.exit_slot == EXIT_SLOT else 2} for x in H]}

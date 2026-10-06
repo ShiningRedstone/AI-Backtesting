@@ -3,6 +3,16 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Edge lab v2: end-of-day ideas, older data, trade anatomy corrected for your tries (ADR-105)
+
+| Item | Status |
+|---|---|
+| Trade anatomy: the chance a discovery result is luck after correcting for every My strategy / autotuner try (Bonferroni); verdict "SELECTION" | IMPLEMENTED, TESTED |
+| Edge check version 2: H5 (first half hour -> last half hour, Gao et al. 2018) and H6 (rest of the day -> last half hour, Baltussen et al. 2021), each with reasons against; correction now x 6 | IMPLEMENTED, TESTED (planted effect found; H1-H4 numbers unchanged) |
+| Edge check on another dataset you import (e.g. older USATECH): only its days BEFORE the discovery period are used | IMPLEMENTED, TESTED |
+| Results on your real older data | REQUIRES REAL DATA (import it under Settings -> Data, then run) |
+| Backtests, rules, costs, configs, tries, holdout, protocol | UNCHANGED |
+
 ## Edge lab: does a signal know the direction? (ADR-104)
 
 | Item | Status |

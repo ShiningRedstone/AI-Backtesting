@@ -2724,12 +2724,16 @@ class Services:
         from edgelab.mystrategy import runner as R
         reports = [{k: r.get(k) for k in ("id", "label", "kind", "created_at", "trade_count", "favorite", "window")}
                    for r in R.all_reports(self)]
-        return _jsonable({"set": HY.manifest(), "latest": EC.latest(self), "job": self._edge_jobs().active(),
-                          "reports": reports})
+        return _jsonable({"set": HY.manifest(), "latest": EC.latest(self), "results": EC.latest_all(self),
+                          "sources": EC.sources(self), "job": self._edge_jobs().active(), "reports": reports})
 
-    def edge_run(self) -> dict:
+    def edge_run(self, source: str | None = None) -> dict:
+        """ADR-105: ``source`` = "discovery" (the protocol's discovery period) or a 1-minute dataset id (its days before
+        the discovery period only)."""
         from edgelab.edge import check as EC
-        return self._edge_jobs().start("edge_check", lambda step: EC.run(self, lock=self.lock, progress=step))
+        src = source or EC.DISCOVERY
+        return self._edge_jobs().start("edge_check", lambda step: EC.run(self, source=src, lock=self.lock, progress=step),
+                                       meta={"source": src})
 
     def edge_job(self, job_id: str) -> dict:
         return self._edge_jobs().get(job_id)
