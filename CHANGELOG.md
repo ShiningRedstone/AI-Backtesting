@@ -3,6 +3,22 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Market simulator (ADR-106)
+
+| Item | Status |
+|---|---|
+| New tab "Market simulator": Overview, Trend & sessions, NQ vs ES, Patterns, News, Simulator | IMPLEMENTED (browser test) |
+| NQ + ES on every timeframe (1m ... 1D), discovery period only, holdout never read | IMPLEMENTED, TESTED |
+| Every ICT / SMC concept on every timeframe: how often, filled / held / left behind, effect on every other timeframe and on the 15-minute chart, higher-timeframe context | IMPLEMENTED, TESTED (causal; ~50 % on random data) |
+| Edge scan: found on the first 70 %, confirmed on the last 30 %, false-discovery control | IMPLEMENTED, TESTED (0 false finds on random data, planted effect found) |
+| NQ vs ES: correlation, who leads, divergences and how they close, SMT | IMPLEMENTED, TESTED |
+| Shocks on every timeframe with their likely cause and effect on the 15-minute chart | IMPLEMENTED |
+| News via the JBlanked API (Forex Factory folders, forecast vs actual), time zone proven from fixed-time releases | IMPLEMENTED, TESTED (synthetic stand-in) |
+| 15-minute forecasts (up / size / daily bias / levels) with live knowledge, 3 models vs baselines, walk-forward, skill only when beyond chance | IMPLEMENTED, TESTED |
+| New NQ / ES days after the research data, predicted live and scored | IMPLEMENTED, TESTED (synthetic stand-in) |
+| Real news download and real results | REQUIRES REAL DATA (your JBlanked key; run it in the app) |
+| Backtests, rules, costs, configs, tries, holdout, protocol | UNCHANGED |
+
 ## Edge lab v2: end-of-day ideas, older data, trade anatomy corrected for your tries (ADR-105)
 
 | Item | Status |

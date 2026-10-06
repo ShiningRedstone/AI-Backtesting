@@ -70,6 +70,8 @@ def strategy_source(x: Any) -> Any:
     raise _bad("a strategy must be a JSON object (DSL document) or a strategy id like STR_0123456789AB")
 
 
+MARKET_SECTION = re.compile(r"\A[a-z_]{1,32}\Z")                 # ADR-106
+MARKET_DAY = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 EDGE_SOURCE = re.compile(r"\A[A-Za-z0-9_.:\-]{1,200}\Z")      # ADR-105: "discovery" or a dataset id
 
 
@@ -178,6 +180,11 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, FlipError):                         # ADR-88: flip scan refusals (machine-readable code)
             return jsonify({"error": {"kind": "flip_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409 if e.code in ("FLIP_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
+        from edgelab.market.data import MarketDataError
+        from edgelab.market.news import NewsError
+        from edgelab.market.newdays import NewDaysError
+        if isinstance(e, (MarketDataError, NewsError, NewDaysError)):      # ADR-106
+            return jsonify({"error": {"kind": "market", "code": e.code, "message": e.message}}), 422
         from edgelab.mystrategy.params import SettingsError
         from edgelab.mystrategy.runner import MyStrategyError
         if isinstance(e, SettingsError):                     # ADR-93
@@ -1185,6 +1192,57 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     @app.get("/api/edge/jobs/<jid>")
     def edge_job(jid):
         return jsonify(call(svc.edge_job, _id(jid, MY_JOB_ID, "job id")))
+
+    @app.get("/api/market")                            # ADR-106: Market simulator
+    def market_status():
+        return jsonify(call(svc.market_status))
+
+    @app.get("/api/market/section/<name>")
+    def market_section(name):
+        return jsonify(call(svc.market_section, _id(name, MARKET_SECTION, "section")))
+
+    @app.post("/api/market/news/key")
+    def market_news_key():
+        body = request.get_json(silent=True) or {}
+        key = body.get("key")
+        if key is not None and not isinstance(key, str):
+            raise _bad("key must be text")
+        return jsonify(call(svc.market_set_news_key, key))
+
+    @app.post("/api/market/news/download")
+    def market_news_download():
+        body = request.get_json(silent=True) or {}
+        src = body.get("source") or "forex-factory"
+        if src not in ("forex-factory", "mql5", "fxstreet"):
+            raise _bad("unknown news source")
+        return jsonify(call(svc.market_news_download, src)), 202
+
+    @app.post("/api/market/analyze")
+    def market_analyze():
+        body = request.get_json(silent=True) or {}
+        return jsonify(call(svc.market_analyze, bool(body.get("force")))), 202
+
+    @app.post("/api/market/newdays")
+    def market_newdays():
+        return jsonify(call(svc.market_newdays)), 202
+
+    @app.get("/api/market/jobs/<jid>")
+    def market_job(jid):
+        return jsonify(call(svc.market_job, _id(jid, MY_JOB_ID, "job id")))
+
+    @app.get("/api/market/days")
+    def market_days():
+        src = request.args.get("src", "discovery")
+        if src not in ("discovery", "new"):
+            raise _bad("src must be discovery or new")
+        return jsonify(call(svc.market_days, src))
+
+    @app.get("/api/market/day/<day>")
+    def market_day(day):
+        src = request.args.get("src", "discovery")
+        if src not in ("discovery", "new"):
+            raise _bad("src must be discovery or new")
+        return jsonify(call(svc.market_day, _id(day, MARKET_DAY, "date"), src))
 
     @app.get("/api/edge/anatomy/<rid>")
     def edge_anatomy(rid):

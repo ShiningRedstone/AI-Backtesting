@@ -1,0 +1,344 @@
+"""Market simulator (ADR-106). All data is SYNTHETIC (random walks; news and new days from tests/market_fixture.py).
+
+Guarantees tested:
+* bars of every timeframe are anchored at the 18:00 New York session open (DST-correct) and known only at their end;
+  the trading date of a minute is the NY date of (time + 6 h);
+* patterns are causal: every event known before a cut-off is identical when everything after the cut-off is replaced;
+* outcomes carry no selection bias: on a random walk every pattern's '1 ATR its way first' rate is ~50 % (the touch
+  minute and 'first event per window' bugs found during development stay fixed), and the edge scan finds NOTHING on a
+  random walk while it finds a planted effect;
+* forecast inputs are live: the inputs at time t are identical when every minute from t on is replaced; walk-forward
+  predictions of a month never change when later months change; the boosting model is deterministic;
+* news: the time zone is proven from fixed-time releases (a trading-server clock and plain UTC are both found, too few
+  releases are refused), the surprise uses only earlier releases, the API key lives in the user settings file (never
+  the workspace) and is never returned;
+* the job reads the discovery period only (never the holdout), records no run, caches by its inputs; new days start
+  after the research data; the API answers.
+"""
+import json
+import os
+import shutil
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from edgelab.market import data as D
+from edgelab.market import edges as E
+from edgelab.market import forecast as F
+from edgelab.market import gbm as G
+from edgelab.market import news as N
+from edgelab.market import patterns as P
+from tests.dukascopy_fixture import session_minutes
+from tests.market_fixture import fake_minutes, fake_news_fetch, news_json
+
+
+def walk(start="2023-01-02", end="2023-03-31", seed=1, sd=2.0):
+    ts = session_minutes(start, end).as_unit("ns")
+    rng = np.random.default_rng(seed)
+    c = 18000 + np.cumsum(rng.normal(0, sd, len(ts)))
+    o = np.r_[c[0], c[:-1]]
+    h = np.maximum(o, c) + rng.uniform(0, 1, len(ts))
+    lo = np.minimum(o, c) - rng.uniform(0, 1, len(ts))
+    return D.Minute(ts.asi8, o, h, lo, c)
+
+
+class TestBars(unittest.TestCase):
+    def test_anchor_known_and_trading_date(self):
+        m = walk("2023-03-08", "2023-03-15")                         # the US DST switch (12 March) inside
+        for tf in (15, 60, 240):
+            b = D.resample(m, tf)
+            ny = pd.DatetimeIndex(b.ts, tz="UTC").tz_convert(D.NY)
+            mins = (ny.hour * 60 + ny.minute - 18 * 60) % 1440
+            self.assertTrue((np.asarray(mins) % tf == 0).all(), tf)  # buckets start on the 18:00 grid, DST or not
+            self.assertTrue((b.known_ns - b.ts == tf * D.MIN_NS).all())
+        t = pd.Timestamp("2023-03-09 18:30", tz=D.NY).tz_convert("UTC").value
+        self.assertEqual(str(D.trading_day([t])[0]), "2023-03-10")    # the 18:00 session carries the next date
+        d = D.resample(m, D.DAY)
+        self.assertTrue((d.known_ns > d.ts).all())
+
+
+class TestPatternsCausalAndUnbiased(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.m = walk()
+        cls.ev, cls.facts, cls.bars = P.detect_all(cls.m)
+
+    def test_causal(self):
+        m = self.m
+        cut = int(m.ts[len(m) * 2 // 3])
+        rng = np.random.default_rng(5)
+        later = m.ts >= cut
+        c2 = m.c.copy()
+        c2[later] = m.c[later] + np.cumsum(rng.normal(0, 3, later.sum()))
+        o2 = np.r_[c2[0], c2[:-1]]
+        m2 = D.Minute(m.ts, np.where(later, o2, m.o), np.where(later, np.maximum(o2, c2) + 0.5, m.h),
+                      np.where(later, np.minimum(o2, c2) - 0.5, m.l), c2)
+        ev2, _, _ = P.detect_all(m2)
+        cols = ["kind", "tf", "dir", "known_ns", "top", "bottom"]
+        a = self.ev[self.ev["known_ns"] < cut][cols].astype(str).sort_values(cols).reset_index(drop=True)
+        b = ev2[ev2["known_ns"] < cut][cols].astype(str).sort_values(cols).reset_index(drop=True)
+        pd.testing.assert_frame_equal(a, b)                           # nothing known before the cut changes
+
+    def test_random_walk_outcomes_are_fifty_fifty(self):
+        ev = self.ev
+        for kind in ("FVG", "IFVG", "OB", "BOS", "SWING_SWEEP", "OTE"):
+            for d in (1, -1):
+                e = ev[(ev["kind"] == kind) & (ev["dir"] == d)]["edge"].to_numpy()
+                e = e[e != 0]
+                if len(e) < 400:
+                    continue
+                rate = (e > 0).mean()
+                self.assertLess(abs(rate - 0.5), 4 * 0.5 / np.sqrt(len(e)) + 0.01, (kind, d, rate, len(e)))
+
+    def test_first_event_per_window_is_first_in_time(self):
+        """Regression: picking the first row per 15-minute window in STORAGE order biased the rate (0.30 instead of 0.50)."""
+        from edgelab.market.analysis import measurable
+        f = measurable(self.ev, self.m)
+        act = np.where(f["entry_i"] >= 0, self.m.ts[np.clip(f["entry_i"], 0, len(self.m) - 1)], 0)
+        for kind in ("IFVG_FORMED", "FVG"):
+            g = np.flatnonzero((f["kind"] == kind).to_numpy() & (f["tf"] == 1).to_numpy())
+            g = g[np.argsort(act[g], kind="stable")]
+            _, first = np.unique(act[g] // (15 * D.MIN_NS), return_index=True)
+            e = f["edge"].to_numpy()[g[first]]
+            e = e[e != 0]
+            self.assertLess(abs((e > 0).mean() - 0.5), 0.05, kind)
+
+    def test_zone_stats(self):
+        rows = P.summarize(self.ev, int(self.m.ts[-1]), 60)
+        fvg = [r for r in rows if r["kind"] == "FVG" and r["tf"] == 15]
+        self.assertEqual(len(fvg), 2)
+        for r in fvg:
+            self.assertGreater(r["n"], 50)
+            self.assertLessEqual(r["filled"], r["ce"] + 1e-9)
+            self.assertLessEqual(r["ce"], r["touched"] + 1e-9)
+            self.assertLessEqual(r["filled_1h"], r["filled_1d"] + 1e-9)
+
+
+class TestEdgeScan(unittest.TestCase):
+    def _cells(self, plant: float):
+        rng = np.random.default_rng(7)
+        cells, pvals = [], []
+        for g in range(40):
+            n = 12000
+            sess = rng.integers(0, 6, n).astype(np.int8)
+            ctx = {c: rng.choice([-1, 0, 1], n).astype(np.int8) for c in ("trend_1h", "pd", "es", "vol")}
+            p = np.full(n, 0.5)
+            if g == 0 and plant:
+                p[(sess == 3) & (ctx["trend_1h"] == 1)] += plant          # a real effect in one condition
+            y = np.where(rng.random(n) < p, 1, -1).astype(np.int8)
+            outs = {"edge": y, "next15": np.where(rng.random(n) < 0.5, 1, -1).astype(np.int8)}
+            base = {"edge": np.full(n, 0.5), "next15": np.full(n, 0.5)}
+            find = np.arange(n) < int(0.7 * n)
+            cells += E.scan_group({"kind": f"K{g}", "tf": "5m", "dir": 1}, outs, base, ctx, sess, find, 10.0, 3.0, pvals,
+                                  np.arange(n))
+        return E.finish(cells, pvals)
+
+    def test_nothing_on_noise_planted_effect_found(self):
+        noise = self._cells(0.0)
+        self.assertEqual(noise["confirmed"], 0)
+        self.assertGreater(noise["cells_tested"], 1000)
+        planted = self._cells(0.15)
+        self.assertGreater(planted["confirmed"], 0)
+        self.assertTrue(all(c["kind"] == "K0" for c in planted["candidates"]))
+        self.assertTrue(any("NY AM" in c["condition"] and "with the 1h trend" in c["condition"] for c in planted["candidates"]))
+
+
+class TestForecast(unittest.TestCase):
+    def test_inputs_are_live(self):
+        m = walk("2023-01-02", "2023-02-28", seed=4)
+        es = walk("2023-01-02", "2023-02-28", seed=5, sd=0.5)
+        news = [e for e in json.loads(news_json("2023-01-01", "2023-03-31"))["USD"]["Events"]]
+        cal = N.build(news_json("2023-01-01", "2023-03-31"), {"sha256": "x"})
+        cx = F.Context(m, es, cal["events"])
+        b = cx.bars[15]
+        picks = b.ts[[len(b) - 300, len(b) - 120, len(b) - 20]]
+        X, names, _ = F.features(cx, picks)
+        for q, t in enumerate(picks):
+            keep = m.ts < t
+            mt = D.Minute(m.ts[keep], m.o[keep], m.h[keep], m.l[keep], m.c[keep])
+            ke = es.ts < t
+            et = D.Minute(es.ts[ke], es.o[ke], es.h[ke], es.l[ke], es.c[ke])
+            Xt, _, _ = F.features(F.Context(mt, et, cal["events"]), np.array([t]))
+            np.testing.assert_allclose(Xt[0], X[q], rtol=1e-9, atol=1e-9, err_msg=str(pd.Timestamp(t)))
+        self.assertIn("news_in_this_candle", names)
+
+    def test_walk_forward_isolation_and_determinism(self):
+        rng = np.random.default_rng(1)
+        days = np.repeat(pd.bdate_range("2022-01-03", periods=300).values.astype("datetime64[D]"), 20)
+        n = len(days)
+        X = rng.normal(size=(n, 6))
+        y = (rng.random(n) < 1 / (1 + np.exp(-X[:, 0]))).astype(float)
+        slot = np.tile(np.arange(20), 300)
+        a = F.walk_forward(X, y, days, slot, "binary")
+        y2 = y.copy()
+        late = days >= np.datetime64("2023-01-01")
+        y2[late] = 1 - y2[late]                                       # change every later month
+        b = F.walk_forward(X, y2, days, slot, "binary")
+        early = (days < np.datetime64("2023-01-01")) & np.isfinite(a["pred"]["logistic"])
+        self.assertGreater(early.sum(), 100)
+        for k in F.MODELS:
+            np.testing.assert_array_equal(a["pred"][k][early], b["pred"][k][early])
+        g1 = G.GBM(n_trees=20, seed=3).fit(X[:2000], y[:2000]).predict(X[2000:2100])
+        g2 = G.GBM(n_trees=20, seed=3).fit(X[:2000], y[:2000]).predict(X[2000:2100])
+        np.testing.assert_array_equal(g1, g2)
+        sc = F.score_binary(a["pred"]["logistic"][np.isfinite(a["pred"]["logistic"])], y[np.isfinite(a["pred"]["logistic"])],
+                            a["pred"]["baseline"][np.isfinite(a["pred"]["logistic"])], days[np.isfinite(a["pred"]["logistic"])])
+        self.assertTrue(sc["real"])                                   # X0 really predicts y: the skill is found
+        self.assertGreater(sc["skill_ci"][0], 0)
+
+
+class TestNews(unittest.TestCase):
+    def test_timezone_proof(self):
+        cal = N.build(news_json("2022-01-01", "2023-12-31", zone="NY+7"), {"sha256": "x"})
+        self.assertTrue(cal["timezone"]["zone"].startswith("NY+7"))
+        e = [x for x in cal["events"] if x["name"] == "CPI m/m"][3]
+        ny = pd.Timestamp(e["ts"], tz="UTC").tz_convert(D.NY)
+        self.assertEqual((ny.hour, ny.minute), (8, 30))
+        cal2 = N.build(news_json("2022-01-01", "2023-12-31", zone="UTC"), {"sha256": "x"})
+        self.assertEqual(cal2["timezone"]["zone"], "UTC+0")
+        few = N.build(news_json("2023-01-01", "2023-02-10"), {"sha256": "x"})
+        self.assertEqual(few["refused"]["code"], "NEWS_TIMEZONE_UNPROVEN")
+        self.assertEqual(few["events"], [])
+
+    def test_surprise_uses_earlier_releases_only(self):
+        cal = N.build(news_json("2022-01-01", "2023-12-31"), {"sha256": "x"})
+        claims = [x for x in cal["events"] if x["name"] == "Unemployment Claims"]
+        self.assertIsNone(claims[0]["surprise_z"])
+        k = 20
+        past = [c["surprise"] for c in claims[:k]]
+        self.assertAlmostEqual(claims[k]["surprise_z"], claims[k]["surprise"] / np.std(past, ddof=1), places=9)
+        self.assertEqual(N.number("250K"), 250000.0)
+        self.assertEqual(N.number("-0.3%"), -0.3)
+        self.assertIsNone(N.number("n/a"))
+
+    def test_key_outside_workspace(self):
+        tmp = Path(tempfile.mkdtemp())
+        old = os.environ.get("EDGELAB_SETTINGS")
+        os.environ["EDGELAB_SETTINGS"] = str(tmp / "settings.json")
+        try:
+            with self.assertRaises(N.NewsError):
+                N.set_key("short")
+            st = N.set_key("a" * 40)
+            self.assertTrue(st["set"])
+            self.assertNotIn("a" * 40, json.dumps(st))
+            self.assertIn("a" * 40, (tmp / "settings.json").read_text())
+        finally:
+            if old is None:
+                os.environ.pop("EDGELAB_SETTINGS", None)
+            else:
+                os.environ["EDGELAB_SETTINGS"] = old
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestMarketService(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from edgelab.mystrategy import es as ES
+        from edgelab.services import Services
+        from tests.dukascopy_fixture import write_fixture
+        from tests.test_my_strategy import REPO
+        cls.root = Path(tempfile.mkdtemp())
+        cls.old_settings = os.environ.get("EDGELAB_SETTINGS")
+        os.environ["EDGELAB_SETTINGS"] = str(cls.root / "user_settings.json")
+        shutil.copytree(REPO / "configs", cls.root / "configs")
+        csv = cls.root / "nq.csv"
+        write_fixture(csv, start="2022-12-25", end="2023-10-28", seed=11)
+        f = pd.read_csv(csv, dtype=str)
+        s = 1.0 + 0.25 * (np.arange(len(f)) % 7)
+        for k, extra in (("open", 0.0), ("high", 0.5), ("low", 0.0), ("close", 0.0)):
+            f[f"ask_{k}"] = (f[k].astype(float) + s + extra).map(lambda x: f"{x:.3f}")
+        f.to_csv(csv, index=False)
+        svc = Services(root=cls.root)
+        imp = svc.import_file(dict(
+            file=str(csv), profile="dukascopy_utc_csv", instrument="NQ_DUKASCOPY", provider="DUKASCOPY", asset_type="CFD",
+            symbol="USATECH.IDX/USD", price_basis="bid", timeframe="1m", derive_timeframes=["5m"], build_features=False,
+            bid_close_column="close", ask_close_column="ask_close", ask_open_column="ask_open", ask_high_column="ask_high",
+            ask_low_column="ask_low", dataset_name="DUKA_SYN"))
+        cls.parent = svc.create_protocol(imp["derived"][0], ("2023-01-02", "2023-08-31"), ("2023-09-01", "2023-10-27"),
+                                         name="parent", exposure_statement="none", trial_budget=20)
+        es_csv = cls.root / "es.csv"
+        write_fixture(es_csv, start="2022-12-25", end="2023-10-28", seed=12)
+        ES.import_csv(svc.data_root, str(es_csv), identity_confirmed=True)
+        N.set_key("k" * 40)
+        N.download(svc.data_root, fetch=fake_news_fetch("2022-06-01", "2023-12-31"))
+        from edgelab.market import analysis as A
+        runs = svc.store.list_runs() if hasattr(svc.store, "list_runs") else None
+        cls.runs_before = len(runs) if runs is not None else None
+        cls.res = A.run(svc, lock=svc.lock)
+        svc.store.close()
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.old_settings is None:
+            os.environ.pop("EDGELAB_SETTINGS", None)
+        else:
+            os.environ["EDGELAB_SETTINGS"] = cls.old_settings
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def test_discovery_only_cached_no_runs(self):
+        from edgelab.market import analysis as A
+        from edgelab.services import Services
+        r = self.res
+        hold = pd.Timestamp(r["source"]["holdout_start"])
+        self.assertLess(pd.Timestamp(r["source"]["window"]["end"]), hold)
+        self.assertTrue(r["news"]["used"])
+        self.assertGreater(r["news"]["events"], 20)
+        self.assertGreater(r["edges"]["cells_tested"], 1000)
+        self.assertEqual(r["edges"]["confirmed"], 0)                 # a random walk has no edge
+        self.assertGreater(len(r["patterns"]), 50)
+        self.assertIn("relationship", r["nqes"])
+        self.assertIn("by_cause", r["shocks"])
+        self.assertTrue(r["forecast"]["up"]["months"])
+        svc = Services(root=self.root)
+        try:
+            mk = D.discovery(svc)
+            self.assertLess(int(mk.nq.ts[-1]), hold.value)            # never a holdout minute
+            self.assertLess(int(mk.es.ts[-1]), hold.value)
+            again = A.run(svc, lock=svc.lock)
+            self.assertEqual(again["computed_at"], r["computed_at"])   # cached by its inputs
+            if self.runs_before is not None:
+                self.assertEqual(len(svc.store.list_runs()), self.runs_before)
+        finally:
+            svc.store.close()
+
+    def test_new_days_after_research_data(self):
+        from edgelab.market import newdays as ND
+        from edgelab.services import Services
+        svc = Services(root=self.root)
+        try:
+            self.assertEqual(ND.first_date(svc).isoformat(), "2023-10-30")
+            u = ND.update(svc, fetch=fake_minutes, now=datetime(2023, 12, 20, 23, tzinfo=timezone.utc))
+            self.assertGreater(u["nq"]["days"], ND.WARMUP_DAYS)
+            self.assertEqual(u["nq"]["first"], "2023-10-30")
+            sc = ND.predict(svc, self.res["key"])
+            self.assertGreater(sc["candles"], 100)
+            self.assertIn("logistic", sc["up"])
+        finally:
+            svc.store.close()
+
+    def test_api(self):
+        from edgelab.web.app import create_app
+        c = create_app(self.root).test_client()
+        st = c.get("/api/market").get_json()
+        self.assertEqual(st["analysis"]["key"], self.res["key"])
+        self.assertTrue(st["news"]["key"]["set"])
+        self.assertNotIn("k" * 40, json.dumps(st))                    # the key never leaves the computer's settings
+        for sec in ("patterns", "edges", "trend", "nqes", "shocks", "forecast", "effect_matrix", "newsfx"):
+            self.assertEqual(c.get(f"/api/market/section/{sec}").status_code, 200, sec)
+        self.assertEqual(c.get("/api/market/section/nope").status_code, 404)
+        days = c.get("/api/market/days").get_json()["days"]
+        self.assertTrue(days)
+        d = c.get(f"/api/market/day/{days[-1]}").get_json()
+        self.assertGreater(len(d["candles"]), 40)
+        self.assertIn("p_up", d["candles"][-1])
+        self.assertEqual(c.get("/api/market/day/2023-99-99x").status_code, 400)
+        self.assertEqual(c.post("/api/market/news/key", json={"key": "short"}).status_code, 422)
+        self.assertEqual(c.get("/api/market/jobs/nope").status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

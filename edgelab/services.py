@@ -52,6 +52,11 @@ from edgelab.features.spec import FeatureSpec, all_defs, get_def
 from edgelab.instruments import contract_for, load_instruments
 
 
+def _market_light(res: dict) -> dict:
+    """A job result small enough to keep in memory (the full analysis is on disk)."""
+    return {"key": res.get("key"), "computed_at": res.get("computed_at"), "days": res.get("days")}
+
+
 def _jsonable(x: Any) -> Any:
     if isinstance(x, dict):
         return {str(k): _jsonable(v) for k, v in x.items()}
@@ -2741,6 +2746,158 @@ class Services:
     def edge_anatomy(self, report_id: str) -> dict:
         from edgelab.edge import anatomy as AN
         return _jsonable(AN.for_report(self, report_id))
+
+    # ============================================================ MARKET SIMULATOR (ADR-106)
+    def _market_jobs(self):
+        from edgelab.mystrategy import runner as R
+        j = self.__dict__.get("_market_job_manager")
+        if j is None:
+            j = self.__dict__["_market_job_manager"] = R.Jobs()
+        return j
+
+    def market_status(self) -> dict:
+        """News, data, the latest analysis (headline numbers only), new days and the running job."""
+        from edgelab.market import analysis as A, news as N, newdays as ND
+        from edgelab.mystrategy import es as ES, runner as R
+        latest = A.latest(self.data_root)
+        head = None
+        if latest:
+            e = latest.get("edges") or {}
+            fc = latest.get("forecast") or {}
+            head = {"key": latest["key"], "computed_at": latest["computed_at"], "days": latest["days"],
+                    "source": latest["source"], "news": latest["news"], "cost_points": latest.get("cost_points"),
+                    "edges": {k: e.get(k) for k in ("cells_tested", "passed_find", "confirmed", "failed", "p_cut")},
+                    "patterns": len(latest.get("patterns") or []),
+                    "forecast": {t: {"chosen": (fc.get(t) or {}).get("chosen"),
+                                     "late": (((fc.get(t) or {}).get("scores") or {}).get((fc.get(t) or {}).get("chosen") or "")
+                                              or {}).get("late")} for t in ("up", "size", "bias", "levels")}}
+        parent = R._parent(self)
+        return _jsonable({"news": N.status(self.data_root), "analysis": head, "job": self._market_jobs().active(),
+                          "es": ES.status(self.data_root), "protocol": bool(parent),
+                          "newdays": {**ND.status(self), "scores": ND.scores(self.data_root, head["key"]) if head else None}})
+
+    MARKET_SECTIONS = ("patterns", "effect_matrix", "edges", "trend", "nqes", "shocks", "newsfx", "forecast", "kinds",
+                       "sessions", "timeframes", "source")
+
+    def market_section(self, name: str) -> dict:
+        from edgelab.market import analysis as A
+        if name not in self.MARKET_SECTIONS:
+            raise KeyError(name)
+        latest = A.latest(self.data_root)
+        if not latest:
+            raise KeyError("no analysis yet")
+        return {"key": latest["key"], "name": name, "data": latest.get(name), "kinds": latest.get("kinds"),
+                "sessions": latest.get("sessions")}
+
+    def market_set_news_key(self, key: str | None) -> dict:
+        from edgelab.market import news as N
+        return N.set_key(key)
+
+    def market_news_download(self, source: str | None = None) -> dict:
+        from edgelab.market import news as N
+        src = source or N.DEFAULT_SOURCE
+        return self._market_jobs().start("market_news", lambda step: (step("Downloading the economic calendar"),
+                                                                      N.download(self.data_root, src))[1],
+                                         meta={"what": "news"})
+
+    def market_analyze(self, force: bool = False) -> dict:
+        from edgelab.market import analysis as A
+        return self._market_jobs().start("market_analysis",
+                                         lambda step: _market_light(A.run(self, lock=self.lock, progress=step, force=force)),
+                                         meta={"what": "analysis"})
+
+    def market_newdays(self) -> dict:
+        from edgelab.market import analysis as A, newdays as ND
+
+        def work(step):
+            step("Downloading new NQ and ES days (after your research data)")
+            st = ND.update(self)
+            latest = A.latest(self.data_root)
+            if latest is None:
+                return {"update": st, "scores": None}
+            try:
+                sc = ND.predict(self, latest["key"], step)
+            except ND.NewDaysError as e:
+                sc = {"problem": e.message, "code": e.code}
+            return {"update": st, "scores": sc}
+        return self._market_jobs().start("market_newdays", work, meta={"what": "newdays"})
+
+    def market_job(self, job_id: str) -> dict:
+        j = self._market_jobs().get(job_id)
+        return {k: v for k, v in j.items() if k != "result"} | {"done": j["state"] != "running"}
+
+    def _market_minutes(self, src: str):
+        """NQ minutes (discovery or new days), cached per process by content."""
+        from edgelab.market import data as D, newdays as ND
+        cache = self.__dict__.setdefault("_market_minutes_cache", {})
+        if src == "new":
+            m = ND.load(self.data_root, "nq")
+            if m is None:
+                raise KeyError("no new days")
+            return m
+        mk = D.discovery(self, self.lock)
+        key = mk.source["nq"]["content_hash"]
+        if key not in cache:
+            cache.clear()
+            cache[key] = mk.nq
+        return cache[key]
+
+    def market_days(self, src: str = "discovery") -> dict:
+        import numpy as np
+        from edgelab.market import analysis as A, newdays as ND
+        latest = A.latest(self.data_root)
+        if not latest:
+            raise KeyError("no analysis yet")
+        if src == "new":
+            p = ND.folder(self.data_root, "") / f"predictions_{latest['key']}.npz"
+            if not p.exists():
+                return {"days": []}
+            with np.load(p) as z:
+                d = np.unique(z["day"]).astype("datetime64[D]")
+        else:
+            p = A.home(self.data_root) / f"analysis_{latest['key']}" / "forecast.npz"
+            with np.load(p) as z:
+                pred = np.isfinite(z["p_up_logistic"])
+                d = np.unique(z["day"][pred]).astype("datetime64[D]")
+        return {"days": [str(x) for x in d]}
+
+    def market_day(self, date: str, src: str = "discovery") -> dict:
+        import numpy as np
+        from edgelab.market import analysis as A, forecast as F, news as N, newdays as ND
+        latest = A.latest(self.data_root)
+        if not latest:
+            raise KeyError("no analysis yet")
+        m = self._market_minutes(src)
+        if src == "new":
+            p = ND.folder(self.data_root, "") / f"predictions_{latest['key']}.npz"
+            with np.load(p) as z:
+                fc = {k: z[k] for k in z.files}
+            for k in ("size_q", "contrib_idx", "contrib_val"):
+                fc.setdefault(k, np.full((len(fc["t"]), 4 if k == "size_q" else 3), np.nan if k == "size_q" else -1))
+            fc.setdefault("size_baseline", np.zeros(len(fc["t"])))
+            for k in ("bias_t", "level_t"):
+                fc[k] = np.zeros(0, np.int64)
+        else:
+            p = A.home(self.data_root) / f"analysis_{latest['key']}" / "forecast.npz"
+            with np.load(p) as z:
+                fc = {k: z[k] for k in z.files}
+        news = N.events(self.data_root) if (latest.get("news") or {}).get("used") or src == "new" else []
+        out = F.day_view(m, fc, {**(latest.get("forecast") or {}), "inputs": (latest.get("forecast") or {}).get("inputs", [])},
+                         date, news)
+        shocks = []
+        if src != "new":
+            sp = A.home(self.data_root) / f"analysis_{latest['key']}" / "shocks.json"
+            try:
+                import json as _json
+                allsh = _json.loads(sp.read_text(encoding="utf-8"))
+                lo = out["candles"][0]["t"] if out["candles"] else 0
+                hi = out["candles"][-1]["t"] + 15 * 60_000_000_000 if out["candles"] else 0
+                shocks = [x for x in allsh if lo <= x["start"] < hi]
+            except (OSError, ValueError):
+                shocks = []
+        out["shocks"] = shocks
+        out["src"] = src
+        return _jsonable(out)
 
     def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
         from edgelab.mystrategy import review as RV

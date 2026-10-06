@@ -20,6 +20,7 @@ import { HoldoutPage } from "../pages/Holdout";
 import { FlipsPage } from "../pages/Flips";
 import { RunBacktestPage } from "../pages/RunBacktest";
 import { MyAutotunePage } from "../pages/MyAutotune";
+import { MarketNewsPage, MarketNqEsPage, MarketOverviewPage, MarketPatternsPage, MarketSimulatorPage, MarketTrendPage } from "../pages/Market";
 import { EdgeCheckPage, TradeAnatomyPage } from "../pages/Edge";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
 import { UpdateBanner, VersionChip } from "../components/updates";
@@ -40,6 +41,8 @@ const NAV: NavItem[] = [
   { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
   { path: "/edge", label: "Edge lab", tid: "edge", icon: "search", heads: ["edge", "edge-anatomy"] },          // ADR-104
+  { path: "/market", label: "Market simulator", tid: "market", icon: "pulse",
+    heads: ["market", "market-trend", "market-nqes", "market-patterns", "market-news", "market-sim"] },          // ADR-106
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
@@ -55,6 +58,9 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
     { path: "/prop", label: "Backtest prop check", head: "prop" }],
   edge: [{ path: "/edge", label: "Edge check", head: "edge" }, { path: "/edge-anatomy", label: "Trade anatomy", head: "edge-anatomy" }],
+  market: [{ path: "/market", label: "Overview", head: "market" }, { path: "/market-trend", label: "Trend & sessions", head: "market-trend" },
+    { path: "/market-nqes", label: "NQ vs ES", head: "market-nqes" }, { path: "/market-patterns", label: "Patterns", head: "market-patterns" },
+    { path: "/market-news", label: "News", head: "market-news" }, { path: "/market-sim", label: "Simulator", head: "market-sim" }],
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
   my: [{ path: "/my", label: "Overview", head: "my" }, { path: "/my-settings", label: "Settings", head: "my-settings" },
     { path: "/my-backtest", label: "Backtest", head: "my-backtest" }, { path: "/my-trades", label: "Trades", head: "my-trades" },
@@ -123,6 +129,12 @@ function Page() {
     case "my-plan": return <MyPlanResultPage />;
     case "edge": return <EdgeCheckPage />;                       // ADR-104: Edge lab
     case "edge-anatomy": return <TradeAnatomyPage />;
+    case "market": return <MarketOverviewPage />;                // ADR-106: Market simulator
+    case "market-trend": return <MarketTrendPage />;
+    case "market-nqes": return <MarketNqEsPage />;
+    case "market-patterns": return <MarketPatternsPage />;
+    case "market-news": return <MarketNewsPage />;
+    case "market-sim": return <MarketSimulatorPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to Home</a></p></div>;
   }
 }

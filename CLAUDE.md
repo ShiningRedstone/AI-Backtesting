@@ -185,8 +185,13 @@ ADR-105: Edge lab v2: hypothesis set version 2 (H1-H4 unchanged + H5 / H6 publis
 family 6; day table = whole regular session); edge check also on another 1m dataset of the same instrument, ONLY its days before the
 discovery period (`check.sources`, `POST /api/edge/check {source}`); trade anatomy corrected for every counted My strategy / autotuner
 try (`anatomy.tries_of`, Bonferroni, verdict SELECTION; holdout reports uncorrected).
+ADR-106: tab "Market simulator" (`edgelab/market/`): NQ + ES discovery-only analysis on 1m ... 1D (every ICT / SMC concept, effects on
+every timeframe and the 15m chart, higher-timeframe context, NQ vs ES divergences / SMT, shocks with causes, news via the JBlanked API with a
+PROVEN time zone; API key in the user settings file), edge scan (first event per 15-min window in time order, BH 5 % on the first 70 %,
+confirmed on the last 30 %; 0 finds on random data), live 15m forecasts (logistic / numpy boosting / similar situations vs baselines,
+monthly walk-forward, skill counts only beyond a day-bootstrap interval), new NQ / ES days after the research data. Never a run / try / look.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-105.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-106.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -243,6 +248,8 @@ remains. Do not rely on this file alone.
   - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", favourites / rename, prop challenge chain, pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
     Strategy autotuner (step-by-step optimiser, ADR-101), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (2 strategies, each automatic then manual take / skip with a short result panel, ADR-102/103).
+  - Market simulator (ADR-106): Overview (data, news key + download, analysis, new days), Trend & sessions, NQ vs ES, Patterns
+    (+ edge scan), News (+ shocks), Simulator (forecast scores, day viewer).
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -469,4 +476,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-105). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-106). Update `README.md` status for phases.

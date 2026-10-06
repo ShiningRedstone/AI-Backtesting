@@ -2819,3 +2819,52 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **UI:** Edge check: data picker (discovery / earlier days of another dataset, with how to import older data), a note
   when a result is from version 1, "Added in version 2" on H5 / H6. Trade anatomy: "Correcting for your tries" card.
 - **Never:** a run, a trial, a holdout look, a protocol change, a change to backtests, rules, costs or configs.
+
+### ADR-106 Market simulator: deep analysis of NQ / ES (discovery only) and live-knowledge 15-minute forecasts
+- **Request (user):** a new tab that analyses NQ and ES before the holdout "so well that everything is taken into
+  consideration" (trend, how ES follows, divergences and how long until they line up, every ICT / SMC concept on EVERY
+  timeframe and its effect on the other timeframes and on the 15-minute chart, red-folder news incl. forecasts, shocks on
+  every timeframe and why they happened) and tries to predict 15-minute candles. Answers: checked walk-forward inside
+  discovery + on new days (holdout untouched), news from the JBlanked API (Forex Factory source), unscheduled news as
+  detected shocks, live knowledge only, probabilities + range bands + daily bias + level reach, all ICT / SMC concepts,
+  1m ... 1D, both divergence definitions, find 70 % / confirm 30 %, logistic + boosting + similar situations compared,
+  6 sub-tabs, NQ + ES new days; "avoid averages" (conditional rates against matched base rates, skill against baselines).
+- **Package `edgelab/market/`:** `data` (1m BID -> 1, 2, 3, 4, 5, 10, 15, 30 min, 1h, 4h, 1D anchored at 18:00 NY,
+  trading date = NY date of time + 6 h, a bar known at its nominal end; causal ATR and same-slot median of the previous
+  20 trading dates; `first_hit` day-block search), `news` (one `full-list` request; raw bytes kept with SHA-256; the
+  time zone is PROVEN from fixed-time USD releases (CPI / payrolls / claims 8:30, FOMC 14:00) across DST among fixed
+  offsets, New York, NY+7 (trading-server clock), London, Athens; >= 90 % on time and >= 3 more than the next zone, else
+  NEWS_TIMEZONE_UNPROVEN and nothing is used; surprise z from the same event's EARLIER surprises; API key in the
+  per-user app settings file, never the workspace, never returned), `patterns` (FVG, IFVG, BPR, BOS / CHoCH with
+  displacement, order blocks, breakers, OTE, swing / equal-high-low / previous day / week / regular-session / Asia /
+  London sweeps vs breaks, NDOG / NWOG / 9:30 gap, opening range 15 / 30, Judas swing, IPDA 20 / 40 / 60; zone outcomes
+  touched / CE / filled / time / left behind / held), `crosstf` (effects of every pattern on the next bar of every
+  timeframe and on the 15-minute chart; context strictly before it: trend 15m / 1h / 4h / 1D, inside a higher-timeframe
+  FVG, premium / discount, ES agreement, news, volatility), `nqes` (correlation / beta by timeframe and year, lead / lag,
+  move-gap divergence episodes with who closed them, SMT events), `shocks` (>= 3x the slot's usual size on any timeframe
+  1m-4h, merged episodes, causes: scheduled news / session clock / market-wide vs NQ only / level run / unexplained;
+  effect on the 15-minute candle), `newsfx` (per event: impacted, size, surprise direction, continuation, why not),
+  `trend` (day types and transitions, time of high / low, Power of 3, sessions, 15m runs and autocorrelation, profile,
+  weekdays, news days), `edges` (cells = kind x timeframe x direction x condition incl. pairs x outcome; FIRST event per
+  15-minute window in TIME order; base rate from random minutes per session; z-test, Benjamini-Hochberg 5 % over all
+  cells on the first 70 %, one-sided confirmation on the last 30 %; break-even win rate incl. costs), `gbm` (numpy
+  histogram gradient boosting, logistic, ridge; deterministic), `forecast` (~60 live inputs per 15-minute open; targets up,
+  size, bias, levels; baselines; monthly walk-forward, boosting every 3 months; skill with a day-block bootstrap
+  interval, "real" only when its lower end > 0; model chosen on the first 70 % of predicted months, reported on the last
+  30 %; size bands from earlier months' out-of-sample residuals; plain-word "why" from the logistic contributions),
+  `newdays` (NQ E_NQ-100 + ES E_SandP-500 1m BID via dukascopy-python from the first trading date after the research
+  data; first 20 new days = history; final models trained on all discovery), `analysis` (the job, timeframes from the
+  highest down, cached in `<data>/market/analysis_<key>/` by data / news / config / version).
+- **Biases found and fixed during development (tests keep them fixed):** measuring a zone from the open of its touch
+  minute (that minute is selected for moving to the zone), measuring untouched zones / unentered OTEs from their
+  formation (their non-touch is future knowledge; now: touched zones at touch + 1 minute, every zone separately at
+  formation as `<KIND>_FORMED`, no act moment = not measured), counting overlapping events as independent, and keeping
+  the "first" event per window in storage order instead of time order. On a random walk the scan now finds 0 of ~84,000
+  cells; a planted effect is found.
+- **API / UI:** `GET /api/market`, `/api/market/section/<name>`, `POST /api/market/news/key|news/download|analyze|newdays`,
+  `GET /api/market/jobs/<id>`, `/api/market/days`, `/api/market/day/<date>?src=discovery|new`; tab "Market simulator"
+  (Overview, Trend & sessions, NQ vs ES, Patterns, News, Simulator). One market job at a time (own job manager).
+- **Limits:** the JBlanked and Dukascopy downloads cannot be reached from the build environment (tested with synthetic
+  stand-ins, `tests/market_fixture.py`); BID prices; the 1-minute timeframe dominates time and memory (about 2 minutes per year of data, ~7 for four years,
+  ~1.5 GB peak; measured ~100 s / 760 MB per synthetic year).
+- **Never:** a run, a trial, a holdout look, a protocol change, a change to backtests, rules, costs or configs.
