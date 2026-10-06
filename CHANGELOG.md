@@ -3,6 +3,15 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Holdout: reset to 2 strategies, simpler manual tester (ADR-103)
+
+| Item | Status |
+|---|---|
+| Manual holdout: after Take / Skip a short result (R, how it ended, planned reward : risk), details in a dropdown, Next for the next setup | IMPLEMENTED, TESTED (browser) |
+| Skip shows what the trade would have done | IMPLEMENTED, TESTED |
+| Holdout allowance reset: 2 strategies, each automatic then manual (4 looks); the old allowance is retired, its looks stay recorded | IMPLEMENTED, TESTED |
+| Engine, rules, tries, your earlier holdout reports | UNCHANGED |
+
 ## My strategy holdout: automatic + manual look of one strategy, any tested strategy, typing fix (ADR-102)
 
 | Item | Status |

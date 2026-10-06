@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { my } from "../api/my";
-import type { Candle, ChallengeSummary, Decision, EsStatus, ExportResult, Explanation, HoldoutAllowance, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
+import type { Candle, ChallengeSummary, Decision, EsStatus, ExportResult, Explanation, HoldoutAllowance, HoldoutSlot, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
   SettingDef, SettingsPayload, SetupReviews, SetupStats, SetupView, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
@@ -813,7 +813,7 @@ export function TradeCharts({ doc, until }: { doc: { explanation: Explanation; c
 // =============================================================================================== holdout review
 export function MyHoldoutPage() {
   const { data, error, reload } = useApi<HoldoutAllowance>(my.holdoutUrl);
-  const [confirm, setConfirm] = useState<null | "automatic" | "manual">(null);
+  const [confirm, setConfirm] = useState<null | { kind: "automatic" } | { kind: "manual"; n: number }>(null);
   const [typed, setTyped] = useState("");
   const [pick, setPick] = useState<string | null>(null);
   const [favOnly, setFavOnly] = useState(false);
@@ -825,11 +825,11 @@ export function MyHoldoutPage() {
   useEffect(() => { if (data?.job && !job) setJob(data.job); }, [data?.job]); // eslint-disable-line react-hooks/exhaustive-deps
   const closeConfirm = () => { setConfirm(null); setTyped(""); };
   const start = async () => {
-    if (typed !== "HOLDOUT") return;
+    if (typed !== "HOLDOUT" || !confirm) return;
     setErr(null);
     try {
-      if (confirm === "automatic" && pick) setJob(await my.holdoutAutomatic(pick));
-      else if (confirm === "manual") { setBusy(true); await my.holdoutManual(); reload(); }
+      if (confirm.kind === "automatic" && pick) { setJob(await my.holdoutAutomatic(pick)); setPick(null); }
+      else if (confirm.kind === "manual") { setBusy(true); await my.holdoutManual(confirm.n); reload(); }
     } catch (e) { setErr(e as ApiError); } finally { setBusy(false); closeConfirm(); }
   };
   const decide = async (take: boolean) => {
@@ -844,11 +844,13 @@ export function MyHoldoutPage() {
   };
   if (error) return <div className="page"><PageHead title="Holdout review" /><ErrorPanel error={error} /></div>;
   if (!data) return <div className="page"><PageHead title="Holdout review" /><PageSkeleton layout="overview" label="Loading the holdout" /></div>;
-  const rv = data.review;
   const running = job?.state === "running";
+  const slots = data.strategies;
+  const reviewing = data.review_strategy ? slots.find((x) => x.n === data.review_strategy) : undefined;
+  const looksUsed = slots.reduce((k, x) => k + 1 + (x.manual ? 1 : 0), 0);
   const rows = favOnly ? data.candidates.filter((c) => c.favorite) : data.candidates;
   const chosen = data.candidates.find((c) => c.ref === pick) ?? null;
-  const done = rv && (rv.status === "complete" || data.finished);
+  const confirmLabel = confirm?.kind === "manual" ? slots.find((x) => x.n === confirm.n)?.source_label : chosen?.label;
   return (
     <div className="page" data-testid="my-holdout-page">
       <PageHead title="Holdout review" />
@@ -859,17 +861,43 @@ export function MyHoldoutPage() {
       <JobLine job={job} />
       <div className="kpis" data-testid="my-holdout-looks">
         <Kpi label="Holdout period" value={data.holdout ? day(data.holdout.start) : "–"} sub={data.holdout ? `to ${day(data.holdout.end)}` : undefined} />
-        <Kpi label="1. Automatic look" value={data.automatic ? "used" : "unused"} sub="every signal traded by the engine" accent={!data.automatic} />
-        <Kpi label="2. Manual look" value={data.manual ? (done ? "used" : "in progress") : "unused"} sub="your take / skip on each setup, same strategy"
-          accent={!!data.automatic && !data.manual} />
+        <Kpi label="Strategies tested" value={`${slots.length} of ${data.max_strategies}`} sub="each: automatic, then manual" accent={slots.length < data.max_strategies} />
+        <Kpi label="Holdout looks used" value={`${looksUsed} of ${data.max_strategies * 2}`} />
       </div>
-      {!data.automatic && (
-        <Card title="1. Pick the strategy to test" testId="my-holdout-pick" actions={<div className="inline">
+      {reviewing && (
+        <Card title={`Manual holdout · Strategy ${reviewing.n}: ${reviewing.source_label}`} testId="my-manual"
+          actions={data.progress ? <span className="small muted" data-testid="my-manual-progress">{data.progress.decided} decided · {data.progress.taken} taken ·{" "}
+            <span className={signCls(data.progress.taken_net_r)}>{r(data.progress.taken_net_r, 2)}</span> on your trades</span> : undefined}>
+          {last ? <TradeResult d={last} cand={lastCandidate} onNext={() => { setLast(null); setLastCandidate(null); }} />
+            : data.candidate ? (
+              <>
+                <div className="inline" style={{ justifyContent: "space-between" }}>
+                  <div>
+                    <b>{dirWord(data.candidate.explanation.direction)} at {nyTime(sec(data.candidate.signal_ts) + 60)}</b>
+                    <div className="muted small">Planned: entry about {px(data.candidate.explanation.entry.reference_price)}, stop {px(data.candidate.explanation.stop.price)},
+                      target {px(data.candidate.explanation.target.price)} (1 : {n(data.candidate.explanation.target.r_planned, 1)}).</div>
+                  </div>
+                  <div className="inline">
+                    <Button kind="primary" onClick={() => decide(true)} busy={busy} testId="my-take">Take trade</Button>
+                    <Button onClick={() => decide(false)} disabled={busy} testId="my-skip">Skip</Button>
+                  </div>
+                </div>
+                <TradeCharts key={data.candidate.signal_bar} doc={data.candidate} until />
+                <TradeExplain e={data.candidate.explanation} />
+              </>
+            ) : <p className="muted">Finishing…</p>}
+        </Card>
+      )}
+      {!reviewing && last && <Card title="Manual holdout" testId="my-manual"><TradeResult d={last} cand={lastCandidate}
+        onNext={() => { setLast(null); setLastCandidate(null); }} nextLabel="Done" /></Card>}
+      {slots.map((x) => <HoldoutSlotCard key={x.n} slot={x} busy={busy || !!reviewing} onManual={() => setConfirm({ kind: "manual", n: x.n })} />)}
+      {slots.length < data.max_strategies && !reviewing && (
+        <Card title={`Pick strategy ${slots.length + 1} of ${data.max_strategies}`} testId="my-holdout-pick" actions={<div className="inline">
           <Checkbox checked={favOnly} onChange={setFavOnly} label="Favourites only" testId="my-holdout-fav-only" />
-          <Button kind="primary" onClick={() => setConfirm("automatic")} disabled={!data.ready || !pick || running}
+          <Button kind="primary" onClick={() => setConfirm({ kind: "automatic" })} disabled={!data.ready || !pick || running}
             testId="my-holdout-open">Run the automatic holdout…</Button></div>}>
-          <p className="muted small">Your discovery backtests (favourites first) and every autotuner result that passed the lookahead check. The same
-            strategy is then tested twice on the holdout: first automatically (result shown right away), then manually with your take / skip decisions.</p>
+          <p className="muted small">Your discovery backtests (favourites first) and every autotuner result that passed the lookahead check. The strategy
+            is tested twice on the holdout: first automatically (result shown right away), then manually with your take / skip decisions.</p>
           {!rows.length ? <Empty>{favOnly ? "No favourite. Star a backtest in the Backtest tab." : "No strategy yet: run a backtest or the autotuner first."}</Empty> : (
             <TableWrap className="my-report-scroll" testId="my-holdout-candidates"><table className="dense">
               <thead><tr><th style={{ width: 28 }} /><th>★</th><th>Strategy</th><th>From</th><th className="num">Trades</th><th className="num">Per week</th>
@@ -887,60 +915,65 @@ export function MyHoldoutPage() {
                 </tr>))}</tbody></table></TableWrap>)}
         </Card>
       )}
-      {data.automatic && (
-        <Card title={`Tested strategy: ${data.source_label ?? ""}`} testId="my-holdout-strategy">
-          {data.settings_changed && Object.keys(data.settings_changed).length > 0 ? <dl className="kv">{Object.entries(data.settings_changed).map(([k, v]) => (
-            <div key={k} className="kv-row"><dt>{k}</dt><dd>{String(v)}</dd></div>))}</dl> : <p className="muted">All defaults.</p>}
-        </Card>
-      )}
-      {data.automatic && !data.manual && (
-        <Card title="2. Manual holdout of the same strategy" testId="my-holdout-manual-start">
-          <p>You see each setup with a chart that stops at the entry and decide <b>Take</b> or <b>Skip</b>; the result of a taken trade shows right
-            after. At the end your result is shown next to the automatic one. Your decisions are kept separate from the automated result.</p>
-          <Button kind="primary" onClick={() => setConfirm("manual")} disabled={busy} testId="my-holdout-manual-open">Start the manual holdout…</Button>
-        </Card>
-      )}
-      <Confirm open={confirm !== null} title={confirm === "manual" ? "Use the manual holdout look?" : "Use the automatic holdout look?"}
+      <Confirm open={confirm !== null} title={confirm?.kind === "manual" ? "Use the manual holdout look?" : "Use the automatic holdout look?"}
         confirmLabel="Start" danger busy={running || busy} onCancel={closeConfirm} onConfirm={() => void start()}>
-        <p>{confirm === "manual"
-          ? <>This spends the manual holdout look on <b>{data.source_label}</b>. It cannot be undone.</>
-          : <>This spends the automatic holdout look on <b>{chosen?.label}</b>; the manual look then tests the same strategy. It cannot be undone.</>}
+        <p>This spends the {confirm?.kind === "manual" ? "manual" : "automatic"} holdout look of <b>{confirmLabel}</b>. It cannot be undone.
           {" "}Type <b>HOLDOUT</b> to confirm.</p>
         <TextInput value={typed} onChange={setTyped} ariaLabel="Type HOLDOUT" testId="my-holdout-typed" />
       </Confirm>
-      {rv && data.progress && rv.status === "in_progress" && (
-        <div className="kpis">
-          <Kpi label="Setups decided" value={data.progress.decided} sub={`${data.progress.taken} taken · ${data.progress.skipped} skipped`} />
-          <Kpi label="Your trades" value={r(data.progress.taken_net_r, 2)} tone={signCls(data.progress.taken_net_r)}
-            sub={`${data.progress.taken_wins} wins`} accent />
-        </div>
-      )}
-      {last?.outcome && lastCandidate && (
-        <Card title={`Result of the trade you took: ${r(last.outcome.net_r, 2)}`} testId="my-outcome"
-          actions={<Button small onClick={() => setLast(null)}>Hide</Button>}>
-          <p className={signCls(last.outcome.net_r)}>{exitWord(last.outcome.exit_reason)} at {px(last.outcome.exit_price_theo)},{" "}
-            {nyTime(sec(last.outcome.exit_ts))}.</p>
-          <TradeCharts doc={{ ...lastCandidate, candles: last.outcome.candles, entry_ts: last.outcome.entry_ts, exit_ts: last.outcome.exit_ts,
-            entry_price_theo: last.outcome.entry_price_theo, stop_price: last.outcome.stop_price, target_price: last.outcome.target_price }} />
-        </Card>
-      )}
-      {rv?.status === "in_progress" && data.candidate && (
-        <>
-          <Card title={`Setup: ${dirWord(data.candidate.explanation.direction)} at ${nyTime(sec(data.candidate.signal_ts) + 60)}`} testId="my-candidate"
-            actions={<div className="inline">
-              <Button kind="primary" onClick={() => decide(true)} busy={busy} testId="my-take">Take trade</Button>
-              <Button onClick={() => decide(false)} disabled={busy} testId="my-skip">Skip</Button></div>}>
-            <p className="muted">Planned: entry about {px(data.candidate.explanation.entry.reference_price)}, stop {px(data.candidate.explanation.stop.price)},
-              target {px(data.candidate.explanation.target.price)} ({n(data.candidate.explanation.target.r_planned, 2)} R).</p>
-          </Card>
-          <TradeCharts key={data.candidate.signal_bar} doc={data.candidate} until />
-          <TradeExplain e={data.candidate.explanation} />
-        </>
-      )}
-      {done && <Banner tone="ok" testId="my-holdout-done">Both holdout looks are done.</Banner>}
-      {done && (rv?.final_report || data.finished?.id) && <ReportView id={(rv?.final_report || data.finished?.id) as string} title="Holdout - with your decisions (manual)" />}
-      {data.automatic && <ReportView id={data.automatic.report} title="Holdout - automatic (every signal)" />}
     </div>
+  );
+}
+
+/** ADR-103: the result of one decision, short: R, how it ended, the planned reward : risk; details on demand; Next. */
+function TradeResult({ d, cand, onNext, nextLabel = "Next" }: { d: Decision; cand: ReviewView["candidate"]; onNext: () => void; nextLabel?: string }) {
+  const o = d.outcome;
+  const planned = d.r_planned ?? cand?.explanation.target.r_planned;
+  return (
+    <div className="my-result" data-testid="my-result">
+      <div className="my-result-line">
+        {d.take ? null : <span className="muted">Skipped · it would have been </span>}
+        {o ? <b className={`my-result-r ${signCls(o.net_r)}`} data-testid="my-result-r">{o.net_r > 0 ? "+" : ""}{r(o.net_r, 2)}</b>
+          : <b className="muted">no trade (the engine would not have filled it)</b>}
+        {o && <span> · {exitWord(o.exit_reason)}</span>}
+      </div>
+      {planned != null && <div className="muted small">planned 1 : {n(planned, 1)}</div>}
+      {o && cand && <details className="my-result-details" data-testid="my-result-details">
+        <summary>Show details (chart, prices, times)</summary>
+        <p className="small">{dirWord(o.direction)} · entry {px(o.entry_price_theo)} at {nyTime(sec(o.entry_ts))} · stop {px(o.stop_price)} · target {px(o.target_price)}
+          {" "}· exit {px(o.exit_price_theo)} at {nyTime(sec(o.exit_ts))} · {o.contracts} MNQ</p>
+        <TradeCharts doc={{ ...cand, candles: o.candles, entry_ts: o.entry_ts, exit_ts: o.exit_ts, entry_price_theo: o.entry_price_theo,
+          stop_price: o.stop_price, target_price: o.target_price }} />
+      </details>}
+      <div className="inline" style={{ justifyContent: "flex-end" }}>
+        <Button kind="primary" onClick={onNext} testId="my-next">{nextLabel} →</Button>
+      </div>
+    </div>
+  );
+}
+
+function HoldoutSlotCard({ slot, busy, onManual }: { slot: HoldoutSlot; busy: boolean; onManual: () => void }) {
+  const [open, setOpen] = useState<null | "automatic" | "manual">(null);
+  const manualDone = slot.review_status === "complete" && slot.final_report;
+  return (
+    <Card title={`Strategy ${slot.n}: ${slot.source_label}`} testId={`my-holdout-slot-${slot.n}`}>
+      <div className="inline" style={{ flexWrap: "wrap", gap: 8 }}>
+        <Badge tone="ok">Automatic: done</Badge>
+        <Button small kind={open === "automatic" ? "primary" : "secondary"} onClick={() => setOpen(open === "automatic" ? null : "automatic")}
+          testId={`my-holdout-auto-${slot.n}`}>{open === "automatic" ? "Hide" : "Show"} automatic result</Button>
+        {!slot.manual ? <Button small kind="primary" onClick={onManual} disabled={busy} testId={`my-holdout-manual-${slot.n}`}>Start the manual holdout…</Button>
+          : manualDone ? <><Badge tone="ok">Manual: done</Badge>
+            <Button small kind={open === "manual" ? "primary" : "secondary"} onClick={() => setOpen(open === "manual" ? null : "manual")}
+              testId={`my-holdout-manres-${slot.n}`}>{open === "manual" ? "Hide" : "Show"} manual result</Button></>
+          : <Badge tone="info">Manual: in progress</Badge>}
+      </div>
+      <details className="small" style={{ marginTop: 8 }}><summary>Settings</summary>
+        {Object.keys(slot.settings_changed).length ? <dl className="kv">{Object.entries(slot.settings_changed).map(([k, v]) => (
+          <div key={k} className="kv-row"><dt>{k}</dt><dd>{String(v)}</dd></div>))}</dl> : <p className="muted">All defaults.</p>}
+      </details>
+      {open === "automatic" && <ReportView id={slot.automatic.report} title={`Strategy ${slot.n} - automatic (every signal)`} />}
+      {open === "manual" && slot.final_report && <ReportView id={slot.final_report} title={`Strategy ${slot.n} - with your decisions`} />}
+    </Card>
   );
 }
 

@@ -105,15 +105,15 @@ export interface ReviewView {
 /** ADR-102: one strategy, two holdout looks (automatic, then manual). */
 export interface HoldoutCandidate { ref: string; source: "backtest" | "autotuner"; label: string; favorite: boolean; created_at: string | null;
   settings_hash: string; trade_count: number | null; metrics: Metrics | null; settings_changed: Record<string, unknown> | null }
+export interface HoldoutSlot { n: number; source_label: string; settings_hash: string; settings_changed: Record<string, unknown>;
+  automatic: { access_id: string; report: string; at: string; run_id: string }; manual: { access_id: string; review: string; at: string } | null;
+  review_status: "in_progress" | "complete" | null; final_report: string | null }
 export interface HoldoutAllowance extends ReviewView {
-  ready: boolean; problem?: string; looks: string[]; protocol_id: string | null; config_ok?: boolean;
+  ready: boolean; problem?: string; looks: string[]; max_strategies: number; protocol_id: string | null; config_ok?: boolean;
   holdout?: { start: string; end: string }; discovery?: { start: string; end: string };
-  automatic: { access_id: string; report: string; at: string; run_id: string } | null;
-  manual: { access_id: string; review: string; at: string } | null;
-  source_label: string | null; settings_hash: string | null; settings_changed: Record<string, unknown> | null;
-  candidates: HoldoutCandidate[]; job: MyJob | null;
+  strategies: HoldoutSlot[]; review_strategy?: number; candidates: HoldoutCandidate[]; job: MyJob | null;
 }
-export interface Decision { signal_bar: number; take: boolean; outcome?: TradeRow & { candles: Record<string, Candle[]>; exit_bar: number } }
+export interface Decision { signal_bar: number; take: boolean; r_planned?: number | null; outcome?: TradeRow & { candles: Record<string, Candle[]>; exit_bar: number } }
 
 export interface PlanVariant { label: string; overrides: Record<string, unknown>; settings_hash: string }
 export interface PlanResult { id: string; name: string; note?: string; created_at: string; variants: (PlanVariant & {
@@ -194,7 +194,7 @@ export const my = {
   reviewUrl: "/api/my/review",
   holdoutUrl: "/api/my/holdout",
   holdoutAutomatic: (ref: string) => api.post<MyJob>("/api/my/holdout/automatic", { ref }),
-  holdoutManual: () => api.post<{ id: string }>("/api/my/holdout/manual", {}),
+  holdoutManual: (strategy: number) => api.post<{ id: string }>("/api/my/holdout/manual", { strategy }),
   reportUrl: (id: string) => `/api/my/reports/${enc(id)}`,
   tradeUrl: (id: string, n: number) => `/api/my/reports/${enc(id)}/trades/${n}`,
   planResultUrl: (id: string) => `/api/my/plan-results/${enc(id)}`,

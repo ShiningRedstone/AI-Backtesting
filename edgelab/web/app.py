@@ -1182,7 +1182,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
 
     @app.post("/api/my/holdout/manual")
     def my_holdout_manual():
-        return jsonify(call(svc.my_holdout_start_manual))
+        n = body().get("strategy")
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 2:
+            raise _bad("strategy must be 1 or 2")
+        return jsonify(call(svc.my_holdout_start_manual, n))
 
     @app.post("/api/my/review/decide")
     def my_review_decide():

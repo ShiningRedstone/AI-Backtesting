@@ -2742,3 +2742,22 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   `/api/my/review/decide` goes to the allowance's review. **UI:** Holdout review = look status, strategy picker (favourites
   first, source badge), typed HOLDOUT confirmation, automatic report, manual take / skip, both results at the end.
 - **Unchanged:** engine, rules, settings hashes, tries, the discovery protocols and their records.
+
+### ADR-103 Holdout allowance reset to 2 strategies x (automatic + manual); short result panel with Next
+- **Request (user):** the manual tester was confusing: instead of a chart after each decision, show the R, a dropdown for
+  the details and a Next button that hides the panel and moves to the next trade; reset the holdout credit; allow 2
+  strategies. Choices: result panel = result R + exit + planned reward : risk, "Show details" (prices, times, chart);
+  after Skip also show what the trade would have done; 2 strategies, each automatic then manual (4 looks); earlier holdout
+  results not shown on the Holdout review page (they stay in the Trades tab).
+- **Reset** (`review.py`, `ALLOWANCE_VERSION` 2): an active `my_holdout` protocol without `allowance_version` 2 counts as
+  none on page reads; the first `start_automatic` RETIRES it (its looks stay recorded) and creates the new allowance
+  (`holdout_budget` 4 = `max_strategies` 2 x `looks`; exposure statement counts every earlier look). The old state file is
+  kept as `holdout_allowance_<old protocol>.json`. State v2: `{"version": 2, "protocol_id", "strategies": [slot...]}`, a
+  slot = one strategy with its automatic report and manual review. `_spend` refuses a repeated kind per strategy, a third
+  strategy and looks beyond 4; one manual review in progress at a time (`REVIEW_OPEN`).
+- **Decide:** the outcome is taken from the run BEFORE the decision is recorded, so a skip returns the trade the setup
+  would have made with the decisions so far (`outcome`, plus `r_planned`); the trader's result is unchanged (a skip still
+  removes the signal).
+- **UI:** looks / strategies counters; a card per strategy (automatic done / manual start, in progress or done, results
+  on demand); the manual card shows the setup (Take / Skip) OR the result panel, never both; Next shows the next setup.
+  `POST /api/my/holdout/manual {strategy: 1|2}`.

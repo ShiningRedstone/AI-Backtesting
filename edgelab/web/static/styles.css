@@ -926,3 +926,8 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 .at-star.on { color: #f5c542; }
 .my-rename { margin-left: 6px; padding: 0 4px; border: 0; background: none; color: var(--faint); cursor: pointer; font-size: 13px; }
 .my-rename:hover { color: var(--text); }
+/* ADR-103: manual holdout result panel */
+.my-result { display: grid; gap: 8px; }
+.my-result-line { font-size: 18px; }
+.my-result-r { font-size: 22px; }
+.my-result-details summary { cursor: pointer; color: var(--muted); }

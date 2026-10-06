@@ -2706,9 +2706,9 @@ class Services:
         return R.jobs_of(self).start("holdout_automatic", lambda step: RV.start_automatic(self, ref, lock=self.lock,
                                                                                           progress=step))
 
-    def my_holdout_start_manual(self) -> dict:
+    def my_holdout_start_manual(self, n: int) -> dict:
         from edgelab.mystrategy import review as RV
-        return _jsonable(RV.start_manual(self, lock=self.lock))
+        return _jsonable(RV.start_manual(self, int(n), lock=self.lock))
 
     def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
         from edgelab.mystrategy import review as RV

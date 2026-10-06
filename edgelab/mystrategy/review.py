@@ -193,22 +193,24 @@ def view(svc, lock=None) -> dict:
 
 
 def decide(svc, signal_bar: int, take: bool, lock=None) -> dict:
+    """Record take / skip. The outcome returned is the trade this setup makes with the decisions so far (ADR-103: also
+    for a skip - 'what it would have done'); a skip removes it from the trader's result as before."""
     st = open_review(svc)
     if st is None or st["status"] != "in_progress":
         raise R.MyStrategyError("NO_REVIEW", "No holdout review is in progress.")
     cand = _candidate(svc, st, lock)
     if cand is None or cand["signal_bar"] != int(signal_bar):
         raise R.MyStrategyError("NOT_CURRENT", "That setup is not the one waiting for a decision (refresh the page).")
+    strat, res, ds = _run(svc, st, lock)                 # before the decision: the setup's own trade
+    row = res.trades[res.trades["signal_bar"] == int(signal_bar)] if not res.trades.empty else res.trades
     st["decisions"][str(int(signal_bar))] = {"take": bool(take), "decided_at": R._now(), "signal_ts": cand["signal_ts"]}
     _save(svc, st)
-    out: dict = {"signal_bar": int(signal_bar), "take": bool(take)}
-    if take:
-        strat, res, ds = _run(svc, st, lock)
-        row = res.trades[res.trades["signal_bar"] == int(signal_bar)]
-        if len(row):
-            r = trade_rows(row)[0]
-            charts = Charts(ds.bars, ds.calendar, st["settings"]["models.price_series"])
-            out["outcome"] = {**r, "candles": charts.for_trade(cand["charts"], int(signal_bar), int(r["exit_bar"]))}
+    out: dict = {"signal_bar": int(signal_bar), "take": bool(take),
+                 "r_planned": ((cand.get("explanation") or {}).get("target") or {}).get("r_planned")}
+    if len(row):
+        r = trade_rows(row)[0]
+        charts = Charts(ds.bars, ds.calendar, st["settings"]["models.price_series"])
+        out["outcome"] = {**r, "candles": charts.for_trade(cand["charts"], int(signal_bar), int(r["exit_bar"]))}
     return out
 
 
@@ -237,13 +239,16 @@ def valid_id(x: str) -> bool:
     return bool(re.fullmatch(r"RV_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}", x))
 
 
-# ============================================================================================== ADR-102: 2-look allowance
-# One strategy, two holdout looks: first AUTOMATIC (the engine trades every signal; the result is shown at once), then
-# MANUAL (the trader's take / skip on each setup, with the automatic result already known - the user's choice). The looks
-# belong to a companion protocol of their own (role ``my_holdout``) created when the user reset the holdout limit; the
-# looks spent earlier under the My strategy / autotuner protocols stay recorded there. The strategy can be any settings
-# combination counted as a discovery try of My strategy or of the Strategy autotuner.
+# ============================================================================================== ADR-102/103: holdout allowance
+# Two strategies, each tested twice on the holdout: first AUTOMATIC (the engine trades every signal; the result is shown at
+# once), then MANUAL (the trader's take / skip on each setup, with the automatic result already known - the user's choice).
+# The looks belong to a companion protocol of their own (role ``my_holdout``). ADR-103 reset the allowance at the user's
+# request: an allowance of an earlier version is RETIRED (its looks stay recorded) and a new one is created the first time
+# a holdout is started. The strategy can be any settings combination counted as a discovery try of My strategy or of the
+# Strategy autotuner.
 LOOKS = ("automatic", "manual")
+STRATEGIES = 2
+ALLOWANCE_VERSION = 2
 
 
 def _allowance_path(svc) -> Path:
@@ -266,47 +271,69 @@ def _source_protocols(svc, parent: dict) -> list[dict]:
     return out
 
 
+def _earlier_looks(svc, parent: dict) -> int:
+    n = 0
+    for p in _source_protocols(svc, parent) + svc.store.list_protocols(_hp_scope(parent)):
+        n += len([a for a in svc.store.list_holdout_access(p["protocol_id"]) if a["status"] != "refused"])
+    return n
+
+
 def holdout_material(svc, parent: dict) -> dict:
     from edgelab.research import protocol as rp
     srcs = _source_protocols(svc, parent)
     family = sum(int(p["material"]["trial_budget"]["max_unique_trials"]) for p in srcs) or R.TRIAL_BUDGET
-    earlier = sum(len([a for a in svc.store.list_holdout_access(p["protocol_id"]) if a["status"] != "refused"])
-                  for p in srcs)
-    mat = R.build_material(parent, budget=family, looks=len(LOOKS))
+    looks = STRATEGIES * len(LOOKS)
+    mat = R.build_material(parent, budget=family, looks=looks)
     mat.update({
-        "role": rp.MY_HOLDOUT_ROLE, "name": "My strategy holdout (automatic + manual)",
+        "role": rp.MY_HOLDOUT_ROLE, "name": "My strategy holdout (2 strategies, automatic + manual)",
+        "allowance_version": ALLOWANCE_VERSION,
         "search_constraints": {
-            "strategies": "one settings combination of 'My strategy' that was counted as a discovery try of the My "
-                          "strategy or Strategy autotuner protocol; no discovery tries are counted here",
+            "strategies": f"up to {STRATEGIES} settings combinations of 'My strategy', each counted as a discovery try of "
+                          "the My strategy or Strategy autotuner protocol; no discovery tries are counted here",
             "evaluation_windows": "the holdout window only",
             "stages": {"discovery": "none (the tries belong to the source protocols)",
-                       "holdout": "one AUTOMATIC look (every signal), then one MANUAL look (the trader's take / skip) "
-                                  "of the same settings"}},
+                       "holdout": "per strategy: one AUTOMATIC look (every signal), then one MANUAL look (the trader's "
+                                  "take / skip) of the same settings"}},
         "source_protocols": [{"protocol_id": p["protocol_id"], "role": p["material"].get("role"),
                               "trial_budget": int(p["material"]["trial_budget"]["max_unique_trials"])} for p in srcs],
     })
-    mat["holdout_budget"] = {"max_unique_candidate_evaluations": len(LOOKS), "per_candidate": len(LOOKS),
-                             "looks": list(LOOKS)}
+    mat["holdout_budget"] = {"max_unique_candidate_evaluations": looks, "per_candidate": len(LOOKS),
+                             "max_strategies": STRATEGIES, "looks": list(LOOKS)}
     mat["trial_budget"]["unit"] += "; the declared budget is the source protocols' budgets together (the family the " \
-                                   "tested strategy was chosen from); no trial is counted under this protocol"
+                                   "tested strategies were chosen from); no trial is counted under this protocol"
     mat["pre_protocol_exposure"] = {
-        "statement": "Created when the user reset the My strategy holdout limit to one automatic and one manual look. "
-                     f"Holdout looks spent before under the source protocols: {earlier}. Strategies were chosen after "
-                     "discovery-period backtests and autotuner runs.",
+        "statement": "Created when the user reset the My strategy holdout allowance (2 strategies, each one automatic and "
+                     f"one manual look). Holdout looks spent before (source protocols and earlier allowances): "
+                     f"{_earlier_looks(svc, parent)}. Strategies were chosen after discovery-period backtests and "
+                     "autotuner runs.",
         "runs": []}
     return mat
 
 
+def _current_hp(svc, parent: dict) -> dict | None:
+    rows = [p for p in svc.store.list_protocols(_hp_scope(parent), "ACTIVE")
+            if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
+    return rows[0] if rows else None
+
+
 def holdout_protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | None]:
+    """(parent, allowance protocol). An allowance of an earlier version counts as none; ``create`` retires it (its
+    looks stay recorded, the user's reset, ADR-103) and creates the current one."""
     from edgelab.research import protocol as rp
     guard = lock if lock is not None else R.nullcontext()
     with guard:
         parent = R._parent(svc)
         if parent is None:
             raise R.MyStrategyError("NO_PROTOCOL", "The holdout needs the workspace's active research protocol.")
-        rows = [p for p in svc.store.list_protocols(_hp_scope(parent), "ACTIVE")
-                if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
-        hp = rows[0] if rows else None
+        hp = _current_hp(svc, parent)
+        if hp is not None and hp["material"].get("allowance_version") != ALLOWANCE_VERSION:
+            if not create:
+                return parent, None
+            svc.store.retire_protocol(hp["protocol_id"])
+            old = _allowance_path(svc)
+            if old.exists():
+                old.replace(old.with_name(f"holdout_allowance_{hp['protocol_id']}.json"))
+            hp = None
         if hp is None and create:
             rec = rp.make_record(holdout_material(svc, parent), {"code_version": R._code_version()})
             svc.store.save_protocol(rec, _hp_scope(parent))
@@ -316,8 +343,11 @@ def holdout_protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | 
         return parent, hp
 
 
-def allowance(svc) -> dict:
-    return R._read_json(_allowance_path(svc)) or {}
+def allowance(svc, hp: dict | None = None) -> dict:
+    a = R._read_json(_allowance_path(svc)) or {}
+    if hp is not None and (a.get("protocol_id") != hp["protocol_id"] or a.get("version") != ALLOWANCE_VERSION):
+        return {}
+    return a
 
 
 def _save_allowance(svc, a: dict) -> None:
@@ -381,14 +411,18 @@ def _counted_somewhere(svc, parent: dict, h: str) -> bool:
 
 
 def _spend(svc, hp: dict, kind: str, h: str, lock) -> str:
-    """Record one look (granted). Refuses a look of a kind already used or beyond the budget."""
+    """Record one look (granted). Refuses a look of a kind already used for these settings, a third strategy, or a look
+    beyond the budget."""
     guard = lock if lock is not None else R.nullcontext()
     with guard:
         used = [a for a in svc.store.list_holdout_access(hp["protocol_id"]) if a["status"] != "refused"]
-        if any(a["access_id"].startswith(f"HA_{kind.upper()}_") for a in used):
-            raise R.MyStrategyError("HOLDOUT_LOOK_USED", f"The {kind} holdout look is already used.")
+        mine = [a for a in used if a["logic_hash"] == h]
+        if any(a["access_id"].startswith(f"HA_{kind.upper()}_") for a in mine):
+            raise R.MyStrategyError("HOLDOUT_LOOK_USED", f"The {kind} holdout look of this strategy is already used.")
+        if not mine and len({a["logic_hash"] for a in used}) >= STRATEGIES:
+            raise R.MyStrategyError("HOLDOUT_STRATEGIES_USED", "Both strategies of the holdout allowance are chosen.")
         if len(used) >= hp["material"]["holdout_budget"]["max_unique_candidate_evaluations"]:
-            raise R.MyStrategyError("HOLDOUT_LOOKS_USED", "Both holdout looks are used.")
+            raise R.MyStrategyError("HOLDOUT_LOOKS_USED", "Every holdout look is used.")
         if svc._config_hash() != hp["material"]["config_hash"]:
             raise R.MyStrategyError("PROTOCOL_CONFIG_CHANGED", "The research settings differ from the protocol's.")
         access_id = f"HA_{kind.upper()}_" + R.new_id("X")[2:]
@@ -401,15 +435,18 @@ def _spend(svc, hp: dict, kind: str, h: str, lock) -> str:
 
 
 def start_automatic(svc, ref: str, *, lock=None, progress: Callable | None = None) -> dict:
-    """Look 1: the engine trades every signal of the chosen settings on the holdout (lookahead check on), recorded as a
-    run (OUT_OF_SAMPLE, labelled Holdout) and saved as a report. Shown at once."""
+    """The automatic look of a NEW strategy: the engine trades every signal of the chosen settings on the holdout
+    (lookahead check on), recorded as a run (OUT_OF_SAMPLE, labelled Holdout) and saved as a report. Shown at once."""
     from datetime import datetime, timezone
     parent, hp = holdout_protocol(svc, lock)
-    a = allowance(svc)
-    if a.get("protocol_id") == hp["protocol_id"] and a.get("automatic"):
-        raise R.MyStrategyError("HOLDOUT_LOOK_USED", "The automatic holdout look is already used.")
+    a = allowance(svc, hp)
+    slots = a.get("strategies") or []
+    if len(slots) >= STRATEGIES:
+        raise R.MyStrategyError("HOLDOUT_STRATEGIES_USED", "Both strategies of the holdout allowance are chosen.")
     s, label = _resolve_ref(svc, ref)
     h = P.settings_hash(s)
+    if any(x["settings_hash"] == h for x in slots):
+        raise R.MyStrategyError("HOLDOUT_LOOK_USED", "This strategy already had its automatic holdout.")
     if not _counted_somewhere(svc, parent, h):
         raise R.MyStrategyError("NOT_BACKTESTED", "Only settings backtested on the discovery period (My strategy or the "
                                                   "autotuner) can be tested on the holdout.")
@@ -441,60 +478,85 @@ def start_automatic(svc, ref: str, *, lock=None, progress: Callable | None = Non
             svc.store.update_holdout_access(access_id, status="failed", reason=str(e)[:500],
                                             completed_at=datetime.now(timezone.utc).isoformat())
         raise
-    a = {"protocol_id": hp["protocol_id"], "created_at": a.get("created_at") or R._now(), "settings": s,
-         "settings_hash": h, "source_ref": ref, "source_label": label,
-         "automatic": {"access_id": access_id, "report": ho_id, "at": R._now(), "run_id": rec["run_id"],
-                       "window": summary["window"], "dataset_id": summary["dataset"]["dataset_id"],
-                       "es_content_hash": None if strat.es is None else strat.es.content_hash},
-         "manual": None}
+    slot = {"n": len(slots) + 1, "settings": s, "settings_hash": h, "source_ref": ref, "source_label": label,
+            "automatic": {"access_id": access_id, "report": ho_id, "at": R._now(), "run_id": rec["run_id"],
+                          "window": summary["window"], "dataset_id": summary["dataset"]["dataset_id"],
+                          "es_content_hash": None if strat.es is None else strat.es.content_hash},
+            "manual": None}
+    a = {"version": ALLOWANCE_VERSION, "protocol_id": hp["protocol_id"], "created_at": a.get("created_at") or R._now(),
+         "strategies": slots + [slot]}
     _save_allowance(svc, a)
-    return a
+    return slot
 
 
-def start_manual(svc, *, lock=None) -> dict:
-    """Look 2: the trader's take / skip on each setup of the SAME settings, after the automatic result."""
+def _slot_review(svc, slot: dict) -> dict | None:
+    m = slot.get("manual")
+    return R._read_json(_dir(svc) / m["review"] / "state.json") if m else None
+
+
+def start_manual(svc, n: int, *, lock=None) -> dict:
+    """The manual look of strategy ``n``: the trader's take / skip on each setup of the SAME settings, after its
+    automatic result. One manual review at a time."""
     _, hp = holdout_protocol(svc, lock, create=False)
-    a = allowance(svc)
-    if hp is None or a.get("protocol_id") != hp["protocol_id"] or not a.get("automatic"):
-        raise R.MyStrategyError("AUTOMATIC_FIRST", "Run the automatic holdout first; the manual one tests the same settings.")
-    if a.get("manual"):
-        raise R.MyStrategyError("HOLDOUT_LOOK_USED", "The manual holdout look is already used.")
-    access_id = _spend(svc, hp, "manual", a["settings_hash"], lock)
+    a = allowance(svc, hp) if hp is not None else {}
+    slots = a.get("strategies") or []
+    slot = next((x for x in slots if x["n"] == int(n)), None)
+    if slot is None:
+        raise R.MyStrategyError("AUTOMATIC_FIRST", "Run the automatic holdout of a strategy first; the manual one tests "
+                                                   "the same settings.")
+    if slot.get("manual"):
+        raise R.MyStrategyError("HOLDOUT_LOOK_USED", "The manual holdout look of this strategy is already used.")
+    if any((_slot_review(svc, x) or {}).get("status") == "in_progress" for x in slots):
+        raise R.MyStrategyError("REVIEW_OPEN", "Finish the manual holdout that is in progress first.")
+    access_id = _spend(svc, hp, "manual", slot["settings_hash"], lock)
     rv_id = R.new_id("RV")
-    au = a["automatic"]
-    st = {"id": rv_id, "created_at": R._now(), "status": "in_progress", "settings": a["settings"],
-          "settings_hash": a["settings_hash"], "protocol_id": hp["protocol_id"], "access_id": access_id,
+    au = slot["automatic"]
+    st = {"id": rv_id, "created_at": R._now(), "status": "in_progress", "settings": slot["settings"],
+          "settings_hash": slot["settings_hash"], "protocol_id": hp["protocol_id"], "access_id": access_id,
           "window": au["window"], "dataset_id": au["dataset_id"], "mechanical_report": au["report"], "decisions": {},
-          "es_content_hash": au.get("es_content_hash"), "final_report": None, "look": "manual"}
+          "es_content_hash": au.get("es_content_hash"), "final_report": None, "look": "manual", "strategy_n": slot["n"]}
     _save(svc, st)
-    a["manual"] = {"access_id": access_id, "review": rv_id, "at": R._now()}
+    slot["manual"] = {"access_id": access_id, "review": rv_id, "at": R._now()}
     _save_allowance(svc, a)
     return st
 
 
 def allowance_view(svc, lock=None) -> dict:
-    """The holdout page: the 2-look allowance, the strategy picker, the automatic report and the manual review."""
+    """The holdout page: the allowance (2 strategies x automatic + manual), the strategy picker, each strategy's
+    automatic report and manual review. Earlier allowances are not shown (the user's choice); their reports stay listed
+    in the Trades tab."""
     try:
         parent, hp = holdout_protocol(svc, create=False)
         ready = {"ready": True}
     except R.MyStrategyError as e:
         parent, hp, ready = None, None, {"ready": False, "problem": e.message}
-    a = allowance(svc)
-    if hp is None or a.get("protocol_id") != hp["protocol_id"]:
-        a = {}
-    out: dict = {**ready, "looks": list(LOOKS), "protocol_id": hp["protocol_id"] if hp else None,
-                 "automatic": a.get("automatic"), "manual": a.get("manual"), "source_label": a.get("source_label"),
-                 "settings_hash": a.get("settings_hash"),
-                 "settings_changed": P.changed(a["settings"]) if a.get("settings") else None,
-                 "candidates": candidates(svc) if not a.get("automatic") else []}
+    a = allowance(svc, hp) if hp is not None else {}
+    slots = []
+    review = None
+    for x in a.get("strategies") or []:
+        st = _slot_review(svc, x)
+        slots.append({"n": x["n"], "source_label": x["source_label"], "settings_hash": x["settings_hash"],
+                      "settings_changed": P.changed(x["settings"]), "automatic": x["automatic"],
+                      "manual": x.get("manual"), "review_status": None if st is None else st["status"],
+                      "final_report": None if st is None else st.get("final_report")})
+        if st is not None and st["status"] == "in_progress":
+            review = (x["n"], st)
+    out: dict = {**ready, "looks": list(LOOKS), "max_strategies": STRATEGIES,
+                 "protocol_id": hp["protocol_id"] if hp else None, "strategies": slots,
+                 "candidates": candidates(svc) if len(slots) < STRATEGIES else []}
+    tested = {x["settings_hash"] for x in slots}
+    out["candidates"] = [c for c in out["candidates"] if c["settings_hash"] not in tested]
     if parent is not None:
         w = R.windows(parent["material"])
         out["holdout"], out["discovery"] = w["holdout"], w["discovery"]
         out["config_ok"] = svc._config_hash() == parent["material"]["config_hash"]
-    if a.get("manual"):
-        st = R._read_json(_dir(svc) / a["manual"]["review"] / "state.json")
-        if st is not None:
-            out.update(_review_payload(svc, st, lock))
+    if review is not None:
+        out["review_strategy"] = review[0]
+        out.update(_review_payload(svc, review[1], lock))
+        if out["review"]["status"] == "complete":            # finished just now: show it in its strategy's card
+            for x in out["strategies"]:
+                if x["n"] == review[0]:
+                    x["review_status"], x["final_report"] = "complete", out["review"]["final_report"]
     return R.jsonable(out)
 
 
@@ -513,10 +575,9 @@ def _review_payload(svc, st: dict, lock=None) -> dict:
 
 
 def open_review(svc) -> dict | None:
-    """The review that decisions go to: the allowance's manual review, else the latest one (earlier reviews)."""
-    a = allowance(svc)
-    if a.get("manual"):
-        st = R._read_json(_dir(svc) / a["manual"]["review"] / "state.json")
-        if st is not None:
+    """The review that decisions go to: the allowance's manual review in progress, else the latest one."""
+    for x in (R._read_json(_allowance_path(svc)) or {}).get("strategies") or []:
+        st = _slot_review(svc, x)
+        if st is not None and st["status"] == "in_progress":
             return st
     return current(svc)
