@@ -940,3 +940,60 @@ details.advanced .advanced-body { display: flex; flex-direction: column; gap: 14
 /* ADR-106: Market simulator */
 .row.gap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 tr.row-hl td { background: color-mix(in srgb, var(--c1) 10%, transparent); }
+
+/* ===== Market simulator (ADR-110): one rhythm for every tab ===== */
+.mk .card-body > * + * { margin-top: 14px; }
+.mk .card-body > p + p, .mk .card-body > p.small + p.small { margin-top: 8px; }
+.mk .card-body p { line-height: 1.55; }
+.mk .card-body > .small-head, .mk .small-head { margin: 22px 0 10px; font-size: 13px; }
+.mk .card-body > .small-head:first-child, .mk-panel > .small-head { margin-top: 0; }
+.mk .card-body > .kpis + .grid-cards, .mk .card-body > .grid-cards { margin-top: 18px; }
+.mk .card-body .row.gap + .row.gap { margin-top: 10px; }
+.mk .card-body > .tech { margin-top: 16px; }
+.mk .tech > summary { cursor: pointer; padding: 6px 0; color: var(--text-2); }
+.mk .tech[open] > summary { margin-bottom: 10px; }
+.mk .tech > div + div { margin-top: 16px; }
+.mk .tech .small-head { margin-top: 0; }
+.mk .edge-list { margin-top: 8px; gap: 6px; }
+.mk-lead { max-width: 920px; margin: -6px 0 2px; color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
+.mk-stack { display: flex; flex-direction: column; gap: 18px; }
+.mk-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mk-step-n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2); }
+.mk-step-n.done { background: var(--c1); border-color: transparent; color: var(--bg); }
+.mk tr.mk-ref td { color: var(--muted); font-style: italic; }
+.mk .kpis { gap: 12px; }
+/* skill bars with the 95 % range */
+.mk-skill { display: grid; grid-template-columns: minmax(150px, 36%) minmax(120px, 1fr) 84px; gap: 8px 14px; align-items: center; font-size: 12.5px; }
+.mk-skill-row, .mk-skill-axis { display: contents; }
+.mk-skill-label { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-skill-track { position: relative; height: 16px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 4px; }
+.mk-skill-zero { position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px; background: var(--border-focus); }
+.mk-skill-bar { position: absolute; top: 4px; bottom: 4px; border-radius: 2px; background: var(--c-neutral); }
+.mk-skill-bar.pos { background: var(--c1); }
+.mk-skill-bar.neg { background: var(--c-neg); }
+.mk-skill-ci { position: absolute; top: 50%; height: 0; border-top: 1.5px solid var(--text); opacity: 0.75; }
+.mk-skill-ci::before, .mk-skill-ci::after { content: ""; position: absolute; top: -5px; height: 8px; border-left: 1.5px solid var(--text); }
+.mk-skill-ci::before { left: 0; }
+.mk-skill-ci::after { right: 0; }
+.mk-skill-value { text-align: right; white-space: nowrap; }
+.mk-skill-scale { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+/* calibration */
+.mk-cal { width: 100%; max-width: 340px; }
+.mk-cal svg { width: 100%; height: auto; display: block; overflow: visible; }
+.mk-cal text { font-size: 9px; fill: var(--muted); }
+.mk-cal .axis-line { stroke: var(--border); }
+.mk-cal-diag { stroke: var(--muted); stroke-dasharray: 3 3; }
+.mk-cal-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 11.5px; color: var(--text-2); }
+.mk-cal-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+@media (max-width: 720px) { .mk-skill { grid-template-columns: 1fr 64px; } .mk-skill-label { grid-column: 1 / -1; } }
+.mk-pct { display: grid; grid-template-columns: minmax(180px, 40%) 1fr; gap: 10px 16px; align-items: center; font-size: 12.5px; }
+.mk-pct > .mk-cal-legend { grid-column: 1 / -1; margin: 0 0 4px; }
+.mk-pct-row { display: contents; }
+.mk-pct-bars { display: flex; flex-direction: column; gap: 3px; }
+.mk-pct-line { display: grid; grid-template-columns: 1fr 44px; gap: 10px; align-items: center; }
+.mk-pct-track { height: 8px; background: var(--surface-inset); border-radius: 4px; overflow: hidden; }
+.mk-pct-track > span { display: block; height: 100%; border-radius: 4px; }
+.mk-pct-line .num { text-align: right; font-size: 11.5px; }
+.mk-scroll { max-height: 460px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.mk-scroll .table-wrap { border: none !important; border-radius: 0; }

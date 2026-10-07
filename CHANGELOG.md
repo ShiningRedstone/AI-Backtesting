@@ -3,6 +3,17 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Market simulator: reorganised tabs, working new days, report card with graphs (ADR-110)
+
+| Item | Status |
+|---|---|
+| Seven tabs by purpose: Start here · Market behaviour · Patterns · Predictions · Day replay · Live (new days) · Holdout tests | IMPLEMENTED |
+| New days predicted from the first day (the holdout is only history once a look is used); problems and download errors shown; size ranges and per-day scores | IMPLEMENTED, TESTED |
+| Report card: what works first, then no skill; skill bars with 95 % ranges; month-by-month skill (discovery, holdout, new days); said-vs-happened calibration | IMPLEMENTED, TESTED |
+| Day replay with previous / next, a day summary and the level map on the chart; charts for days, sessions, weekdays, NQ vs ES, news, shocks, level kinds | IMPLEMENTED |
+| Direction of the 15-min candle on your data | ABOUT 50 % (no forecast of direction beats its baseline; shown under "No skill") |
+| Backtests, rules, costs, configs, tries, the research protocol, both holdout looks | UNCHANGED |
+
 ## Market simulator: direction calls + second holdout look (ADR-109)
 
 | Item | Status |

@@ -202,8 +202,11 @@ ADR-109: Market simulator direction calls (`market/direction.py`): REST of the 1
 FVG / IFVG / BOS / CHoCH / fills in this + previous candle, liquidity sweep -> shift -> FVG, resting FVG magnets 5m-1D), calls only at >= 55 %
 with tau chosen on early months (Wilson, Bonferroni over taus; none if not above 50 %); `direction.json/.npz` per analysis (`DIRECTION_VERSION` 1);
 SECOND holdout look = companion role `market_sim_direction` (1 look, exposure note names the first look; labelled not clean).
+ADR-110: Market simulator UI in `web/src/pages/market/*` (7 tabs: Start here, Market behaviour, Patterns, Predictions, Day replay, Live (new days),
+Holdout tests; old routes kept); report card `market/report.py` (`/api/market/report`, saved predictions only: discovery / holdout / new-day skill,
+monthly, calibration); new days predicted from day 1 with the holdout as plain history once a look is used (`newdays._history`), problems shown.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-109.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-110.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -260,8 +263,9 @@ remains. Do not rely on this file alone.
   - My strategy (ADR-93/94/95): Overview (strategy summary), Settings (ES data for SMT + 138 rule settings), Backtest (scrolling backtest list with "Save
     selected for Claude", favourites / rename, prop challenge chain, pasted test plans), Trades (list of all backtests -> trades -> charts per timeframe, checklist),
     Strategy autotuner (step-by-step optimiser, ADR-101), Setup review (blind take / skip on discovery setups, ADR-96), Holdout review (2 strategies, each automatic then manual take / skip with a short result panel, ADR-102/103).
-  - Market simulator (ADR-106): Overview (data, news key + download, analysis, new days), Trend & sessions, NQ vs ES, Patterns
-    (+ edge scan), News (+ shocks), Simulator (direction calls, forecast scores, level map, day viewer with the level ladder and calls, holdout prediction test = one look + mistakes report, second look = direction only, ADR-107/108/109).
+  - Market simulator (ADR-106 ... 110): Start here (data, news, analysis, direction analysis, new days), Market behaviour (Days & sessions |
+    NQ vs ES | News & shocks), Patterns (+ edge scan), Predictions (report card: works / no skill, monthly, calibration, details), Day replay
+    (level map + calls per candle), Live (new days), Holdout tests (first look + second, direction-only look, mistakes reports).
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -488,4 +492,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-109). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-110). Update `README.md` status for phases.

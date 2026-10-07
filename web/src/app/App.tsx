@@ -20,7 +20,7 @@ import { HoldoutPage } from "../pages/Holdout";
 import { FlipsPage } from "../pages/Flips";
 import { RunBacktestPage } from "../pages/RunBacktest";
 import { MyAutotunePage } from "../pages/MyAutotune";
-import { MarketNewsPage, MarketNqEsPage, MarketOverviewPage, MarketPatternsPage, MarketSimulatorPage, MarketTrendPage } from "../pages/Market";
+import { MarketBehaviourPage, MarketDayReplayPage, MarketHoldoutPage, MarketLivePage, MarketPatternsPage, MarketPredictionsPage, MarketStartPage } from "../pages/Market";
 import { EdgeCheckPage, TradeAnatomyPage } from "../pages/Edge";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
 import { UpdateBanner, VersionChip } from "../components/updates";
@@ -42,7 +42,8 @@ const NAV: NavItem[] = [
   { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
   { path: "/edge", label: "Edge lab", tid: "edge", icon: "search", heads: ["edge", "edge-anatomy"] },          // ADR-104
   { path: "/market", label: "Market simulator", tid: "market", icon: "pulse",
-    heads: ["market", "market-trend", "market-nqes", "market-patterns", "market-news", "market-sim"] },          // ADR-106
+    heads: ["market", "market-behaviour", "market-trend", "market-nqes", "market-patterns", "market-news", "market-predictions", "market-sim",
+      "market-day", "market-live", "market-holdout"] },          // ADR-106 / ADR-110
   { path: "/settings", label: "Settings", tid: "settings", icon: "gear", heads: ["settings", "datasets"] },
 ];
 
@@ -58,14 +59,18 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   paper: [{ path: "/paper", label: "Paper accounts", head: "paper" }, { path: "/paper/new", label: "Start paper trading", head: "paper/new" },
     { path: "/prop", label: "Backtest prop check", head: "prop" }],
   edge: [{ path: "/edge", label: "Edge check", head: "edge" }, { path: "/edge-anatomy", label: "Trade anatomy", head: "edge-anatomy" }],
-  market: [{ path: "/market", label: "Overview", head: "market" }, { path: "/market-trend", label: "Trend & sessions", head: "market-trend" },
-    { path: "/market-nqes", label: "NQ vs ES", head: "market-nqes" }, { path: "/market-patterns", label: "Patterns", head: "market-patterns" },
-    { path: "/market-news", label: "News", head: "market-news" }, { path: "/market-sim", label: "Simulator", head: "market-sim" }],
+  market: [{ path: "/market", label: "Start here", head: "market" },                                             // ADR-110: by purpose
+    { path: "/market-behaviour", label: "Market behaviour", head: "market-behaviour" }, { path: "/market-patterns", label: "Patterns", head: "market-patterns" },
+    { path: "/market-predictions", label: "Predictions", head: "market-predictions" }, { path: "/market-day", label: "Day replay", head: "market-day" },
+    { path: "/market-live", label: "Live (new days)", head: "market-live" }, { path: "/market-holdout", label: "Holdout tests", head: "market-holdout" }],
   settings: [{ path: "/settings", label: "Settings", head: "settings" }, { path: "/datasets", label: "Data", head: "datasets" }],
   my: [{ path: "/my", label: "Overview", head: "my" }, { path: "/my-settings", label: "Settings", head: "my-settings" },
     { path: "/my-backtest", label: "Backtest", head: "my-backtest" }, { path: "/my-trades", label: "Trades", head: "my-trades" },
     { path: "/my-autotune", label: "Strategy autotuner", head: "my-autotune" }, { path: "/my-setup", label: "Setup review", head: "my-setup" }, { path: "/my-holdout", label: "Holdout review", head: "my-holdout" }],
 };
+
+const MARKET_ALIAS: Record<string, string> = { "market-trend": "market-behaviour", "market-nqes": "market-behaviour",   // ADR-110: old routes
+  "market-news": "market-behaviour", "market-sim": "market-predictions" };
 
 const tabOf = (head: string) => NAV.find((n) => n.heads.includes(head));
 
@@ -129,12 +134,16 @@ function Page() {
     case "my-plan": return <MyPlanResultPage />;
     case "edge": return <EdgeCheckPage />;                       // ADR-104: Edge lab
     case "edge-anatomy": return <TradeAnatomyPage />;
-    case "market": return <MarketOverviewPage />;                // ADR-106: Market simulator
-    case "market-trend": return <MarketTrendPage />;
-    case "market-nqes": return <MarketNqEsPage />;
+    case "market": return <MarketStartPage />;                   // ADR-106 / ADR-110: Market simulator (old routes kept)
+    case "market-behaviour": return <MarketBehaviourPage />;
+    case "market-trend": return <MarketBehaviourPage initial="days" />;
+    case "market-nqes": return <MarketBehaviourPage initial="nqes" />;
+    case "market-news": return <MarketBehaviourPage initial="news" />;
     case "market-patterns": return <MarketPatternsPage />;
-    case "market-news": return <MarketNewsPage />;
-    case "market-sim": return <MarketSimulatorPage />;
+    case "market-predictions": case "market-sim": return <MarketPredictionsPage />;
+    case "market-day": return <MarketDayReplayPage />;
+    case "market-live": return <MarketLivePage />;
+    case "market-holdout": return <MarketHoldoutPage />;
     default: return <div className="page"><h1>Not found</h1><p><a href={href("/")}>Back to Home</a></p></div>;
   }
 }
@@ -231,7 +240,7 @@ function ShellBody() {
           no broker connections</div>
       </nav>
       <div className="scrim" onClick={() => setMenu(false)} />
-      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} sub={active === "paper" && route.parts[1] === "new" ? "paper/new" : active} /><Page /></>}</main>
+      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} sub={active === "paper" && route.parts[1] === "new" ? "paper/new" : (MARKET_ALIAS[active] ?? active)} /><Page /></>}</main>
       <Toasts />
     </div>
   );

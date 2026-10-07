@@ -26,8 +26,11 @@ export interface AnalysisHead { key: string; computed_at: string; days: number;
 export interface MarketStatus { news: NewsStatus; analysis: AnalysisHead | null; job: (MyJob & { what?: string }) | null;
   es: { imported: boolean; first_bar_open_utc?: string; last_bar_open_utc?: string }; protocol: boolean;
   newdays: { nq: { days: number; first: string | null; last: string | null }; es: { days: number; first: string | null; last: string | null };
-    first_date?: string; problem?: string;
-    scores: { days: string[]; candles: number; up: Record<string, Score | null>; size: Record<string, Score | null>; computed_at: string } | null } }
+    first_date?: string; problem?: string; last_problem?: { problem: string; code: string; at: string } | null;
+    last_update?: { checked_at: string; errors: Record<string, string>; downloaded: Record<string, number> } | null;
+    scores: { days: string[]; candles: number; up: Record<string, Score | null>; size: Record<string, Score | null>; computed_at: string;
+      history?: string; warmup_days?: number; by_day?: NewDayRow[] } | null };
+  direction: boolean; holdout_used: { first: boolean; second: boolean } }
 export interface PatternRow { kind: string; tf: number; dir: number; n: number; per_day: number; touched: number; ce: number; filled: number;
   filled_1h: number; filled_1d: number; filled_5d: number; median_touch_min: number | null; median_fill_min: number | null; left_behind: number;
   left_behind_median_age_days: number | null; held: number | null; held_n: number; edge: number | null; edge_n: number; median_size_atr: number | null;
@@ -82,6 +85,20 @@ export interface DirectionHoldout { available: boolean; problem?: string; used?:
     discovery: Record<string, { calls: CallScore | null; skill: Score | null }> } | null }
 export interface DirectionStatus { analysis: boolean; summary: DirectionSummary | null; holdout: DirectionHoldout; words: Record<string, string> }
 export interface DayCall { p: number | null; called: boolean; ref: number; actual: number }
+export interface ReportScore { n: number; skill: number | null; skill_ci?: [number, number] | null; real?: boolean; accuracy?: number;
+  baseline_accuracy?: number }
+export interface ReportTarget { id: string; group: string; group_name: string; name: string; kind: "binary" | "real"; baseline: string; model: string;
+  discovery: Score | null; chosen_on?: string; reported_on?: string; works: boolean;
+  monthly: Partial<Record<"discovery" | "holdout" | "new", { month: string; n: number; skill: number | null; accuracy?: number }[]>>;
+  sources: Partial<Record<"holdout" | "new", ReportScore | null>>; calibration?: { from: number; n: number; said: number; happened: number }[] | null;
+  calibration_by?: Partial<Record<"holdout" | "new", { from: number; n: number; said: number; happened: number }[]>>;
+  bands?: { inside_50: number; inside_80: number; n: number } | null;
+  calls?: { rule?: CallRule; discovery?: CallScore; holdout?: CallScore; new?: CallScore } }
+export interface Report { key: string; targets: ReportTarget[]; groups: Record<string, string>;
+  holdout: { first_used: boolean; second_used: boolean; window?: { start: string; end: string } | null };
+  new_days: { days: number; history?: string | null; computed_at?: string | null }; direction_ready: boolean }
+export interface NewDayRow { date: string; candles?: number; up_right?: number; up_base_right?: number; size_error?: number; size_base_error?: number;
+  levels?: number; level_right?: number; level_base_right?: number; calls?: number; calls_right?: number }
 export interface Section<T> { key: string; name: string; data: T; kinds: Record<string, string>; sessions: string[] }
 
 export interface DayCandle { t: number; o: number; h: number; l: number; c: number; p_up?: Record<string, number | null>;
@@ -103,6 +120,7 @@ export const market = {
   analyze: (force = false) => api.post<MyJob>("/api/market/analyze", { force }),
   newdays: () => api.post<MyJob>("/api/market/newdays", {}),
   directionUrl: "/api/market/direction",
+  reportUrl: "/api/market/report",
   runDirection: (force = false) => api.post<MyJob>("/api/market/direction/run", { force }),
   runDirectionHoldout: (confirm: string) => api.post<MyJob>("/api/market/direction/holdout", { confirm }),
   job: (id: string) => api.get<MyJob & { done: boolean }>(`/api/market/jobs/${enc(id)}`),

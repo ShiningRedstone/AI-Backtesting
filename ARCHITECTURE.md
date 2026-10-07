@@ -2979,3 +2979,31 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   second look recorded before the holdout is read, own protocol and exposure note, second use refused, first look
   untouched; API and day view.
 - **Never:** a run, a trial, a change to backtests, rules, costs or configs; nothing from either holdout look trains a model.
+
+### ADR-110 Market simulator reorganised by purpose; new days predicted from day 1; report card with graphs
+- **Request (user):** direction stays ~50 % (confirmed: no forecast of direction beats its baseline); testing on new market
+  data did not work / was not displayed well; the tab was confusing - organise the sub-tabs by what they do, show every
+  number reader-friendly with graphs where possible, fix spacing. Answers: 7 tabs by purpose; new days predicted from
+  the first day with the holdout as history (once a look is used); "works" first, "no skill" below; graphs = skill bars
+  with ranges, calibration, skill month by month.
+- **Why new days "did not work":** a prediction needed 20 new days of its own history (the holdout was kept out even as
+  history) and a too-few-days refusal was only in the job result, never shown. Now `newdays._history`: once a Market
+  simulator holdout look (first or second) is USED, discovery + holdout minutes are the history in front of the new days
+  (ATR, previous day / week, swings, open FVGs); they never train anything; every new day is predicted. Before any look
+  the 20-day warm-up stays. Problems are stored (`last_problem.json`) and shown with download errors; new days get
+  candle-size ranges (discovery out-of-sample residuals, as the holdout test) and per-day scores (`by_day`).
+- **Report card** (`market/report.py`, `GET /api/market/report`): every forecast (candle size / up, reference levels,
+  level map, direction calls per stage, bias, landing) from the SAVED predictions only: official model, discovery score
+  on the months the choice never saw, holdout and new-day scores with day-bootstrap ranges, month-by-month skill per
+  source, calibration (said vs happened) per source, call statistics. "Works" = discovery range above 0.
+- **UI** (`web/src/pages/market/*`, one file per tab): Start here (5 steps with done / to do, headline of what works),
+  Market behaviour (Days & sessions | NQ vs ES | News & shocks, charts first), Patterns, Predictions (works / no skill
+  skill bars with whiskers, every test at a glance, look-closer detail with monthly + calibration charts, direction
+  calls, mistakes, level kinds as bars), Day replay (src / day in the address, previous / next, day summary, one chart
+  with the level map of a chosen moment, level ladder, candle table with the calls), Live (new days) (status and
+  problems, KPIs, skill bars on new days, day-by-day chart and list linking to the replay), Holdout tests (both looks,
+  one chart, exact numbers folded, mistakes). Old routes (`/market-trend`, `-nqes`, `-news`, `-sim`) still open their
+  new place. One spacing rhythm for the tab (`.mk` styles).
+- **Tests:** new days from day 1 after a look (every downloaded day predicted, size ranges, per-day rows), minute series
+  joined without duplicates, report card with discovery / holdout / new sources, API fields. Phase 1 demo identical.
+- **Never:** a run, a trial, a holdout look, a change to backtests, rules, costs or configs; the holdout trains nothing.

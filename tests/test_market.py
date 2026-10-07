@@ -26,6 +26,9 @@ Guarantees tested:
   calls that beat the baseline; a planted inside-candle reversal is found at minute 5 (and not at the open, where it
   cannot be known); the SECOND holdout look is its own one-look companion protocol whose exposure note names the first
   look, is recorded before any holdout minute is read and refuses a second use.
+* ADR-110: once a holdout look is used, new days are predicted from the FIRST new day (the holdout minutes are only the
+  history in front of them); minute series join without duplicates; the report card lists every forecast with its
+  scores on discovery, the holdout and new days; per-day new-day scores exist.
 """
 import json
 import os
@@ -373,6 +376,19 @@ class TestDirection(unittest.TestCase):
         self.assertEqual(res["top_inputs"][0]["input"], "so_move")
 
 
+class TestNewDaysJoin(unittest.TestCase):
+    def test_concat_sorted_without_duplicates(self):
+        from edgelab.market import newdays as ND
+        a = walk("2023-01-02", "2023-01-06", seed=1)
+        b = walk("2023-01-05", "2023-01-11", seed=2)
+        j = ND._concat(a, b)
+        self.assertTrue((np.diff(j.ts) > 0).all())
+        self.assertEqual(len(j), len(np.union1d(a.ts, b.ts)))
+        k = np.searchsorted(j.ts, a.ts)
+        np.testing.assert_array_equal(j.c[k], a.c)                            # a minute in both is kept from the first
+        self.assertIs(ND._concat(None, b), b)
+
+
 class TestNews(unittest.TestCase):
     def test_timezone_proof(self):
         cal = N.build(news_json("2022-01-01", "2023-12-31", zone="NY+7"), {"sha256": "x"})
@@ -503,6 +519,19 @@ class TestMarketService(unittest.TestCase):
             sc = ND.predict(svc, self.res["key"])
             self.assertGreater(sc["candles"], 100)
             self.assertIn("logistic", sc["up"])
+            self.assertEqual(sc["history"], "holdout")                       # the looks are used (tests above)
+            self.assertEqual(sc["warmup_days"], 0)
+            self.assertEqual(len(sc["days"]), u["nq"]["days"])                 # every new day predicted, from day 1
+            self.assertEqual([d["date"] for d in sc["by_day"]], sc["days"])
+            with np.load(ND.folder(svc.data_root, "") / f"predictions_{self.res['key']}.npz") as z:
+                self.assertTrue(np.isfinite(z["size_q"]).any())                 # size ranges for new days too
+            rep = svc.market_report()
+            ids = {t["id"] for t in rep["targets"]}
+            self.assertTrue({"size", "up", "reach2h", "dir0"} <= ids)
+            size = next(t for t in rep["targets"] if t["id"] == "size")
+            self.assertIn("new", size["sources"])
+            self.assertIn("holdout", size["sources"])
+            self.assertTrue(size["monthly"]["discovery"])
         finally:
             svc.store.close()
 
@@ -634,6 +663,12 @@ class TestMarketService(unittest.TestCase):
         self.assertEqual(c.get("/api/market/day/2023-99-99x").status_code, 400)
         self.assertEqual(c.post("/api/market/news/key", json={"key": "short"}).status_code, 422)
         self.assertEqual(c.get("/api/market/jobs/nope").status_code, 400)
+        rep = c.get("/api/market/report").get_json()                         # ADR-110 report card
+        self.assertTrue(rep["targets"])
+        self.assertTrue(all("works" in t and "monthly" in t for t in rep["targets"]))
+        st = c.get("/api/market").get_json()
+        self.assertIn("holdout_used", st)
+        self.assertIn("last_problem", st["newdays"])
 
 
 if __name__ == "__main__":

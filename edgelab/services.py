@@ -2772,7 +2772,12 @@ class Services:
                                      "late": (((fc.get(t) or {}).get("scores") or {}).get((fc.get(t) or {}).get("chosen") or "")
                                               or {}).get("late")} for t in ("up", "size", "bias", "levels")}}
         parent = R._parent(self)
+        from edgelab.market import direction as DR, holdout as H
+        used = {"first": False, "second": False}
+        if parent:
+            used = {"first": bool(H.status(self).get("used")), "second": bool(DR.holdout_status(self).get("used"))}
         return _jsonable({"news": N.status(self.data_root), "analysis": head, "job": self._market_jobs().active(),
+                          "direction": bool(latest and DR.latest(self.data_root, latest["key"])), "holdout_used": used,
                           "es": ES.status(self.data_root), "protocol": bool(parent),
                           "newdays": {**ND.status(self), "scores": ND.scores(self.data_root, head["key"]) if head else None}})
 
@@ -2817,9 +2822,11 @@ class Services:
                 return {"update": st, "scores": None}
             try:
                 sc = ND.predict(self, latest["key"], step)
+                ND.set_problem(self.data_root, None)
             except ND.NewDaysError as e:
                 sc = {"problem": e.message, "code": e.code}
-            return {"update": st, "scores": sc}
+                ND.set_problem(self.data_root, sc)              # shown on the Live tab until a prediction succeeds
+            return {"update": {k: st.get(k) for k in ("nq", "es", "errors")}, "scores": {"candles": sc.get("candles")}}
         return self._market_jobs().start("market_newdays", work, meta={"what": "newdays"})
 
     def market_holdout(self) -> dict:
@@ -2833,6 +2840,11 @@ class Services:
             raise H.HoldoutTestError("CONFIRM_REQUIRED", "Type HOLDOUT to spend the one look.")
         return self._market_jobs().start("market_holdout", lambda step: _market_light(H.run(self, lock=self.lock, progress=step)),
                                          meta={"what": "holdout"})
+
+    def market_report(self) -> dict:
+        """ADR-110: the report card of every forecast (saved predictions only; discovery, holdout after a look, new days)."""
+        from edgelab.market import report as RP
+        return _jsonable(RP.build(self))
 
     def market_direction(self) -> dict:
         """ADR-109: the direction calls (walk-forward summary of the current analysis) and the second holdout look."""

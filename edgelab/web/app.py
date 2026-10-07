@@ -1240,6 +1240,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("confirm must be text")
         return jsonify(call(svc.market_holdout_run, confirm)), 202
 
+    @app.get("/api/market/report")                     # ADR-110: report card of every forecast
+    def market_report():
+        return jsonify(call(svc.market_report))
+
     @app.get("/api/market/direction")                  # ADR-109: direction calls + the second holdout look
     def market_direction():
         return jsonify(call(svc.market_direction))
