@@ -2899,3 +2899,42 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   refused, chance levels match on a random walk, rare shocks, gap half-fills, grouped / cost-checked cells, constant
   baseline; on random data the holdout test shows no skill. Phase 1 demo identical.
 - **Never:** a run, a trial, a change to backtests, rules, costs or configs; the parent protocol is untouched.
+
+### ADR-108 Market simulator level map: which level is tapped, does price react, where does it land (+ mistakes report)
+- **Request (user):** the analyser should predict where the 15-minute market goes: with e.g. two stacked FVGs, which
+  one gets tapped (higher-timeframe bias, liquidity draws, past patterns, candle sizes, time of day, news before /
+  after), where price lands and off which FVG, equilibrium or fib level it reacts; plus a way to learn from the holdout
+  mistakes without spoiling it. Answers: horizons 2 hours and the rest of the session; EQ / fibs from the last confirmed
+  swing range on 15m, 1h and 4h; OTE 0.618 / 0.705 / 0.79 + the 50 % EQ; a reaction = 1 ATR(15m) away from the level
+  before 1 ATR through it; holdout learning = a mistakes report only (no retraining); the level map is part of the
+  (still unused) holdout look.
+- **Level map** (`market/levelmap.py`): at 9:30, 10:00 ... 15:30 NY, every level known before that moment: open FVGs of
+  5m / 15m / 1h / 4h / 1D (next untraded part: edge, CE once tapped, far edge past CE; same-direction zones within
+  0.25 ATR = a stack with size / rank / timeframes), dealing-range EQ and OTE of 15m / 1h / 4h (last confirmed swing
+  high and low, 2 bars each side, measured back from the later swing), untaken swing highs / lows, equal highs / lows,
+  previous day / week / session, Asia, London, today's high / low so far, 18:00 / midnight / 9:30 opens; within 10 ATR,
+  per side the 5 nearest + the nearest of every kind. Inputs: distance, time left, kind, chart, stack, confluence, age,
+  traded today, room behind, every forecast input (`forecast.features`) and each directional one signed toward the
+  level (trend 15m...1D, moves, ES, SMT, sweeps, news surprise, shocks). Targets: traded within 2 h / by the session
+  end, reacts (touch minute already 1 ATR through = through; else the race starts at the next minute; unresolved
+  left out), nearest above before nearest below, landing 2 h / session end (ATR units, bands from out-of-sample
+  residuals), turning level per side (derived: P(reach) x P(react) x the nearer levels not reacting, labelled as a
+  combined estimate). Baselines: random-walk logistic (distance, time left, current volatility) for reach, gambler's
+  ruin for which-first, the training reaction rate for reacts, no change for landing. Same walk-forward (boosting every
+  6 months on <= 40,000 evenly spaced rows: `walk_forward(base_p=, gbm_every=, gbm_rows=, fit_mask=)`, defaults
+  unchanged; every level / moment is PREDICTED, only rows with a resolved outcome are learned from and scored, so the
+  turning level never knows which levels were touched), the
+  same 70 / 30 model choice and day-bootstrap "real" test. `ANALYSIS_VERSION` 3.
+- **Mistakes report:** per target, buckets of time of day, news (next 2 h / last hour), last-hour volatility (discovery
+  terciles), weekday, 1h trend (with / against the level), level kind, chart, distance, FVG stack: n, skill vs the
+  baseline, hit rate, said vs happened, plain-English findings (worse than the baseline, or 8+ points off), the most
+  confident misses. On discovery for the later 30 % of months; after the holdout look for the holdout (with the
+  discovery skill of the same bucket beside it) and for the candle up / size forecasts. Descriptive; never fed back.
+- **Holdout test:** also freezes the level-map models on discovery (part of the fingerprint) and scores them on the
+  holdout after the look; holdout day view shows the level map. New days get the level map too (frozen models).
+- **Lookahead fix found by the new test** (every minute from the decision on REPLACED, not removed): an FVG filled by
+  the minute OPENING at the decision time counted as already filled in `forecast.features` / `level_rows` and the
+  cross-timeframe context (`crosstf`) -> `end_ns >= t` (still open). Analyses are recomputed (version 3).
+- **Tests:** levels and inputs identical with another future, EQ / OTE known answer, random walk: which-first =
+  gambler's ruin, reactions ~50 %, no model "real"; holdout result has the level map and mistakes; day views.
+- **Never:** a run, a trial, a change to backtests, rules, costs or configs; nothing from the holdout trains a model.

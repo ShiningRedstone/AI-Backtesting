@@ -26,6 +26,7 @@ from edgelab.market import forecast as F
 from edgelab.market import gbm as G
 
 TARGETS = ("up", "size", "bias", "levels")
+LEVELMAP_TARGETS = ("reach2h", "reach", "react", "first", "land2h", "land")
 GBM_TREES = 90
 
 
@@ -137,17 +138,22 @@ def _predict(m: dict, X, slot, base_X=None) -> dict:
     return out
 
 
-def _fingerprint(analysis_key: str, chosen: dict, names: list) -> str:
+def _fingerprint(analysis_key: str, chosen: dict, names: list, lchosen: dict | None = None,
+                 lnames: dict | None = None) -> str:
     from edgelab.core.identity import hash_obj
     from edgelab.mystrategy import runner as R
-    return hash_obj({"analysis": analysis_key, "chosen": chosen, "inputs": names, "gbm_trees": GBM_TREES,
-                     "neighbours": F.NEIGHBOURS, "code": R._code_version()}, 16)
+    obj = {"analysis": analysis_key, "chosen": chosen, "inputs": names, "gbm_trees": GBM_TREES,
+           "neighbours": F.NEIGHBOURS, "code": R._code_version()}
+    if lchosen is not None:
+        obj["levelmap"] = {"chosen": lchosen, "inputs": lnames}
+    return hash_obj(obj, 16)
 
 
 def run(svc, *, lock=None, progress=None) -> dict:
     from contextlib import nullcontext
 
     from edgelab.market import analysis as A
+    from edgelab.market import levelmap as L
     from edgelab.market import news as N
     from edgelab.mystrategy import runner as R
     step = progress or (lambda s: None)
@@ -170,6 +176,10 @@ def run(svc, *, lock=None, progress=None) -> dict:
         raise HoldoutTestError("HOLDOUT_LOOK_USED", "The holdout prediction test is already used (one look only).")
     fc = latest["forecast"]
     chosen = {t: (fc.get(t) or {}).get("chosen") or "logistic" for t in TARGETS}
+    lm_sum = latest.get("levelmap") or {}
+    if not (lm_sum.get("targets") or {}):
+        raise HoldoutTestError("ANALYSIS_OUTDATED", "The analysis has no level map. Run the analysis again first.")
+    lchosen = {t: (lm_sum["targets"].get(t) or {}).get("chosen") or "logistic" for t in LEVELMAP_TARGETS}
     # ---------------------------------------------------------------- 2. train and freeze on discovery only
     step("Training the frozen models on the whole discovery period")
     news_d = N.events(svc.data_root, mk.start.value, mk.end.value) if news_ok else []
@@ -194,8 +204,15 @@ def run(svc, *, lock=None, progress=None) -> dict:
         pr, yy = z[f"size_{chosen['size']}"].astype(float), z["size"].astype(float)
     ok = np.isfinite(pr)
     band_q = np.quantile((yy - pr)[ok], [0.1, 0.25, 0.75, 0.9]) if ok.sum() > 300 else np.zeros(4)
-    fp = _fingerprint(latest["key"], chosen, names)
-    del cxd
+    step("Training the frozen level-map models (FVGs, EQ / OTE, liquidity) on the whole discovery period")
+    bd = L.build(cxd, progress=step)
+    lfm = L.fit_frozen(bd, GBM_TREES)
+    vol_lm = lm_sum.get("volatility_cuts") or L.volatility_cuts(bd)
+    jv = names.index("size60")
+    vol_c = [float(np.quantile(Xd[:, jv], 1 / 3)), float(np.quantile(Xd[:, jv], 2 / 3))]
+    lband = L.bands_from_analysis(A.home(svc.data_root) / f"analysis_{latest['key']}" / "levelmap.npz", lchosen)
+    fp = _fingerprint(latest["key"], chosen, names, lchosen, lfm["names"])
+    del cxd, bd
     # ---------------------------------------------------------------- 3. the look is recorded
     w = R.windows(parent["material"])
     hs, he = R._ts(w["holdout"]["start"]), R._ts(w["holdout"]["end"])
@@ -256,6 +273,25 @@ def run(svc, *, lock=None, progress=None) -> dict:
                                          chosen["bias"])
         res["targets"]["levels"] = _scores(p_l, lrh["reached"][sl].astype(float), np.ones(int(sl.sum()), bool),
                                            lrh["day"][sl].astype("datetime64[D]"), "binary", chosen["levels"])
+        step("Level map on the holdout: every level, tapped first, reactions, where price landed")
+        bh = L.build(cx, start_ns=hs.value, progress=step)
+        if bh["n_dec"]:
+            fr = L.frozen_period(lfm, bh, lchosen, lband, home(svc.data_root) / "levelmap.npz")
+            lp, lres = fr["preds"], fr["scores"]
+            yl = L._targets(bh)
+            disc_m = lm_sum.get("mistakes") or {}
+            lres["mistakes"] = {}
+            for t in LEVELMAP_TARGETS:
+                mres = L.mistakes(bh, lp[t], yl[t], t, lchosen[t], vol_lm)
+                _compare(mres, disc_m.get(t))
+                lres["mistakes"][t] = mres
+            res["levelmap"] = lres
+        step("Mistakes report: where and why the predictions failed (descriptive, nothing is retrained)")
+        cb = L.candle_buckets(Xh, names, t_h, vol_c)
+        res["mistakes"] = {"up": L.mistakes_core(p_up[chosen["up"]], p_up["baseline"], yb, "binary", cb, mu),
+                           "size": L.mistakes_core(p_sz[chosen["size"]], None, size_h, "real", cb, np.isfinite(size_h))}
+        for k in ("up", "size"):
+            res["mistakes"][k].update(target=k, model=chosen[k])
         res = _jsonable(res)
         np.savez_compressed(home(svc.data_root) / "predictions.npz", t=t_h, up=up_h, size=size_h,
                             day=day_h.astype(np.int64), size_q=q.astype(np.float32),
@@ -268,15 +304,29 @@ def run(svc, *, lock=None, progress=None) -> dict:
         from edgelab.core.fsutil import atomic_write_text
         atomic_write_text(home(svc.data_root) / "result.json", json.dumps(res))
         with guard:
+            summary = {t: (v.get("official") or {}).get("skill") for t, v in res["targets"].items()}
+            summary.update({"levelmap_" + t: ((res.get("levelmap") or {}).get(t, {}).get("official") or {}).get("skill")
+                            for t in LEVELMAP_TARGETS})
             svc.store.update_holdout_access(access_id, status="completed", completed_at=R._now(),
-                                            result_json=json.dumps({t: (v.get("official") or {}).get("skill")
-                                                                    for t, v in res["targets"].items()}))
+                                            result_json=json.dumps(summary))
         return res
     except Exception as exc:                                       # the look stays spent; the failure is recorded
         with guard:
             svc.store.update_holdout_access(access_id, status="failed", completed_at=R._now(),
                                             reason_code=type(exc).__name__, reason=str(exc)[:500])
         raise
+
+
+def _compare(mres: dict, disc: dict | None) -> None:
+    """Puts the discovery walk-forward's skill of the same bucket next to each holdout bucket (same weak spots, or new
+    ones?)."""
+    if not disc or not mres.get("groups"):
+        return
+    ref = {(g["group"], r["bucket"]): r.get("skill") for g in disc.get("groups", []) for r in g["rows"]}
+    for g in mres["groups"]:
+        for r in g["rows"]:
+            r["discovery_skill"] = ref.get((g["group"], r["bucket"]))
+    mres["discovery_skill"] = disc.get("skill")
 
 
 def P_ny(t):

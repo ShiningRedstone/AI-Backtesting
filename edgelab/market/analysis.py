@@ -20,7 +20,8 @@ from edgelab.market import news as N
 from edgelab.market import newsfx, nqes, shocks, trend
 from edgelab.market import patterns as P
 
-ANALYSIS_VERSION = 2                    # 2: ADR-107 fixes (costs per session, stricter shocks, chance levels, constant baseline ...)
+ANALYSIS_VERSION = 3                    # 2: ADR-107 fixes (costs per session, stricter shocks, chance levels, constant baseline ...)
+                                        # 3: ADR-108 level map (FVG stacks, EQ / OTE, liquidity; reach, react, first, lands)
 SEED = 20261006
 BASE_SAMPLES = 4000
 KIND_WORDS = {
@@ -194,6 +195,8 @@ def run(svc, *, lock=None, progress=None, force: bool = False) -> dict:
     from edgelab.market import forecast as F
     cx = F.Context(m, es, news_all)
     res["forecast"] = F.run(cx, out_dir, step)
+    from edgelab.market import levelmap as L
+    res["levelmap"] = L.run(cx, out_dir, step)
     res = _jsonable(res)
     atomic_write_text(done, json.dumps(res))
     R._write_json(home(svc.data_root) / "latest.json", {"key": key})

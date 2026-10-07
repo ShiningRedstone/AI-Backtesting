@@ -3,6 +3,19 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Market simulator: level map + mistakes report (ADR-108)
+
+| Item | Status |
+|---|---|
+| Level map at 9:30 … 15:30: open FVGs of 5m-1D (stacks grouped), EQ + OTE 0.618 / 0.705 / 0.79 of the 15m / 1h / 4h swing range, liquidity levels | IMPLEMENTED, TESTED |
+| Per level: traded within 2 h / by the close, reacts (1 ATR away before 1 ATR through); which side first; where price lands (2 h, session end, bands); the turning level | IMPLEMENTED, TESTED (random walk: no skill, which-side-first = gambler's ruin) |
+| Inputs: higher-timeframe trend toward the level, liquidity, stacks, candle sizes, time of day, news before / after, ES, SMT, shocks | IMPLEMENTED |
+| Mistakes report (time of day, news, volatility, level kind, chart, distance, trend, stack) on discovery and after the holdout look; nothing retrained | IMPLEMENTED, TESTED |
+| Level map in the holdout test (the look is still unused) and in new days / the day viewer | IMPLEMENTED, TESTED |
+| One-minute lookahead fixed: an FVG filled by the minute opening at the decision counted as already filled | IMPLEMENTED, TESTED |
+| Whether the level map beats the random walk on your data | REQUIRES REAL DATA (re-run the analysis: version 3) |
+| Backtests, rules, costs, configs, tries, the research protocol | UNCHANGED |
+
 ## Market simulator: review fixes + holdout prediction test (ADR-107)
 
 | Item | Status |

@@ -18,6 +18,10 @@ Guarantees tested:
   0.1 % per timeframe; opening gaps get their 50 % fill; divergence closings split into NQ / ES / both; confirmed edge
   cells are grouped and checked against costs; the holdout prediction test records its ONE look BEFORE any holdout
   minute is loaded, predicts only holdout candles, refuses a second look and shows holdout days only after the look.
+* ADR-108 level map: the levels and inputs at a decision are identical when every minute from then on is replaced;
+  EQ / OTE are the stated fractions of the last confirmed swing range; on a random walk the nearest-level race matches
+  the gambler's-ruin probability, reactions are near 50 %, no model shows real skill; the holdout look scores the
+  level map and writes the mistakes report.
 """
 import json
 import os
@@ -232,6 +236,84 @@ class TestForecast(unittest.TestCase):
         self.assertGreater(sc["skill_ci"][0], 0)
 
 
+class TestLevelMap(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from edgelab.market import levelmap as L
+        cls.m = walk("2023-01-02", "2023-08-31", seed=7)
+        cls.cx = F.Context(cls.m, None, [])
+        cls.b = L.build(cls.cx)
+
+    def test_levels_and_inputs_are_live(self):
+        from edgelab.market import levelmap as L
+        m, b = self.m, self.b
+        XL, _ = L.level_matrix(b)
+        for q in (len(b["dec"]["t"]) - 40, len(b["dec"]["t"]) - 7):
+            t = int(b["dec"]["t"][q])
+            cut = np.searchsorted(m.ts, t)
+            rng = np.random.default_rng(q)
+            c = m.c.copy()
+            c[cut:] = c[cut - 1] + np.cumsum(rng.normal(0, 3, len(c) - cut))      # another future
+            o = np.r_[m.o[:cut], c[cut - 1], c[cut:-1]]
+            h = np.r_[m.h[:cut], np.maximum(o[cut:], c[cut:]) + 0.5]
+            lo = np.r_[m.l[:cut], np.minimum(o[cut:], c[cut:]) - 0.5]
+            m2 = D.Minute(m.ts, o, h, lo, c)
+            b2 = L.build(F.Context(m2, None, []), start_ns=t)
+            self.assertEqual(int(b2["dec"]["t"][0]), t)
+            X2, _ = L.level_matrix(b2)
+            r1 = np.flatnonzero(b["rows"]["dec"] == q)
+            r2 = np.flatnonzero(b2["rows"]["dec"] == 0)
+            np.testing.assert_allclose(b2["rows"]["price"][r2], b["rows"]["price"][r1])
+            self.assertEqual([b2["rows"]["label_words"][i] for i in b2["rows"]["label"][r2]],
+                             [b["rows"]["label_words"][i] for i in b["rows"]["label"][r1]])
+            np.testing.assert_allclose(X2[r2], XL[r1], rtol=1e-9, atol=1e-9)
+
+    def test_dealing_range_levels(self):
+        from edgelab.market import levelmap as L
+        src = L.Source(self.cx)
+        t = int(self.b["dec"]["t"][-30])
+        q = len(self.b["dec"]["t"]) - 30
+        info = F.features(self.cx, np.array([t]))[2]
+        cand = L._candidates(src, t, info["px"][0], info["a15"][0], int(info["di"][0]), info["hi_so"][0],
+                             info["lo_so"][0], int(np.searchsorted(self.m.day, self.m.day[np.searchsorted(self.m.ts, t)])))
+        sw = src.swing[60]
+        jh = np.searchsorted(sw["hi"]["known"], t, side="right") - 1
+        jl = np.searchsorted(sw["lo"]["known"], t, side="right") - 1
+        h, lo = sw["hi"]["price"][jh], sw["lo"]["price"][jl]
+        up = sw["hi"]["k"][jh] > sw["lo"]["k"][jl]
+        got = {c[8]: c[0] for c in cand}
+        self.assertAlmostEqual(got["1h equilibrium (50 %)"], (h + lo) / 2)
+        for r in L.OTE:
+            self.assertAlmostEqual(got[f"1h OTE {r:g}"], h - r * (h - lo) if up else lo + r * (h - lo))
+        self.assertTrue(any(c[1] == "fvg" for c in cand))
+        self.assertGreater(q, 0)
+
+    def test_random_walk_chance(self):
+        from edgelab.market import levelmap as L
+        r, d = self.b["rows"], self.b["dec"]
+        rc = r["react"][np.isfinite(r["react"])]
+        self.assertGreater(len(rc), 3000)
+        self.assertTrue(0.42 < rc.mean() < 0.55, rc.mean())       # ~50 % (minute bars: a touch minute closes a bit past)
+        ok = np.isfinite(d["first"])
+        self.assertLess(abs(d["first"][ok].mean() - d["gambler"][ok].mean()), 0.04)
+        out = tempfile.mkdtemp()
+        res = L.run(self.cx, out)
+        with np.load(Path(out) / "levelmap.npz") as z:                 # a reaction is forecast for EVERY level (live:
+            pr = z[f"p_react_{res['targets']['react']['chosen']}"]       # nobody knows yet which will be touched)
+            have = np.isfinite(z["p_reach_logistic"])
+            self.assertTrue(np.isfinite(pr[have]).all())
+            self.assertTrue((have & ~z["row_reach"]).any())
+        for tgt, ev in res["targets"].items():
+            if tgt == "turn":
+                self.assertFalse(ev.get("real"), ev)
+                continue
+            for k, sc in ev["scores"].items():
+                if sc.get("all") and k != "baseline":
+                    self.assertFalse(sc["all"]["real"], (tgt, k, sc["all"]["skill_ci"]))
+        self.assertIn("groups", res["mistakes"]["reach"])
+        self.assertTrue(any(x["kind"] == "stack" for x in res["by_kind"]))
+
+
 class TestNews(unittest.TestCase):
     def test_timezone_proof(self):
         cal = N.build(news_json("2022-01-01", "2023-12-31", zone="NY+7"), {"sha256": "x"})
@@ -394,6 +476,11 @@ class TestMarketService(unittest.TestCase):
             self.assertEqual(events[:2], ["look recorded", "holdout data"])          # the look first, then the holdout
             self.assertGreater(res["candles"], 100)
             self.assertEqual(set(res["targets"]), {"up", "size", "bias", "levels"})
+            lm = res["levelmap"]                                                         # ADR-108: the level map too
+            self.assertEqual(lm["reach"]["official_model"], self.res["levelmap"]["targets"]["reach"]["chosen"])
+            self.assertIn("turn", lm)
+            self.assertIn("groups", lm["mistakes"]["react"])
+            self.assertIn("groups", res["mistakes"]["up"])
             self.assertEqual(res["targets"]["size"]["official_model"], self.res["forecast"]["size"]["chosen"])
             with np.load(H.home(svc.data_root) / "predictions.npz") as z:
                 self.assertGreaterEqual(int(z["t"].min()), hold.value)                  # only holdout candles predicted
@@ -409,6 +496,7 @@ class TestMarketService(unittest.TestCase):
         self.assertTrue(days)
         d = c.get(f"/api/market/day/{days[0]}?src=holdout").get_json()
         self.assertTrue(d["candles"])
+        self.assertTrue(d["levelmap"] and d["levelmap"][0]["levels"])
         self.assertEqual(c.post("/api/market/holdout", json={"confirm": "HOLDOUT"}).status_code, 202)   # job starts, then refuses
 
     def test_api(self):
@@ -426,6 +514,11 @@ class TestMarketService(unittest.TestCase):
         d = c.get(f"/api/market/day/{days[-1]}").get_json()
         self.assertGreater(len(d["candles"]), 40)
         self.assertIn("p_up", d["candles"][-1])
+        lm = d["levelmap"]                                                            # ADR-108
+        self.assertTrue(lm)
+        lv = lm[0]["levels"]
+        self.assertTrue(all(x["side"] == (1 if x["price"] > lm[0]["px"] else -1) for x in lv))
+        self.assertIn("land2h", lm[0]["land"])
         self.assertEqual(c.get("/api/market/day/2023-99-99x").status_code, 400)
         self.assertEqual(c.post("/api/market/news/key", json={"key": "short"}).status_code, 422)
         self.assertEqual(c.get("/api/market/jobs/nope").status_code, 400)

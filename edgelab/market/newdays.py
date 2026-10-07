@@ -172,6 +172,18 @@ def predict(svc, analysis_key: str, progress=None) -> dict:
     np.savez_compressed(folder(svc.data_root, "") / f"predictions_{analysis_key}.npz", **out,
                         **{f"p_up_{k}": v for k, v in p.items()}, **{f"size_{k}": v for k, v in sz.items()},
                         day=dd.astype("datetime64[D]").astype(np.int64))
+    lm_sum = summary.get("levelmap") or {}
+    if lm_sum.get("targets") and len(scored_days):
+        from edgelab.market import levelmap as L
+        step("Level map: training on discovery, mapping the new days' levels live")
+        lchosen = {t: (lm_sum["targets"].get(t) or {}).get("chosen") or "logistic"
+                   for t in L.LEVEL_TARGETS + L.DECISION_TARGETS}
+        fm = L.fit_frozen(L.build(cxd))
+        bn = L.build(cxn, start_ns=int(nq.ts[np.searchsorted(nq.day, scored_days[0])]))
+        if bn["n_dec"]:
+            bands = L.bands_from_analysis(A.home(svc.data_root) / f"analysis_{analysis_key}" / "levelmap.npz", lchosen)
+            fr = L.frozen_period(fm, bn, lchosen, bands, folder(svc.data_root, "") / f"levelmap_{analysis_key}.npz")
+            res["levelmap"] = {"chosen": lchosen, "scores": fr["scores"], "decisions": int(bn["n_dec"])}
     res = A._jsonable(res)
     atomic_write_text(folder(svc.data_root, "") / f"scores_{analysis_key}.json", json.dumps(res))
     return res

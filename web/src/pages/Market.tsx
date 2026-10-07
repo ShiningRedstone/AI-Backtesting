@@ -5,7 +5,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { market } from "../api/market";
-import type { DayView, EdgeCell, EdgeGroup, Edges, EffectRow, HoldoutStatus, MarketStatus, PatternRow, Quant, Rate, Score, Section, TargetEval } from "../api/market";
+import type { DayView, EdgeCell, EdgeGroup, Edges, EffectRow, HoldoutModelScore, HoldoutStatus, LevelMapSummary, MapMoment, MarketStatus, Mistakes,
+  PatternRow, Quant, Rate, Score, Section, TargetEval, TurnScore } from "../api/market";
 import type { MyJob } from "../api/my";
 import { useApi } from "../app/context";
 import { BarChart, LineChart } from "../components/charts";
@@ -19,7 +20,14 @@ const MODEL_WORDS: Record<string, string> = { baseline: "Baseline (the usual)", 
 const OUTCOME_WORDS: Record<string, string> = { edge: "moved 1 ATR its way before 1 ATR against", next15: "next 15-min candle went its way",
   rest15: "rest of the 15-min candle went its way" };
 const TARGET_WORDS: Record<string, string> = { up: "Next 15-min candle up or down", size: "Size of the next 15-min candle",
-  bias: "Session closes above the current price", levels: "Level reached before the session ends" };
+  bias: "Session closes above the current price", levels: "Level reached before the session ends",
+  reach2h: "Level traded within 2 hours", reach: "Level traded before the session ends",
+  react: "Reacts at the level (1 ATR away before 1 ATR through)", first: "Nearest level above traded before the nearest below",
+  land2h: "Where price is 2 hours later", land: "Where price is at the session end" };
+const LM_TARGETS = ["reach2h", "reach", "react", "first", "land2h", "land"] as const;
+const BASE_WORDS: Record<string, string> = { reach2h: "random walk: distance, time left, current volatility", reach: "random walk: distance, time left, current volatility",
+  react: "the usual reaction rate", first: "random walk: the nearer side first (gambler's ruin)", land2h: "no change", land: "no change" };
+const nyTime = (t: number) => new Date(t / 1e6).toLocaleTimeString("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" });
 const r = (p: Rate | null | undefined, d = 0) => (p && p.p != null ? `${pct(p.p, d)} (${p.k}/${p.n})` : "–");
 const q = (x: Quant | null | undefined, k: "q25" | "q50" | "q75" | "q10" | "q90" = "q50", d = 1) => (x && x[k] != null ? (x[k] as number).toFixed(d) : "–");
 const num = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? "–" : v.toFixed(d));
@@ -480,6 +488,7 @@ function ShockTable({ rows, first }: { rows: (ShockBlock & { name: string })[]; 
 // =============================================================================================== simulator (day viewer)
 export function MarketSimulatorPage() {
   const fc = useSection<Record<string, TargetEval>>("forecast");
+  const lm = useSection<LevelMapSummary>("levelmap");
   const [src, setSrc] = useState<"discovery" | "new" | "holdout">("discovery");
   const days = useApi<{ days: string[] }>(fc.data ? market.daysUrl(src) : null, [src, fc.data?.key]);
   const [day, setDay] = useState<string>("");
@@ -496,6 +505,7 @@ export function MarketSimulatorPage() {
           70 % of those months; its score on the later 30 % is the honest one. Bands for the candle size: {f.size?.bands ? `${pct(f.size.bands.inside_50, 0)} of candles
           fell inside the 50 % band and ${pct(f.size.bands.inside_80, 0)} inside the 80 % band` : "–"} (well calibrated = 50 % and 80 %).</p>
       </Card>
+      {lm.data?.data && !lm.data.data.missing && <LevelMapScores lm={lm.data.data} />}
       <Card title="Pick a day" testId="market-day-pick">
         <div className="row gap">
           <Select value={src} onChange={(v) => setSrc(v as "discovery" | "new" | "holdout")} ariaLabel="Days" testId="market-src"
@@ -510,6 +520,81 @@ export function MarketSimulatorPage() {
       </Card>
       {day && <DayCard key={`${src}/${day}`} day={day} src={src} />}
       <HoldoutTestCard />
+    </div>
+  );
+}
+
+function TurnRow({ t, label }: { t: TurnScore | undefined; label: string }) {
+  if (!t || t.model == null) return <p className="small muted">{label}: too few cases.</p>;
+  return (
+    <p className="small">{label}: the map picked the right level (or "no turn") <b>{pct(t.model, 1)}</b> of the time; the random-walk baseline
+      {" "}{pct(t.baseline, 1)}; "always the nearest level" {pct(t.nearest, 1)} ({t.n?.toLocaleString()} cases, no turn in {pct(t.none_share, 0)}).
+      {" "}{t.real ? <Badge tone="ok">better than the baseline</Badge> : <Badge tone="neutral">not reliably better</Badge>}</p>
+  );
+}
+
+function LevelMapScores({ lm }: { lm: LevelMapSummary }) {
+  const [tgt, setTgt] = useState<string>("reach");
+  const m = lm.mistakes?.[tgt];
+  return (
+    <Card title="Level map: which level gets tapped, does price react there, where does it land?" testId="market-levelmap-scores">
+      <p className="small">At 9:30, 10:00 … 15:30 New York the map lists the levels ahead: open FVGs of the 5m / 15m / 1h / 4h / daily charts
+        (stacked FVGs grouped), the equilibrium and OTE fibs (0.618 / 0.705 / 0.79) of the last 15m / 1h / 4h swing range, and liquidity (swing and
+        equal highs / lows, previous day / week / session, Asia, London, today's high / low, opens). {lm.decisions.toLocaleString()} moments,
+        {" "}{lm.levels.toLocaleString()} levels. Each forecast is scored against its own baseline (named below) on months the models never saw.</p>
+      {LM_TARGETS.map((t) => lm.targets[t] && (
+        <div key={t}><TargetScores t={t} e={lm.targets[t]} /><p className="small muted">Baseline: {BASE_WORDS[t]}.{lm.targets[t].bands ?
+          ` Landing bands: ${pct(lm.targets[t].bands!.inside_50, 0)} inside the 50 % band, ${pct(lm.targets[t].bands!.inside_80, 0)} inside the 80 % band.` : ""}</p></div>))}
+      <h3 className="small-head">The level price turns at</h3>
+      <TurnRow t={lm.targets.turn} label="All predicted months" />
+      <details className="tech"><summary>How often each kind of level was traded and reacted at (discovery, descriptive)</summary>
+        <TableWrap><table className="dense"><thead><tr><th>Level</th><th>Chart</th><th className="num">Count</th><th className="num">Median distance (ATR)</th>
+          <th className="num">Traded in 2 h</th><th className="num">Traded by the close</th><th className="num">Reacted when touched</th></tr></thead>
+          <tbody>{lm.by_kind.map((x, i) => <tr key={i}><td>{x.kind_name}</td><td>{x.chart ?? "–"}</td><td className="num">{x.n.toLocaleString()}</td>
+            <td className="num">{num(x.median_dist, 1)}</td><td className="num">{pct(x.reach2h, 0)}</td><td className="num">{pct(x.reach, 0)}</td>
+            <td className="num">{x.react != null ? `${pct(x.react, 0)} (${x.react_n})` : "–"}</td></tr>)}</tbody></table></TableWrap>
+        <p className="small muted">About 50 % is chance for a reaction (on random data it comes out a few % lower with 1-minute bars).</p>
+      </details>
+      <h3 className="small-head">Where it goes wrong (discovery, the later months the model choice never saw)</h3>
+      <Select value={tgt} onChange={setTgt} ariaLabel="Forecast" testId="market-lm-mistakes-target"
+        options={LM_TARGETS.map((t) => ({ value: t, label: TARGET_WORDS[t] }))} />
+      {m && <MistakesView m={m} />}
+    </Card>
+  );
+}
+
+function MistakesView({ m, holdout }: { m: Mistakes; holdout?: boolean }) {
+  if (!m.groups) return <p className="small muted">Too few predictions ({m.n}).</p>;
+  const real = m.target === "size" || (m.target ?? "").startsWith("land");
+  return (
+    <div data-testid="market-mistakes">
+      <p className="small">{m.n.toLocaleString()} predictions · skill {m.skill != null ? `${(m.skill * 100).toFixed(1)} %` : "–"}
+        {holdout && m.discovery_skill != null ? ` (discovery, later months: ${(m.discovery_skill * 100).toFixed(1)} %)` : ""}.
+        {" "}Descriptive: buckets are not corrected for how many there are, and nothing here is fed back into the models.</p>
+      {m.findings && m.findings.length > 0 ? <ul className="small edge-list">{m.findings.slice(0, 10).map((f, i) => <li key={i}>{f.text}</li>)}</ul> :
+        <p className="small muted">No bucket of 50+ predictions was clearly worse than the baseline or badly calibrated.</p>}
+      <details className="tech"><summary>Every bucket</summary>
+        {m.groups.map((g) => (
+          <div key={g.group}><h4 className="small-head">{g.group}</h4>
+            <TableWrap><table className="dense"><thead><tr><th>Bucket</th><th className="num">Predictions</th><th className="num">Skill</th>
+              {holdout && <th className="num">Skill on discovery</th>}<th className="num">Hit rate</th><th className="num">Said</th><th className="num">Happened</th></tr></thead>
+              <tbody>{g.rows.map((x) => <tr key={x.bucket}><td>{x.bucket}</td><td className="num">{x.n.toLocaleString()}</td>
+                <td className={`num ${x.skill != null && x.skill < 0 ? "neg" : ""}`}>{x.skill != null ? `${(x.skill * 100).toFixed(1)} %` : "–"}</td>
+                {holdout && <td className="num">{x.discovery_skill != null ? `${(x.discovery_skill * 100).toFixed(1)} %` : "–"}</td>}
+                <td className="num">{x.accuracy != null ? pct(x.accuracy, 0) : "–"}</td>
+                <td className="num">{x.said != null ? pct(x.said, 0) : x.error != null ? num(x.error, 2) : "–"}</td>
+                <td className="num">{x.happened != null ? pct(x.happened, 0) : x.error_baseline != null ? `baseline ${num(x.error_baseline, 2)}` : "–"}</td></tr>)}</tbody></table></TableWrap>
+          </div>))}
+      </details>
+      {m.worst && m.worst.length > 0 && <details className="tech"><summary>The most confident misses</summary>
+        <TableWrap><table className="dense"><thead><tr><th>When</th>{m.worst[0].level !== undefined && <th>Level</th>}<th className="num">Said</th>
+          <th className="num">Happened</th><th>Situation</th></tr></thead>
+          <tbody>{m.worst.map((w, i) => <tr key={i}><td>{new Date(w.t / 1e6).toLocaleString("en-GB", { timeZone: "America/New_York", dateStyle: "short", timeStyle: "short" })}</td>
+            {w.level !== undefined && <td>{w.level}</td>}
+            <td className="num">{real ? num(w.said, 2) : pct(w.said, 0)}</td>
+            <td className="num">{real ? num(w.happened, 2) : w.happened > 0.5 ? "yes" : "no"}</td>
+            <td className="small">{Object.values(w.context).join(" · ")}</td></tr>)}</tbody></table></TableWrap>
+      </details>}
     </div>
   );
 }
@@ -570,6 +655,7 @@ function DayCard({ day, src }: { day: string; src: string }) {
           orange news, shocks (their causes are in the News tab). Levels far outside the day's range are left off the chart. Predictions were made
           before each candle opened, by models that never saw this day.</p>
       </Card>
+      {data.levelmap && data.levelmap.length > 0 && <LevelMapCard moments={data.levelmap} candles={candles} />}
       <Card title="Candle by candle (8:00 - 17:00 New York)" testId="market-day-table">
         <TableWrap><table className="dense"><thead><tr><th>Time</th><th className="num">Chance up</th><th>Actual</th><th className="num">Size band (×usual)</th>
           <th className="num">Actual size</th><th>Why (logistic: biggest pushes)</th></tr></thead>
@@ -600,6 +686,95 @@ function DayCard({ day, src }: { day: string; src: string }) {
 }
 
 
+// =============================================================================================== holdout: level map + mistakes (ADR-108)
+function HoldoutLevelMap({ lm }: { lm: Record<string, HoldoutModelScore> & { turn?: TurnScore } }) {
+  return (
+    <>
+      <h3 className="small-head">Level map on the holdout</h3>
+      <TableWrap><table className="dense" data-testid="market-holdout-levelmap"><thead><tr><th>Forecast</th><th>Official model</th><th className="num">Skill</th>
+        <th className="num">Hit rate</th><th>Real?</th><th>Baseline</th></tr></thead>
+        <tbody>{LM_TARGETS.map((k) => { const tg = lm[k]; if (!tg) return null; const s = tg.official;
+          return (<tr key={k}><td>{TARGET_WORDS[k]}</td><td>{MODEL_WORDS[tg.official_model]}</td><td className="num">{skill(s)}</td>
+            <td className="num">{s?.accuracy != null && !k.startsWith("land") ? pct(s.accuracy, 1) : "–"}</td><td><RealBadge s={s} /></td>
+            <td className="small muted">{BASE_WORDS[k]}</td></tr>); })}</tbody></table></TableWrap>
+      <TurnRow t={lm.turn} label="Turning level on the holdout" />
+    </>
+  );
+}
+
+function HoldoutMistakes({ res }: { res: NonNullable<HoldoutStatus["result"]> }) {
+  const all: Record<string, Mistakes> = { ...(res.levelmap?.mistakes ?? {}), ...(res.mistakes ?? {}) };
+  const keys = Object.keys(all);
+  const [k, setK] = useState(keys[0] ?? "");
+  if (!keys.length) return null;
+  return (
+    <div data-testid="market-holdout-mistakes">
+      <h3 className="small-head">Mistakes report: where and why the predictions failed</h3>
+      <Select value={k} onChange={setK} ariaLabel="Forecast" options={keys.map((x) => ({ value: x, label: TARGET_WORDS[x] ?? x }))} />
+      {all[k] && <MistakesView m={all[k]} holdout />}
+    </div>
+  );
+}
+
+// =============================================================================================== level map of a day (ADR-108)
+function LevelMapCard({ moments, candles }: { moments: MapMoment[]; candles: [number, number, number, number, number][] }) {
+  const [ti, setTi] = useState(0);
+  const [all, setAll] = useState(false);
+  const mo = moments[Math.min(ti, moments.length - 1)];
+  const lines = useMemo<PriceLine[]>(() => {
+    const hi = Math.max(...candles.map((c) => c[2])), lo = Math.min(...candles.map((c) => c[3]));
+    const span = Math.max(hi - lo, 1);
+    const near = (side: number) => mo.levels.filter((l) => l.side === side).sort((a, b) => Math.abs(a.dist) - Math.abs(b.dist)).slice(0, 3);
+    const pick = new Set([...near(1), ...near(-1), ...mo.levels.filter((l) => l.turn_pick)]);
+    const ls: PriceLine[] = mo.levels.filter((l) => pick.has(l) && l.price <= hi + 0.3 * span && l.price >= lo - 0.3 * span)
+      .map((l) => ({ price: l.price, label: `${l.label} · ${pct(l.p_reach, 0)} reach · ${pct(l.p_react, 0)} react${l.turn_pick ? " · likely turn" : ""}`,
+        color: l.turn_pick ? "var(--c-survivor)" : "var(--muted)", dash: l.turn_pick ? undefined : "4 3" }));
+    const b = mo.land.land2h.band50;
+    if (b[0] != null && b[1] != null) {
+      ls.push({ price: b[0] as number, label: "2 h landing: 50 % band", color: "var(--c2)", dash: "2 2" });
+      ls.push({ price: b[1] as number, label: "", color: "var(--c2)", dash: "2 2" });
+    }
+    ls.push({ price: mo.px, label: `price at ${nyTime(mo.t)}`, color: "var(--c1)" });
+    return ls;
+  }, [mo, candles]);
+  const shown = all ? mo.levels : mo.levels.filter((l) => l.turn_pick || Math.abs(l.dist) <= 4);
+  const landRow = (k: "land2h" | "land", w: string) => {
+    const L = mo.land[k];
+    const inside = (b: (number | null)[]) => b[0] != null && b[1] != null && L.actual >= (b[0] as number) && L.actual <= (b[1] as number);
+    return (
+      <tr key={k}><td>{w}</td><td className="num">{num(L.median, 2)}</td><td className="num">{num(L.band50[0], 2)} – {num(L.band50[1], 2)}</td>
+        <td className="num">{num(L.band80[0], 2)} – {num(L.band80[1], 2)}</td><td className="num">{num(L.actual, 2)}</td>
+        <td>{inside(L.band50) ? "inside the 50 % band" : inside(L.band80) ? "inside the 80 % band" : "outside the bands"}</td></tr>);
+  };
+  return (
+    <Card title="Level map: what was ahead, what got tapped, where price reacted" testId="market-levelmap"
+      actions={<Select value={String(ti)} onChange={(v) => setTi(Number(v))} ariaLabel="Moment" testId="market-levelmap-time"
+        options={moments.map((m, i) => ({ value: String(i), label: `at ${nyTime(m.t)} New York` }))} />}>
+      <CandleChart candles={candles} tfMinutes={15} lines={lines} height={420} testId="market-levelmap-chart" />
+      <p className="small">Price {num(mo.px, 2)} at {nyTime(mo.t)} (15-min ATR {num(mo.atr15, 1)} points). Nearest level above traded before the nearest
+        below: <b>{pct(mo.p_up_first, 0)}</b> (a random walk says {pct(mo.p_up_first_random_walk, 0)}) → {mo.up_first == null ? "neither / unknown" : mo.up_first > 0.5 ? "above first" : "below first"}.
+        {" "}Most likely turn: above {pct(mo.turn_prob.above, 0)}, below {pct(mo.turn_prob.below, 0)} (amber line; a combined estimate that treats
+        the levels as independent). The chart shows the 3 nearest levels on each side and the likely turns; the table lists more.</p>
+      <TableWrap><table className="dense" data-testid="market-levelmap-table"><thead><tr><th>Level</th><th className="num">Price</th><th className="num">Distance (ATR)</th>
+        <th className="num">Traded in 2 h</th><th className="num">Traded by the close</th><th className="num">Reacts if touched</th>
+        <th>What happened</th></tr></thead>
+        <tbody>{shown.map((l, i) => (
+          <tr key={i} className={l.turn_pick ? "row-hl" : ""}><td>{l.label}{l.stack > 1 ? ` (stack of ${l.stack})` : ""}{l.turn_pick ? " · likely turn" : ""}</td>
+            <td className="num">{l.price.toFixed(2)}</td><td className="num">{l.dist > 0 ? "+" : ""}{l.dist.toFixed(1)}</td>
+            <td className="num">{pct(l.p_reach2h, 0)}</td><td className="num">{pct(l.p_reach, 0)} <span className="muted">({pct(l.base_reach, 0)})</span></td>
+            <td className="num">{l.p_react != null ? pct(l.p_react, 0) : "–"} <span className="muted">({pct(l.base_react, 0)})</span></td>
+            <td className="small">{!l.reached ? "not traded" : `traded ${l.touch_ns ? nyTime(l.touch_ns) : ""}${l.reached2h ? "" : " (after 2 h)"} · ${l.reacted == null ? "reaction unknown" :
+              l.reacted > 0.5 ? "reacted ✓" : "went through"}`}</td></tr>))}</tbody></table></TableWrap>
+      <p className="small muted">Grey numbers in brackets = the baseline (random walk for "traded", the usual reaction rate for "reacts").
+        {" "}{all ? "" : "Levels within 4 ATR and the likely turns are listed. "}<Button small kind="ghost" onClick={() => setAll(!all)}>{all ? "Show fewer" : "Show all levels"}</Button></p>
+      <h3 className="small-head">Where price lands</h3>
+      <TableWrap><table className="dense"><thead><tr><th>When</th><th className="num">Middle guess</th><th className="num">50 % band</th>
+        <th className="num">80 % band</th><th className="num">Actual</th><th /></tr></thead>
+        <tbody>{landRow("land2h", "2 hours later")}{landRow("land", "Session end")}</tbody></table></TableWrap>
+    </Card>
+  );
+}
+
 // =============================================================================================== holdout prediction test (ADR-107)
 const HOLDOUT_TARGETS: [string, string][] = [["size", "Size of the next 15-min candle"], ["levels", "Level reached before the session ends"],
   ["up", "Next 15-min candle up or down"], ["bias", "Session closes above the current price"]];
@@ -626,6 +801,9 @@ function HoldoutTestCard() {
             <li>It is <b>one recorded look</b> at the holdout (its own entry in the protocol ledger). It cannot be repeated or redone with changes.</li>
             <li>Run the analysis again first if anything changed (data, news, settings): the test refuses an outdated analysis.</li>
             <li>What discovery says to expect: the candle SIZE well (about +24 % better than usual), levels a little (+4 %), direction not at all.</li>
+            <li>The level map is tested too (traded in 2 h / by the close, reacts, which side first, where price lands, the turning level),
+              followed by a mistakes report: where and why the predictions failed (time of day, news, volatility, level kind, chart, distance,
+              trend). Nothing is retrained from the holdout, so the look stays clean.</li>
           </ul>
           {running && <Banner tone="info"><span className="spinner" /> {job?.step}</Banner>}
           {job?.state === "failed" && <Banner tone="error">{job.error?.message}</Banner>}
@@ -656,7 +834,9 @@ function HoldoutTestCard() {
             {" "}{pct(res.targets.size.bands.inside_80, 0)} inside the 80 % band (calibrated = 50 % and 80 %).</p>}
           <TechDetails summary="Skill by month (official models)" rows={HOLDOUT_TARGETS.filter(([k]) => res.targets[k]).map(([k, w]) =>
             [w, res.targets[k].by_month.map((x) => `${x.month}: ${x.skill != null ? (x.skill * 100).toFixed(1) : "–"} %`).join(" · ")])} />
-          <p className="small muted">Pick "Holdout (after the one look)" above to see each holdout day candle by candle.</p>
+          {res.levelmap && <HoldoutLevelMap lm={res.levelmap} />}
+          {(res.mistakes || res.levelmap?.mistakes) && <HoldoutMistakes res={res} />}
+          <p className="small muted">Pick "Holdout (after the one look)" above to see each holdout day candle by candle, with its level map.</p>
         </>)}
     </Card>
   );

@@ -117,7 +117,7 @@ def contexts(m: D.Minute, fr: Frame, own_tf: int, act_i: np.ndarray, act_ns: np.
                 jj = j - back
                 okb = jj >= 0
                 jc = np.maximum(jj, 0)
-                active = okb & (zn["end_ns"][jc] > act_ns) & (px <= zn["top"][jc]) & (px >= zn["bottom"][jc])
+                active = okb & (zn["end_ns"][jc] >= act_ns) & (px <= zn["top"][jc]) & (px >= zn["bottom"][jc])
                 z = np.where((z == 0) & active, (zn["dir"][jc] * d).astype(np.int8), z)
         out[f"zone_{lab}"] = z
     di = np.searchsorted(lv["days"], m.day[np.clip(act_i, 0, len(m) - 1)])

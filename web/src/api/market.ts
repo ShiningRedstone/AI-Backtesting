@@ -47,7 +47,26 @@ export interface HoldoutModelScore { official_model: string; models: Record<stri
 export interface HoldoutStatus { available: boolean; problem?: string; used?: boolean; holdout?: { start: string; end: string };
   look?: { access_id: string; status: string; created_at: string } | null;
   result?: { access_id: string; fingerprint: string; chosen: Record<string, string>; computed_at: string; candles: number; days: number;
-    holdout: { start: string; end: string }; targets: Record<string, HoldoutModelScore> } | null }
+    holdout: { start: string; end: string }; targets: Record<string, HoldoutModelScore>;
+    levelmap?: Record<string, HoldoutModelScore> & { turn?: TurnScore; mistakes?: Record<string, Mistakes> };
+    mistakes?: Record<string, Mistakes> } | null }
+export interface MistakeRow { bucket: string; n: number; skill: number | null; accuracy?: number; said?: number; happened?: number;
+  error?: number; error_baseline?: number; discovery_skill?: number | null }
+export interface Mistakes { n: number; target?: string; model?: string; skill?: number | null; discovery_skill?: number | null; from?: string | null;
+  groups?: { group: string; rows: MistakeRow[] }[]; findings?: { group: string; bucket: string; n: number; skill: number; text: string }[];
+  worst?: { t: number; said: number; happened: number; baseline: number; level?: string; price?: number; dist?: number; context: Record<string, string> }[] }
+export interface TurnScore { n: number; none_share?: number; model?: number; baseline?: number; nearest?: number;
+  model_minus_baseline_ci?: [number, number]; real?: boolean }
+export interface LevelKindRow { kind: string; kind_name: string; chart: string | null; n: number; reach2h: number; reach: number; react_n: number;
+  react: number | null; median_dist: number }
+export interface LevelMapSummary { missing?: boolean; decisions: number; levels: number; targets: Record<string, TargetEval> & { turn?: TurnScore };
+  by_kind: LevelKindRow[]; mistakes: Record<string, Mistakes>; volatility_cuts: number[] }
+export interface MapLevel { label: string; price: number; side: number; dist: number; kind: string; stack: number; p_reach2h: number | null;
+  p_reach: number | null; p_react: number | null; base_reach: number | null; base_react: number | null; turn_pick: boolean; reached2h: boolean;
+  reached: boolean; reacted: number | null; touch_ns: number | null }
+export interface MapLanding { median: number | null; band80: (number | null)[]; band50: (number | null)[]; actual: number }
+export interface MapMoment { t: number; px: number; atr15: number; levels: MapLevel[]; p_up_first: number | null; p_up_first_random_walk: number | null;
+  up_first: number | null; turn_prob: Record<string, number>; land: Record<"land2h" | "land", MapLanding> }
 export interface Section<T> { key: string; name: string; data: T; kinds: Record<string, string>; sessions: string[] }
 
 export interface DayCandle { t: number; o: number; h: number; l: number; c: number; p_up?: Record<string, number | null>;
@@ -56,7 +75,7 @@ export interface DayLevel { t: number; level: string; name: string; price: numbe
 export interface DayView { date: string; src: string; candles: DayCandle[]; bias: ({ t: number } & Record<string, number | null>)[];
   levels: DayLevel[]; news: { t: number; name: string; impact: number; forecast: number | null; actual: number | null; surprise_z: number | null }[];
   shocks: { start: number; end: number; main: string; move_pts: number; tfs: Record<string, number>; tags: { tag: string; detail?: string }[];
-    m15_kept: number | null; minutes_to_return: number | null }[]; chosen: { up: string; size: string } }
+    m15_kept: number | null; minutes_to_return: number | null }[]; chosen: { up: string; size: string }; levelmap?: MapMoment[] }
 
 export const market = {
   statusUrl: "/api/market",

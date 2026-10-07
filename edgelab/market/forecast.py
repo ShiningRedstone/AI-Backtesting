@@ -229,7 +229,7 @@ def features(cx: Context, t: np.ndarray) -> tuple[np.ndarray, list[str], dict]:
                 jj = j - back
                 okb = jj >= 0
                 jc = np.maximum(jj, 0)
-                act = okb & (zn["end_ns"][jc] > t)
+                act = okb & (zn["end_ns"][jc] >= t)            # filled by the minute opening at t: not known yet
                 top, bot, dz = zn["top"][jc], zn["bottom"][jc], zn["dir"][jc]
                 ins = act & (px <= top) & (px >= bot)
                 inside = np.where((inside == 0) & ins, dz, inside)
@@ -387,7 +387,7 @@ def level_rows(cx: Context) -> dict:
             if zn is not None:
                 j = np.searchsorted(zn["known_ns"], tt, side="left")
                 lo_j = max(0, j - 60)
-                act = zn["end_ns"][lo_j:j] > tt
+                act = zn["end_ns"][lo_j:j] >= tt
                 tops, bots = zn["top"][lo_j:j][act], zn["bottom"][lo_j:j][act]
                 above = bots[bots > px]
                 below = tops[tops < px]
@@ -432,9 +432,16 @@ def _months(days: np.ndarray) -> np.ndarray:
 
 def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarray | None, kind: str,
                  progress=None, label: str = "", base_X: np.ndarray | None = None,
-                 onehot: np.ndarray | None = None, sim_cols: list | None = None, sim_exact: bool = False) -> dict:
+                 onehot: np.ndarray | None = None, sim_cols: list | None = None, sim_exact: bool = False,
+                 base_p: np.ndarray | None = None, gbm_every: int = GBM_EVERY, gbm_rows: int | None = None,
+                 fit_mask: np.ndarray | None = None) -> dict:
     """Predictions for every row of every month after MIN_TRAIN_DAYS of history. kind: 'binary' (y in {0, 1}) or
-    'real'. Returns per-model predictions (NaN where not predicted) and, for 'binary', logistic contributions."""
+    'real'. Returns per-model predictions (NaN where not predicted) and, for 'binary', logistic contributions.
+    ``base_p``: a fixed baseline probability per row (the level map's random-walk 'which side first', ADR-108);
+    ``gbm_rows``: boosting trained on at most this many training rows, evenly spaced over the training period (the
+    level map has many rows per day; every other model still uses all rows); ``fit_mask``: only these rows are LEARNED
+    from (their outcome is known), every row is predicted (a reaction is forecast for every level before anyone knows
+    whether it will be touched)."""
     n = len(y)
     months = _months(days)
     um = np.unique(months)
@@ -446,6 +453,8 @@ def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarra
     for mi, mo in enumerate(um):
         test = months == mo
         train = days < np.datetime64(mo, "D")
+        if fit_mask is not None:
+            train &= fit_mask
         if len(np.unique(days[train])) < MIN_TRAIN_DAYS or test.sum() == 0:
             continue
         if first_pred is None:
@@ -455,7 +464,9 @@ def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarra
         Xtr, ytr, Xte = X[train], y[train], X[test]
         # baseline: slot up-rate (binary) / usual size (real) / distance-only (levels: base_X)
         if kind == "binary":
-            if base_X is not None:
+            if base_p is not None:
+                preds["baseline"][test] = base_p[test]
+            elif base_X is not None:
                 preds["baseline"][test] = G.Logistic(l2=1.0).fit(base_X[train], ytr).predict(base_X[test])
             else:
                 # the training period's overall up-rate: the strongest simple 'usual'. (A per-time-slot rate was tried
@@ -473,8 +484,10 @@ def walk_forward(X: np.ndarray, y: np.ndarray, days: np.ndarray, slot: np.ndarra
         else:
             preds["baseline"][test] = 0.0
             preds["logistic"][test] = G.Ridge(l2=10.0).fit(Xtr, ytr).predict(Xte)
-        if gbm is None or (mi - first_pred) % GBM_EVERY == 0:
-            gbm = G.GBM(loss="logloss" if kind == "binary" else "l2", n_trees=90, seed=mi).fit(Xtr, ytr)
+        if gbm is None or (mi - first_pred) % gbm_every == 0:
+            sub = slice(None) if not gbm_rows or len(ytr) <= gbm_rows else \
+                np.unique(np.linspace(0, len(ytr) - 1, gbm_rows).astype(np.int64))
+            gbm = G.GBM(loss="logloss" if kind == "binary" else "l2", n_trees=90, seed=mi).fit(Xtr[sub], ytr[sub])
         preds["boosting"][test] = gbm.predict(Xte)
         Str, Ste = (Xtr, Xte) if sim_cols is None else (Xtr[:, sim_cols], Xte[:, sim_cols])
         if slot is not None:

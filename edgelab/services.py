@@ -2776,7 +2776,7 @@ class Services:
                           "es": ES.status(self.data_root), "protocol": bool(parent),
                           "newdays": {**ND.status(self), "scores": ND.scores(self.data_root, head["key"]) if head else None}})
 
-    MARKET_SECTIONS = ("patterns", "effect_matrix", "edges", "trend", "nqes", "shocks", "newsfx", "forecast", "kinds",
+    MARKET_SECTIONS = ("patterns", "effect_matrix", "edges", "trend", "nqes", "shocks", "newsfx", "forecast", "levelmap", "kinds",
                        "sessions", "timeframes", "source")
 
     def market_section(self, name: str) -> dict:
@@ -2929,7 +2929,34 @@ class Services:
                 shocks = []
         out["shocks"] = shocks
         out["src"] = src
+        out["levelmap"] = self._market_levelmap_day(src, latest, out)
         return _jsonable(out)
+
+    def _market_levelmap_day(self, src: str, latest: dict, day: dict) -> list:
+        """ADR-108: the level map of every decision moment of the day (saved predictions; nothing is recomputed)."""
+        import numpy as np
+        from edgelab.market import analysis as A, levelmap as L, newdays as ND
+        if not day["candles"]:
+            return []
+        lo, hi = day["candles"][0]["t"], day["candles"][-1]["t"] + 15 * 60_000_000_000
+        if src == "holdout":
+            from edgelab.market import holdout as H
+            p = H.home(self.data_root) / "levelmap.npz"
+            lm_t = ((H.status(self).get("result") or {}).get("levelmap") or {})
+            chosen = {t: (v or {}).get("official_model") for t, v in lm_t.items() if isinstance(v, dict)}
+        elif src == "new":
+            p = ND.folder(self.data_root, "") / f"levelmap_{latest['key']}.npz"
+            sc = ND.scores(self.data_root, latest["key"]) or {}
+            chosen = (sc.get("levelmap") or {}).get("chosen") or {}
+        else:
+            p = A.home(self.data_root) / f"analysis_{latest['key']}" / "levelmap.npz"
+            chosen = {t: (v or {}).get("chosen") for t, v in ((latest.get("levelmap") or {}).get("targets") or {}).items()}
+        if not p.exists():
+            return []
+        with np.load(p) as z:
+            lm = {k: z[k] for k in z.files}
+        chosen = {k: v for k, v in chosen.items() if v}
+        return L.day_levels(lm, lo, hi, chosen)
 
     def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
         from edgelab.mystrategy import review as RV
