@@ -184,6 +184,17 @@ def predict(svc, analysis_key: str, progress=None) -> dict:
             bands = L.bands_from_analysis(A.home(svc.data_root) / f"analysis_{analysis_key}" / "levelmap.npz", lchosen)
             fr = L.frozen_period(fm, bn, lchosen, bands, folder(svc.data_root, "") / f"levelmap_{analysis_key}.npz")
             res["levelmap"] = {"chosen": lchosen, "scores": fr["scores"], "decisions": int(bn["n_dec"])}
+    from edgelab.market import direction as DR
+    dsum = DR.latest(svc.data_root, analysis_key)
+    if dsum and len(scored_days):
+        step("Direction calls: training on discovery, calling the new days live")
+        fmd = DR.fit_frozen(DR.build(cxd))
+        bnd = DR.build(cxn, start_ns=int(nq.ts[np.searchsorted(nq.day, scored_days[0])]))
+        if len(bnd["r"]["t"]):
+            pdn = DR.predict_frozen(fmd, bnd)
+            _, cdn = DR.official(pdn, bnd, dsum)
+            DR.save_period(folder(svc.data_root, "") / f"direction_{analysis_key}.npz", bnd, pdn, cdn)
+            res["direction"] = DR.score_period(bnd, pdn, dsum)
     res = A._jsonable(res)
     atomic_write_text(folder(svc.data_root, "") / f"scores_{analysis_key}.json", json.dumps(res))
     return res

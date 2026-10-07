@@ -43,14 +43,18 @@ def home(data_root) -> Path:
 
 
 # =============================================================================================== protocol
-def _scope(parent: dict) -> str:
+def _scope(parent: dict, suffix: str | None = None) -> str:
     from edgelab.mystrategy import runner as R
     from edgelab.research.protocol import MARKET_SIM_SCOPE_SUFFIX
     sc = parent["material"]["scope"]
-    return R.svc_scope(sc["instrument"], sc["provider"]) + MARKET_SIM_SCOPE_SUFFIX
+    return R.svc_scope(sc["instrument"], sc["provider"]) + (suffix or MARKET_SIM_SCOPE_SUFFIX)
 
 
-def protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | None]:
+def protocol(svc, lock=None, create: bool = True, *, role: str | None = None, suffix: str | None = None,
+             name: str = "Market simulator holdout prediction (one look)", constraints: dict | None = None,
+             exposure: str | None = None) -> tuple[dict, dict | None]:
+    """The companion protocol of a Market simulator holdout look (default: the ADR-107 test; ADR-109 passes its own
+    role / scope / wording for the second look)."""
     from contextlib import nullcontext
 
     from edgelab.mystrategy import runner as R
@@ -59,14 +63,14 @@ def protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | None]:
         parent = R._parent(svc)
         if parent is None:
             raise HoldoutTestError("NO_PROTOCOL", "Exactly one active research protocol is needed.")
-        rows = [p for p in svc.store.list_protocols(_scope(parent), "ACTIVE")
+        rows = [p for p in svc.store.list_protocols(_scope(parent, suffix), "ACTIVE")
                 if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
         mine = rows[0] if rows else None
         if mine is None and create:
             mat = R.build_material(parent, budget=1, looks=1)
             mat.update({
-                "role": rp.MARKET_SIM_ROLE, "name": "Market simulator holdout prediction (one look)",
-                "search_constraints": {
+                "role": role or rp.MARKET_SIM_ROLE, "name": name,
+                "search_constraints": constraints or {
                     "strategies": "none: a frozen forecaster of 15-minute candles (up / size), daily bias and level "
                                   "reach, trained on the discovery period only; no trading strategy, no trials",
                     "evaluation_windows": "the holdout window only (discovery minutes are the history of live inputs)",
@@ -74,11 +78,12 @@ def protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | None]:
                                "holdout": "ONE look: every holdout 15-minute candle predicted live and scored"}}})
             mat["trial_budget"]["unit"] += "; no trial is counted under this protocol"
             mat["pre_protocol_exposure"] = {
-                "statement": "Created when the user asked for the Market simulator's holdout prediction test. The "
-                             "forecaster's inputs, models and the choice of model per target were made on the "
-                             "discovery period only (walk-forward), before this look.", "runs": []}
+                "statement": exposure or (
+                    "Created when the user asked for the Market simulator's holdout prediction test. The "
+                    "forecaster's inputs, models and the choice of model per target were made on the "
+                    "discovery period only (walk-forward), before this look."), "runs": []}
             rec = rp.make_record(mat, {"code_version": R._code_version()})
-            svc.store.save_protocol(rec, _scope(parent))
+            svc.store.save_protocol(rec, _scope(parent, suffix))
             mine = svc.store.get_protocol(rec["protocol_id"])
         if mine is not None:
             rp.verify_record(mine)

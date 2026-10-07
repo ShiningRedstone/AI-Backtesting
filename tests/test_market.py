@@ -22,6 +22,10 @@ Guarantees tested:
   EQ / OTE are the stated fractions of the last confirmed swing range; on a random walk the nearest-level race matches
   the gambler's-ruin probability, reactions are near 50 %, no model shows real skill; the holdout look scores the
   level map and writes the mistakes report.
+* ADR-109 direction calls: inputs at a decision are identical with another future; on a random walk no stage makes
+  calls that beat the baseline; a planted inside-candle reversal is found at minute 5 (and not at the open, where it
+  cannot be known); the SECOND holdout look is its own one-look companion protocol whose exposure note names the first
+  look, is recorded before any holdout minute is read and refuses a second use.
 """
 import json
 import os
@@ -314,6 +318,61 @@ class TestLevelMap(unittest.TestCase):
         self.assertTrue(any(x["kind"] == "stack" for x in res["by_kind"]))
 
 
+def planted_reversal(start, end, seed=3, k=0.6):
+    """Random walk in which minutes 5-14 of every 15-minute candle drift against the move of its minutes 0-4."""
+    ts = session_minutes(start, end).as_unit("ns").asi8
+    z = np.zeros(len(ts))
+    m0 = D.Minute(ts, z, z, z, z)
+    rng = np.random.default_rng(seed)
+    step = rng.normal(0, 2.0, len(ts))
+    pos = m0.sess_min % 15
+    out = np.empty(len(ts))
+    x, start_px, first5 = 18000.0, 18000.0, 0.0
+    for q in range(len(ts)):
+        if pos[q] == 0:
+            start_px, first5 = x, 0.0
+        if pos[q] == 5:
+            first5 = x - start_px
+        x += step[q] + (-k * first5 / 10 if pos[q] >= 5 else 0.0)
+        out[q] = x
+    o = np.r_[out[0], out[:-1]]
+    return D.Minute(ts, o, np.maximum(o, out) + rng.uniform(0, 1, len(ts)), np.minimum(o, out) - rng.uniform(0, 1, len(ts)), out)
+
+
+class TestDirection(unittest.TestCase):
+    def test_inputs_are_live(self):
+        from edgelab.market import direction as DR
+        m = walk("2023-01-02", "2023-02-28", seed=6)
+        b = DR.build(F.Context(m, None, []))
+        r = b["r"]
+        for q in (len(r["t"]) - 500, len(r["t"]) - 101):
+            t = int(r["t"][q])
+            cut = np.searchsorted(m.ts, t)
+            rng = np.random.default_rng(q)
+            c = m.c.copy()
+            c[cut:] = c[cut - 1] + np.cumsum(rng.normal(0, 3, len(c) - cut))      # another future from t on
+            o = np.r_[m.o[:cut], c[cut - 1], c[cut:-1]]
+            m2 = D.Minute(m.ts, o, np.r_[m.h[:cut], np.maximum(o[cut:], c[cut:]) + 0.5],
+                          np.r_[m.l[:cut], np.minimum(o[cut:], c[cut:]) - 0.5], c)
+            b2 = DR.build(F.Context(m2, None, []), start_ns=t)
+            self.assertEqual(int(b2["r"]["t"][0]), t)
+            j = int(np.flatnonzero(b2["r"]["stage"] == r["stage"][q])[0])
+            np.testing.assert_allclose(b2["X"][j], b["X"][q], rtol=1e-9, atol=1e-9)
+
+    def test_random_walk_no_calls_planted_found(self):
+        from edgelab.market import direction as DR
+        res, _, _ = DR.analyse(DR.build(F.Context(walk("2023-01-02", "2023-09-30", seed=4), None, [])))
+        for s, ev in res["stages"].items():
+            self.assertFalse((ev["calls"]["late"] or {}).get("real"), (s, ev["calls"]))
+        res, _, _ = DR.analyse(DR.build(F.Context(planted_reversal("2023-01-02", "2023-09-30"), None, [])))
+        c5 = res["stages"]["5"]["calls"]
+        self.assertIsNotNone(c5["rule"]["tau"])
+        self.assertTrue(c5["late"]["real"], c5)
+        self.assertGreater(c5["late"]["accuracy"], 0.65)
+        self.assertFalse((res["stages"]["0"]["calls"]["late"] or {}).get("real"))     # at the open it cannot be known
+        self.assertEqual(res["top_inputs"][0]["input"], "so_move")
+
+
 class TestNews(unittest.TestCase):
     def test_timezone_proof(self):
         cal = N.build(news_json("2022-01-01", "2023-12-31", zone="NY+7"), {"sha256": "x"})
@@ -498,6 +557,59 @@ class TestMarketService(unittest.TestCase):
         self.assertTrue(d["candles"])
         self.assertTrue(d["levelmap"] and d["levelmap"][0]["levels"])
         self.assertEqual(c.post("/api/market/holdout", json={"confirm": "HOLDOUT"}).status_code, 202)   # job starts, then refuses
+
+    def test_holdout_zdirection_second_look(self):
+        from edgelab.market import direction as DR
+        from edgelab.market import holdout as H
+        from edgelab.services import Services
+        from edgelab.web.app import create_app
+        svc = Services(root=self.root)
+        events = []
+        real_cell, real_add = svc._cell_dataset, svc.store.add_holdout_access
+        hold = pd.Timestamp(self.res["source"]["holdout_start"])
+
+        def cell(ds_id, period=None, lock=None):
+            if period is not None and pd.Timestamp(period[0]) >= hold:
+                events.append("holdout data")
+            return real_cell(ds_id, period, lock)
+
+        def add(row):
+            events.append("look recorded")
+            return real_add(row)
+        try:
+            with self.assertRaises(H.HoldoutTestError) as e:
+                DR.holdout_run(svc, lock=svc.lock)
+            self.assertEqual(e.exception.code, "NO_DIRECTION")              # the direction analysis comes first
+            summ = DR.run(svc, lock=svc.lock)
+            self.assertEqual(set(summ["stages"]), {"0", "5", "10"})
+            self.assertFalse(DR.holdout_status(svc)["used"])
+            first = H.status(svc)
+            svc._cell_dataset = cell
+            svc.store.add_holdout_access = add
+            res = DR.holdout_run(svc, lock=svc.lock)
+            self.assertEqual(events[:2], ["look recorded", "holdout data"])
+            self.assertTrue(res["second_look"])
+            with np.load(DR.holdout_home(svc.data_root) / "predictions.npz") as z:
+                self.assertGreaterEqual(int(z["t"].min()), hold.value)
+            _, mine = DR.holdout_protocol(svc, create=False)
+            self.assertEqual(mine["material"]["role"], "market_sim_direction")
+            self.assertIn("SECOND look", mine["material"]["pre_protocol_exposure"]["statement"])
+            if first.get("used"):
+                self.assertIn(first["look"]["access_id"], mine["material"]["pre_protocol_exposure"]["statement"])
+            with self.assertRaises(H.HoldoutTestError) as e:
+                DR.holdout_run(svc, lock=svc.lock)
+            self.assertEqual(e.exception.code, "HOLDOUT_LOOK_USED")
+            self.assertEqual(H.status(svc).get("used"), first.get("used"))  # the first look's record is untouched
+        finally:
+            svc.store.close()
+        c = create_app(self.root).test_client()
+        st = c.get("/api/market/direction").get_json()
+        self.assertTrue(st["holdout"]["used"])
+        self.assertIn("5", st["summary"]["stages"])
+        days = c.get("/api/market/days?src=holdout").get_json()["days"]
+        d = c.get(f"/api/market/day/{days[0]}?src=holdout").get_json()
+        self.assertTrue(d["direction"])
+        self.assertEqual(c.post("/api/market/direction/holdout", json={"confirm": "x"}).status_code, 422)
 
     def test_api(self):
         from edgelab.web.app import create_app

@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, viewCache } from "../api/client";
 import { market } from "../api/market";
-import type { DayView, EdgeCell, EdgeGroup, Edges, EffectRow, HoldoutModelScore, HoldoutStatus, LevelMapSummary, MapMoment, MarketStatus, Mistakes,
+import type { CallScore, DayCall, DirectionStatus, DayView, EdgeCell, EdgeGroup, Edges, EffectRow, HoldoutModelScore, HoldoutStatus, LevelMapSummary, MapMoment, MarketStatus, Mistakes,
   PatternRow, Quant, Rate, Score, Section, TargetEval, TurnScore } from "../api/market";
 import type { MyJob } from "../api/my";
 import { useApi } from "../app/context";
@@ -489,6 +489,7 @@ function ShockTable({ rows, first }: { rows: (ShockBlock & { name: string })[]; 
 export function MarketSimulatorPage() {
   const fc = useSection<Record<string, TargetEval>>("forecast");
   const lm = useSection<LevelMapSummary>("levelmap");
+  const [dirTick, setDirTick] = useState(0);
   const [src, setSrc] = useState<"discovery" | "new" | "holdout">("discovery");
   const days = useApi<{ days: string[] }>(fc.data ? market.daysUrl(src) : null, [src, fc.data?.key]);
   const [day, setDay] = useState<string>("");
@@ -505,6 +506,7 @@ export function MarketSimulatorPage() {
           70 % of those months; its score on the later 30 % is the honest one. Bands for the candle size: {f.size?.bands ? `${pct(f.size.bands.inside_50, 0)} of candles
           fell inside the 50 % band and ${pct(f.size.bands.inside_80, 0)} inside the 80 % band` : "–"} (well calibrated = 50 % and 80 %).</p>
       </Card>
+      <DirectionCard onChange={() => setDirTick((x) => x + 1)} />
       {lm.data?.data && !lm.data.data.missing && <LevelMapScores lm={lm.data.data} />}
       <Card title="Pick a day" testId="market-day-pick">
         <div className="row gap">
@@ -520,6 +522,7 @@ export function MarketSimulatorPage() {
       </Card>
       {day && <DayCard key={`${src}/${day}`} day={day} src={src} />}
       <HoldoutTestCard />
+      <DirectionHoldoutCard tick={dirTick} />
     </div>
   );
 }
@@ -658,7 +661,7 @@ function DayCard({ day, src }: { day: string; src: string }) {
       {data.levelmap && data.levelmap.length > 0 && <LevelMapCard moments={data.levelmap} candles={candles} />}
       <Card title="Candle by candle (8:00 - 17:00 New York)" testId="market-day-table">
         <TableWrap><table className="dense"><thead><tr><th>Time</th><th className="num">Chance up</th><th>Actual</th><th className="num">Size band (×usual)</th>
-          <th className="num">Actual size</th><th>Why (logistic: biggest pushes)</th></tr></thead>
+          <th className="num">Actual size</th><th>Direction calls (rest of the candle)</th><th>Why (logistic: biggest pushes)</th></tr></thead>
           <tbody>{rth.map((c) => {
             const p = c.p_up?.[mdl];
             const act = c.c > c.o ? "up" : c.c < c.o ? "down" : "flat";
@@ -669,6 +672,7 @@ function DayCard({ day, src }: { day: string; src: string }) {
                 <td className="num">{p != null ? pct(p, 0) : "–"}</td>
                 <td>{act}{hit == null ? "" : hit ? " ✓" : " ✗"}</td><td className="num">{band}</td>
                 <td className="num">{c.actual_size != null ? `${Math.exp(c.actual_size).toFixed(2)}` : "–"}</td>
+                <td className="small"><DayCalls calls={data.direction?.[String(Math.round(c.t / 1e9))]} /></td>
                 <td className="small">{(c.why ?? []).map((w) => `${w.input} ${w.push != null && w.push > 0 ? "↑" : "↓"}`).join(" · ")}</td></tr>);
           })}</tbody></table></TableWrap>
       </Card>
@@ -713,6 +717,124 @@ function HoldoutMistakes({ res }: { res: NonNullable<HoldoutStatus["result"]> })
       <Select value={k} onChange={setK} ariaLabel="Forecast" options={keys.map((x) => ({ value: x, label: TARGET_WORDS[x] ?? x }))} />
       {all[k] && <MistakesView m={all[k]} holdout />}
     </div>
+  );
+}
+
+// =============================================================================================== direction calls (ADR-109)
+const STAGE_NAMES: Record<string, string> = { "0": "At the open", "5": "At minute 5", "10": "At minute 10" };
+const ci = (x: [number, number] | null | undefined) => (x ? ` (${pct(x[0], 1)} … ${pct(x[1], 1)})` : "");
+
+function DayCalls({ calls }: { calls?: Record<string, DayCall> }) {
+  if (!calls) return <span className="muted">–</span>;
+  return (
+    <>{["0", "5", "10"].map((s) => {
+      const c = calls[s];
+      if (!c) return null;
+      const up = (c.p ?? 0.5) > 0.5;
+      const hit = c.actual === 0 ? null : (c.actual > 0) === up;
+      return <span key={s} className={c.called ? "" : "muted"} title={`${STAGE_NAMES[s]}: ${pct(c.p, 0)} up from ${c.ref.toFixed(2)}`}>
+        {s === "0" ? "open" : `m${s}`} {c.called ? `${up ? "↑" : "↓"} ${pct(up ? c.p : 1 - (c.p ?? 0.5), 0)}${hit == null ? "" : hit ? " ✓" : " ✗"}` : "no call"}{s !== "10" ? " · " : ""}</span>;
+    })}</>
+  );
+}
+
+function CallCells({ c }: { c: CallScore | null | undefined }) {
+  if (!c || !c.calls) return <><td className="num">no calls</td><td className="num">–</td><td className="num">–</td><td>–</td></>;
+  return (
+    <>
+      <td className="num">{pct(c.share, 1)} <span className="muted">({c.calls.toLocaleString()})</span></td>
+      <td className="num">{c.accuracy != null ? `${pct(c.accuracy, 1)}${ci(c.accuracy_ci)}` : "–"}</td>
+      <td className="num">{c.baseline_accuracy != null ? pct(c.baseline_accuracy, 1) : "–"}</td>
+      <td>{c.real ? <Badge tone="ok">better than the baseline</Badge> : <Badge tone="neutral">not reliably better</Badge>}</td>
+    </>
+  );
+}
+
+function DirectionCard({ onChange }: { onChange: () => void }) {
+  const { data, error, reload } = useApi<DirectionStatus>(market.directionUrl);
+  const [job, setJob] = useMarketJob(() => { reload(); onChange(); });
+  const [err, setErr] = useState<ApiError | null>(null);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data || !data.analysis) return null;
+  const running = job?.state === "running";
+  const start = async (force: boolean) => { setErr(null); try { setJob(await market.runDirection(force)); } catch (e) { setErr(e as ApiError); } };
+  const sm = data.summary;
+  return (
+    <Card title="Direction calls: which way the rest of the 15-min candle goes" testId="market-direction">
+      <p className="small">Called at the open and again at minute 5 and minute 10, for the <b>rest</b> of the candle (from that moment's price to the
+        candle's close; never "does it close green" from the middle). New inputs: what the 1m / 3m / 5m charts did inside this and the previous
+        candle (FVGs, inverse FVGs, BOS, CHoCH, fills), sweep → shift → FVG sequences after liquidity is taken, and resting FVGs on every chart
+        as magnets. A direction is <b>called only when the model is confident</b>: 55 % or more one way, at a threshold that was clearly better
+        than a coin flip on the earlier 70 % of months (corrected for the thresholds tried) and is then checked on the later 30 %.</p>
+      {running && <Banner tone="info"><span className="spinner" /> {job?.step}</Banner>}
+      {job?.state === "failed" && <Banner tone="error">{job.error?.message}</Banner>}
+      <ErrorPanel error={err} />
+      {!sm ? <Button kind="primary" onClick={() => void start(false)} disabled={running} testId="market-direction-run">Run the direction analysis</Button> : (
+        <>
+          <TableWrap><table className="dense" data-testid="market-direction-table"><thead><tr><th>When</th><th>Model</th><th className="num">Skill, later months</th>
+            <th className="num">Calls (share of candles)</th><th className="num">Right when calling</th><th className="num">Baseline on the same candles</th><th>Real?</th></tr></thead>
+            <tbody>{["0", "5", "10"].map((s) => { const st = sm.stages[s]; if (!st) return null; const ch = st.chosen ?? "logistic";
+              return (<tr key={s}><td>{STAGE_NAMES[s]}</td><td>{MODEL_WORDS[ch]}</td><td className="num">{skill(st.scores?.[ch]?.late)}</td>
+                <CallCells c={st.calls?.late} /></tr>); })}</tbody></table></TableWrap>
+          <p className="small muted">Later months only (the threshold and the model were chosen before them). "Baseline" = always the training
+            period's more common direction. {["0", "5", "10"].map((s) => sm.stages[s]?.calls?.rule?.why ? `${STAGE_NAMES[s]}: ${sm.stages[s].calls!.rule.why}. ` : "").join("")}</p>
+          <h3 className="small-head">What the model leans on most</h3>
+          <p className="small">{sm.top_inputs.slice(0, 10).map((x) => `${x.words} ${pct(x.share, 0)}`).join(" · ")}</p>
+          <h3 className="small-head">Where it goes wrong (later months)</h3>
+          <MistakesView m={sm.mistakes} />
+          <Button kind="ghost" small onClick={() => void start(true)} disabled={running}>Run again</Button>
+        </>)}
+    </Card>
+  );
+}
+
+function DirectionHoldoutCard({ tick }: { tick: number }) {
+  const { data, error, reload } = useApi<DirectionStatus>(market.directionUrl, [tick]);
+  const [job, setJob] = useMarketJob(reload);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [err, setErr] = useState<ApiError | null>(null);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data || !data.summary) return null;
+  const h = data.holdout;
+  const running = job?.state === "running";
+  const start = async () => { setErr(null); try { setJob(await market.runDirectionHoldout(typed)); setOpen(false); setTyped(""); } catch (e) { setErr(e as ApiError); } };
+  const res = h.result;
+  return (
+    <Card title="Second holdout look: direction calls only" testId="market-direction-holdout">
+      <Banner tone="warn">Not a clean first look: {h.first_look ? `the first holdout look (${h.first_look.created_at.slice(0, 10)}) was used and its results were seen` :
+        "this forecaster was designed after earlier results"} before this forecaster was built. Its result is labelled as a second look in the
+        protocol ledger and here; new days after your data stay the clean test.</Banner>
+      {!h.available ? <Banner tone="warn">{h.problem}</Banner> : !h.used ? (
+        <>
+          <p className="small">Freezes the direction models and the call thresholds trained on discovery, records ONE look in its own protocol
+            entry, then calls every holdout 15-minute candle at the open, minute 5 and minute 10 with live knowledge only.</p>
+          {running && <Banner tone="info"><span className="spinner" /> {job?.step}</Banner>}
+          {job?.state === "failed" && <Banner tone="error">{job.error?.message}</Banner>}
+          <ErrorPanel error={err} />
+          <Button kind="primary" onClick={() => setOpen(true)} disabled={running} testId="market-direction-holdout-btn">Run the second look</Button>
+          <Confirm open={open} title="Use the second holdout look (direction calls)?" confirmLabel="Start" danger busy={running}
+            onCancel={() => { setOpen(false); setTyped(""); }} onConfirm={() => void start()}>
+            <p>This spends the one second look. It cannot be undone or repeated. Type <b>HOLDOUT</b> to confirm.</p>
+            <TextInput value={typed} onChange={setTyped} ariaLabel="Type HOLDOUT" testId="market-direction-holdout-typed" />
+          </Confirm>
+        </>) : !res ? (
+          <Banner tone={h.look?.status === "failed" ? "error" : "info"}>
+            {h.look?.status === "failed" ? "The look was recorded but the test failed; the look stays spent." : <><span className="spinner" /> Running…</>}</Banner>
+        ) : (
+        <>
+          <p className="small">Look {res.access_id} · {res.days} holdout days · {res.candles.toLocaleString()} candles · models and thresholds frozen on
+            discovery (fingerprint {res.fingerprint}).</p>
+          <TableWrap><table className="dense" data-testid="market-direction-holdout-result"><thead><tr><th>When</th><th className="num">Skill</th>
+            <th className="num">Calls (share)</th><th className="num">Right when calling</th><th className="num">Baseline on the same candles</th><th>Real?</th>
+            <th className="num">Discovery (later months): right when calling</th></tr></thead>
+            <tbody>{["0", "5", "10"].map((s) => { const st = res.stages[s]; if (!st) return null; const d = res.discovery[s]?.calls;
+              return (<tr key={s}><td>{STAGE_NAMES[s]}</td><td className="num">{skill(st.official)}</td><CallCells c={st.calls} />
+                <td className="num">{d?.accuracy != null ? pct(d.accuracy, 1) : "no calls"}</td></tr>); })}</tbody></table></TableWrap>
+          <h3 className="small-head">Mistakes report (descriptive; nothing is retrained)</h3>
+          <MistakesView m={res.mistakes} holdout />
+        </>)}
+    </Card>
   );
 }
 

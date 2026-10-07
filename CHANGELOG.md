@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Market simulator: direction calls + second holdout look (ADR-109)
+
+| Item | Status |
+|---|---|
+| Direction of the REST of the 15-min candle, called at the open, minute 5 and minute 10 | IMPLEMENTED, TESTED |
+| New inputs: 1m / 3m / 5m FVGs, inverse FVGs, BOS, CHoCH, fills inside this and the previous candle; liquidity sweep → shift → FVG sequences; resting FVGs of 5m-1D as magnets | IMPLEMENTED, TESTED (live: identical with another future) |
+| Calls only when confident (55 %+, threshold chosen on early months, corrected for the thresholds tried; none when nothing is clearly better than a coin flip) | IMPLEMENTED, TESTED (random walk: no calls; planted inside-candle effect: found) |
+| Second holdout look (direction only): own one-look protocol, labelled as designed after seeing the first look | IMPLEMENTED, TESTED (look recorded before the holdout is read) |
+| Direction calls on new days and in the day viewer | IMPLEMENTED, TESTED |
+| Whether your NQ data has direction calls that beat the baseline | REQUIRES REAL DATA (run the direction analysis in the app) |
+| Backtests, rules, costs, configs, tries, the research protocol, the first look | UNCHANGED |
+
 ## Market simulator: level map + mistakes report (ADR-108)
 
 | Item | Status |

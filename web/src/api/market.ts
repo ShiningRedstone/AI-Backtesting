@@ -67,6 +67,21 @@ export interface MapLevel { label: string; price: number; side: number; dist: nu
 export interface MapLanding { median: number | null; band80: (number | null)[]; band50: (number | null)[]; actual: number }
 export interface MapMoment { t: number; px: number; atr15: number; levels: MapLevel[]; p_up_first: number | null; p_up_first_random_walk: number | null;
   up_first: number | null; turn_prob: Record<string, number>; land: Record<"land2h" | "land", MapLanding> }
+export interface CallScore { candles: number; calls: number; share?: number; tau?: number; accuracy?: number; accuracy_ci?: [number, number] | null;
+  baseline_accuracy?: number; up_calls?: number; vs_baseline_ci?: [number, number] | null; real?: boolean; beats_chance?: boolean }
+export interface CallRule { tau: number | null; calls?: number; accuracy?: number; wilson_low?: number; share?: number; why?: string }
+export interface DirectionStage extends TargetEval { calls?: { rule: CallRule; late: CallScore; all: CallScore } }
+export interface DirectionSummary { version: number; analysis_key: string; computed_at: string; rows: number; inputs: string[];
+  stages: Record<string, DirectionStage>; mistakes: Mistakes; top_inputs: { input: string; words: string; share: number }[] }
+export interface DirectionHoldoutStage { official_model: string; models: Record<string, Score | null>; official: Score | null; calls: CallScore;
+  by_month: { month: string; calls?: number; accuracy?: number | null }[] }
+export interface DirectionHoldout { available: boolean; problem?: string; used?: boolean; holdout?: { start: string; end: string };
+  look?: { access_id: string; status: string; created_at: string } | null; first_look?: { access_id: string; created_at: string } | null;
+  result?: { access_id: string; fingerprint: string; computed_at: string; candles: number; days: number; second_look: boolean;
+    rules: Record<string, { model: string; tau: number | null }>; stages: Record<string, DirectionHoldoutStage>; mistakes: Mistakes;
+    discovery: Record<string, { calls: CallScore | null; skill: Score | null }> } | null }
+export interface DirectionStatus { analysis: boolean; summary: DirectionSummary | null; holdout: DirectionHoldout; words: Record<string, string> }
+export interface DayCall { p: number | null; called: boolean; ref: number; actual: number }
 export interface Section<T> { key: string; name: string; data: T; kinds: Record<string, string>; sessions: string[] }
 
 export interface DayCandle { t: number; o: number; h: number; l: number; c: number; p_up?: Record<string, number | null>;
@@ -75,7 +90,8 @@ export interface DayLevel { t: number; level: string; name: string; price: numbe
 export interface DayView { date: string; src: string; candles: DayCandle[]; bias: ({ t: number } & Record<string, number | null>)[];
   levels: DayLevel[]; news: { t: number; name: string; impact: number; forecast: number | null; actual: number | null; surprise_z: number | null }[];
   shocks: { start: number; end: number; main: string; move_pts: number; tfs: Record<string, number>; tags: { tag: string; detail?: string }[];
-    m15_kept: number | null; minutes_to_return: number | null }[]; chosen: { up: string; size: string }; levelmap?: MapMoment[] }
+    m15_kept: number | null; minutes_to_return: number | null }[]; chosen: { up: string; size: string }; levelmap?: MapMoment[];
+  direction?: Record<string, Record<string, DayCall>> }
 
 export const market = {
   statusUrl: "/api/market",
@@ -86,6 +102,9 @@ export const market = {
   downloadNews: (source: string) => api.post<MyJob>("/api/market/news/download", { source }),
   analyze: (force = false) => api.post<MyJob>("/api/market/analyze", { force }),
   newdays: () => api.post<MyJob>("/api/market/newdays", {}),
+  directionUrl: "/api/market/direction",
+  runDirection: (force = false) => api.post<MyJob>("/api/market/direction/run", { force }),
+  runDirectionHoldout: (confirm: string) => api.post<MyJob>("/api/market/direction/holdout", { confirm }),
   job: (id: string) => api.get<MyJob & { done: boolean }>(`/api/market/jobs/${enc(id)}`),
   holdoutUrl: "/api/market/holdout",
   runHoldout: (confirm: string) => api.post<MyJob>("/api/market/holdout", { confirm }),

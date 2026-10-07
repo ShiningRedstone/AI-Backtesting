@@ -2938,3 +2938,44 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Tests:** levels and inputs identical with another future, EQ / OTE known answer, random walk: which-first =
   gambler's ruin, reactions ~50 %, no model "real"; holdout result has the level map and mistakes; day views.
 - **Never:** a run, a trial, a change to backtests, rules, costs or configs; nothing from the holdout trains a model.
+
+### ADR-109 Market simulator direction calls (open, minute 5, minute 10) and a second, labelled holdout look
+- **Request (user), after the first holdout look:** every 15-minute direction forecast is ~50 / 50 (holdout: 51.1 % right,
+  "always up" 51.3 %); recognise liquidity patterns on higher timeframes, how the smaller timeframes inside the current
+  and previous 15-minute candle reacted and resting FVGs, and give a better direction estimate. Answers: calls at the open
+  AND inside the candle; call only when confident; inputs = sweep -> shift -> FVG sequences, inside-candle micro reactions,
+  resting FVGs as magnets; test on discovery walk-forward AND a second holdout look (the user chose it after being told it
+  is not a clean look); direction only; deliver to main.
+- **Holdout facts that shaped it:** size (+25.6 %, real) and level reach (+4.4 % in 2 h, real) held on 448 holdout days;
+  direction, bias, reactions, which side first and landing had no skill. The discovery edge scan's confirmed direction
+  information sits INSIDE the candle (rest of the candle against a 1-5 minute FVG / IFVG / BOS ~54-55 %) and in rare
+  higher-timeframe situations.
+- **`market/direction.py`:** decisions at minute 0 / 5 / 10 of every complete 15-minute candle; target = the REST of the
+  candle (close above the decision minute's open), never "closes green" from the middle. New live inputs (`Micro`):
+  1m / 3m / 5m FVGs, inverse FVGs (closed through within 10 bars), BOS / CHoCH (`_breaks` = add_structure's rule without
+  its outcome measurements), FVG fills within 30 min - signed sums in the current candle so far and the previous candle,
+  the last micro event; the candle so far (move, range, position, sweep of the previous candle's high / low); previous
+  candle wicks, close position, sweep; liquidity SWEEPS (previous week / day / session, Asia, London, untaken 1h / 4h
+  swings, 15m / 1h equal highs / lows traded through and a 1-minute close back inside within 15 min, known at that minute's
+  end) followed by a 1-5 minute break the other way and an FVG that way (stage 1-3, weight, ages, distance from the
+  level), weighted liquidity swept in 2 h; resting FVGs of 5m ... 1D (levelmap.Source: distance to the nearest open FVG
+  above / below, how many within 3 ATR, balance). Plus every forecast input. One walk-forward (`fit_mask` = rows with a
+  direction), models / baseline / 70-30 choice per stage as forecast.py.
+- **Calls:** probability >= 55 % one way (tau 0.05 ... 0.30); tau per stage = the best lower Wilson bound of the call
+  accuracy on the EARLY 70 % of months (>= 100 calls, one-sided 5 % Bonferroni over the thresholds tried); NO calls for a
+  stage when even that bound is not above 50 %. Later months: share called, accuracy with a day-bootstrap interval,
+  the baseline's direction on the same candles, "real" = the interval of (right - baseline right) above 0. Mistakes
+  report (stage, sweep sequence, 1-5 min patterns, called or not, plus the candle buckets) and the inputs boosting leans on.
+  Cached as `direction.json` / `.npz` in the analysis folder (`DIRECTION_VERSION` 1, the analysis itself unchanged);
+  job "Run the direction analysis". New days get frozen direction calls; the day viewer shows the calls per candle.
+- **Second holdout look** (`direction.holdout_run`): own companion protocol (role `market_sim_direction`, 1 look, no
+  trials) whose exposure statement names the first look and says its results were seen before this forecaster was
+  designed; checks (current analysis + direction analysis, settings, unused look) -> models and thresholds frozen on
+  discovery (fingerprint) -> look RECORDED (`HA_MARKETDIR_...`) -> holdout loaded -> calls scored per stage with the
+  discovery numbers beside them + mistakes report. Labelled "not a clean first look" in the UI. `holdout.protocol` takes
+  role / scope / wording parameters (defaults = the ADR-107 protocol, unchanged).
+- **Tests:** inputs identical with another future; random walk -> no stage makes calls that beat the baseline (the
+  thresholds pick none); a planted inside-candle reversal is found at minute 5 (>65 % right, real) and not at the open;
+  second look recorded before the holdout is read, own protocol and exposure note, second use refused, first look
+  untouched; API and day view.
+- **Never:** a run, a trial, a change to backtests, rules, costs or configs; nothing from either holdout look trains a model.

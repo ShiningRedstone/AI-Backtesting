@@ -1240,6 +1240,23 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("confirm must be text")
         return jsonify(call(svc.market_holdout_run, confirm)), 202
 
+    @app.get("/api/market/direction")                  # ADR-109: direction calls + the second holdout look
+    def market_direction():
+        return jsonify(call(svc.market_direction))
+
+    @app.post("/api/market/direction/run")
+    def market_direction_run():
+        body = request.get_json(silent=True) or {}
+        return jsonify(call(svc.market_direction_run, bool(body.get("force")))), 202
+
+    @app.post("/api/market/direction/holdout")
+    def market_direction_holdout():
+        body = request.get_json(silent=True) or {}
+        confirm = body.get("confirm")
+        if not isinstance(confirm, str):
+            raise _bad("confirm must be text")
+        return jsonify(call(svc.market_direction_holdout_run, confirm)), 202
+
     @app.get("/api/market/jobs/<jid>")
     def market_job(jid):
         return jsonify(call(svc.market_job, _id(jid, MY_JOB_ID, "job id")))

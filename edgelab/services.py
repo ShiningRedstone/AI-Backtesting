@@ -2834,6 +2834,29 @@ class Services:
         return self._market_jobs().start("market_holdout", lambda step: _market_light(H.run(self, lock=self.lock, progress=step)),
                                          meta={"what": "holdout"})
 
+    def market_direction(self) -> dict:
+        """ADR-109: the direction calls (walk-forward summary of the current analysis) and the second holdout look."""
+        from edgelab.market import analysis as A, direction as DR
+        la = A.latest(self.data_root)
+        summ = DR.latest(self.data_root, la["key"]) if la else None
+        return _jsonable({"analysis": bool(la), "summary": summ, "holdout": DR.holdout_status(self),
+                          "words": {n: DR.input_word(n) for n in (summ or {}).get("inputs", [])}})
+
+    def market_direction_run(self, force: bool = False) -> dict:
+        from edgelab.market import direction as DR
+        return self._market_jobs().start(
+            "market_direction", lambda step: {"rows": DR.run(self, lock=self.lock, progress=step, force=force).get("rows")},
+            meta={"what": "direction"})
+
+    def market_direction_holdout_run(self, confirm: str) -> dict:
+        from edgelab.market import direction as DR, holdout as H
+        if confirm != "HOLDOUT":
+            raise H.HoldoutTestError("CONFIRM_REQUIRED", "Type HOLDOUT to spend the second look.")
+        return self._market_jobs().start(
+            "market_direction_holdout",
+            lambda step: {"access_id": DR.holdout_run(self, lock=self.lock, progress=step).get("access_id")},
+            meta={"what": "direction_holdout"})
+
     def market_job(self, job_id: str) -> dict:
         j = self._market_jobs().get(job_id)
         return {k: v for k, v in j.items() if k != "result"} | {"done": j["state"] != "running"}
@@ -2852,7 +2875,10 @@ class Services:
             from edgelab.mystrategy import runner as R
             st = H.status(self)
             if not st.get("used"):
-                raise KeyError("the holdout test is not used yet")    # never shown before the look
+                from edgelab.market import direction as DR
+                st = DR.holdout_status(self)
+            if not st.get("used"):
+                raise KeyError("the holdout test is not used yet")    # never shown before a look
             parent = R._parent(self)
             ds = self._cell_dataset(R.dataset_1m(self, parent), (R._ts(st["holdout"]["start"]), R._ts(st["holdout"]["end"])),
                                     self.lock)
@@ -2874,6 +2900,9 @@ class Services:
             from edgelab.market import holdout as H
             p = (ND.folder(self.data_root, "") / f"predictions_{latest['key']}.npz" if src == "new"
                  else H.home(self.data_root) / "predictions.npz")
+            if src == "holdout" and not p.exists():
+                from edgelab.market import direction as DR
+                p = DR.holdout_home(self.data_root) / "predictions.npz"
             if not p.exists():
                 return {"days": []}
             with np.load(p) as z:
@@ -2894,8 +2923,12 @@ class Services:
         m = self._market_minutes(src)
         if src == "holdout":
             from edgelab.market import holdout as H
-            with np.load(H.home(self.data_root) / "predictions.npz") as z:
-                fc = {k: z[k] for k in z.files}
+            hp = H.home(self.data_root) / "predictions.npz"
+            if hp.exists():
+                with np.load(hp) as z:
+                    fc = {k: z[k] for k in z.files}
+            else:                                           # only the second (direction) look was used
+                fc = {"t": np.zeros(0, np.int64), "bias_t": np.zeros(0, np.int64), "level_t": np.zeros(0, np.int64)}
             hres = H.status(self).get("result") or {}
             latest = {**latest, "forecast": {**(latest.get("forecast") or {}),
                                              "up": {"chosen": (hres.get("chosen") or {}).get("up")},
@@ -2930,7 +2963,25 @@ class Services:
         out["shocks"] = shocks
         out["src"] = src
         out["levelmap"] = self._market_levelmap_day(src, latest, out)
+        out["direction"] = self._market_direction_day(src, latest, out)
         return _jsonable(out)
+
+    def _market_direction_day(self, src: str, latest: dict, day: dict) -> dict:
+        """ADR-109: the official direction calls of every candle of the day (saved predictions only)."""
+        import numpy as np
+        from edgelab.market import direction as DR, newdays as ND
+        if not day["candles"]:
+            return {}
+        summ = DR.latest(self.data_root, latest["key"])
+        p = {"holdout": DR.holdout_home(self.data_root) / "predictions.npz",
+             "new": ND.folder(self.data_root, "") / f"direction_{latest['key']}.npz"}.get(
+            src, DR.home(self.data_root, latest["key"]) / "direction.npz")
+        if summ is None or not p.exists() or (src == "holdout" and not DR.holdout_status(self).get("used")):
+            return {}
+        with np.load(p) as z:
+            npz = {k: z[k] for k in z.files}
+        lo, hi = day["candles"][0]["t"], day["candles"][-1]["t"] + 15 * 60_000_000_000
+        return DR.day_calls(npz, summ, lo, hi)
 
     def _market_levelmap_day(self, src: str, latest: dict, day: dict) -> list:
         """ADR-108: the level map of every decision moment of the day (saved predictions; nothing is recomputed)."""
