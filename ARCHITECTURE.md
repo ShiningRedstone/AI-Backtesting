@@ -3007,3 +3007,64 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
 - **Tests:** new days from day 1 after a look (every downloaded day predicted, size ranges, per-day rows), minute series
   joined without duplicates, report card with discovery / holdout / new sources, API fields. Phase 1 demo identical.
 - **Never:** a run, a trial, a holdout look, a change to backtests, rules, costs or configs; the holdout trains nothing.
+
+### ADR-111 Charts tab: live TradingView-style chart of MNQ / NQ / ES / MES (Dukascopy), every drawing tool; version 0.6.0
+- **Request (user):** a Charts tab drawing live charts like TradingView (all movement / stretching / timeframes / chart
+  options, all TradingView drawing tools with the same editing) for MNQ, NQ, ES and MES; later rounds: simulated orders
+  with every Tradovate order type under LucidFlex 50K rules plus a tracker for the real account (round 2), the Market
+  simulator predictor drawn live on the chart (round 3). Answers: data source = Dukascopy (the only free, unlimited,
+  sign-up-free source with Nasdaq and S&P data that fits; Alpaca has no futures, Tradovate's API needs a funded account
+  and a CME data licence); orders are SIMULATED only (never real); version 0.6; all drawing tools now; no indicators
+  except the user's own analyser / predictor (round 3). Delivered in rounds, each pushed to main; this ADR is round 1.
+- **Feed** (`edgelab/charts/feed.py`): dukascopy-python, BID side, USATECH.IDX/USD (E_NQ-100) for NQ / MNQ and
+  USA500.IDX/USD (E_SandP-500) for ES / MES - index CFDs that follow the futures, labelled as such on the chart (levels
+  can differ from CME by a few points; MNQ = NQ series, MES = ES series, only the point value differs). 1-minute bars
+  (per UTC day) for minute timeframes, 1-hour bars (per UTC month) for whole-hour / D / W / M; complete chunks cached as
+  `<data>/charts/cache/<code>/<interval>/<key>.csv.gz` (prices rounded to 6 decimals so the cache round-trips exactly)
+  and kept in memory; the open chunk is re-downloaded after 60 s. Bars of every timeframe are anchored at the 18:00 New
+  York session open (`market.data.resample`; D = trading date, W = Monday week, M = month of the trading date); nothing
+  is filled or invented. Live: a poller thread per instrument fetches the last 20 minutes every 2 s while a chart asks
+  (stops after 90 s idle) and the newest minutes replace history from their first minute (hour-aligned for hourly
+  sources). Download problems are kept and shown. Never a research dataset, a run or a trial.
+- **Saved state** (`edgelab/charts/store.py`): drawings per symbol (`drawings_<SYM>.json`) and the chart layout
+  (`layout.json`: symbol, timeframe, chart type, time zone, scale, chart style, favourite timeframes / tools, tool
+  defaults, magnet, stay-in-drawing, object tree) under `<data>/charts/`, JSON only, size-limited, atomic writes.
+- **API:** `GET /api/charts`, `GET /api/charts/bars?symbol&tf&to&count`, `GET /api/charts/live?symbol&tf&since`,
+  `GET|PUT /api/charts/drawings/<symbol>`, `GET|PUT /api/charts/layout`; symbols and timeframes validated (custom
+  timeframes 1 minute ... 23 hours, 1D, 1W, 1M); download failures answer 503.
+- **Chart** (`web/src/pages/charts/`): TradingView's open-source Lightweight Charts 5 (Apache-2.0; attribution logo kept,
+  licence in `edgelab/web/static/licenses/`). Chart types bars, candles, hollow candles, Heikin Ashi (computed from the
+  delivered bars), line, line with markers, step line, area, baseline, columns; free pan / wheel zoom / stretch by
+  dragging either scale / double-click reset; auto, log, %, indexed-to-100 and inverted scales; time zones (New York,
+  Chicago, local, UTC and 18 more; display only); date ranges 1D ... All; go to date (pages older history in); paging
+  into older history while scrolling left; OHLC / change / tick-volume legend with bar countdown; live status; chart
+  settings (palettes Munyun = green / grey as in the rest of the app, TradingView = green / red, custom colours, grid,
+  crosshair, watermark, session breaks, scale side, right margin, decimals); snapshot PNG; full screen.
+- **Drawing tools** (`tools.ts`, 87 tools in TradingView's groups): lines (trend line, ray, info line, extended line,
+  trend angle, horizontal line / ray, vertical line, cross line), channels (parallel, regression trend, flat top /
+  bottom, disjoint), pitchforks (Andrews, Schiff, modified Schiff, inside), Fibonacci (retracement, trend-based
+  extension, channel, time zone, speed resistance fan, trend-based time, circles, spiral, speed resistance arcs, wedge,
+  pitchfan), Gann (box, square fixed, square, fan), patterns (XABCD, cypher, ABCD, head and shoulders, triangle, three
+  drives), Elliott waves (impulse, correction, triangle, double / triple combo), cycles (cyclic lines, time cycles, sine
+  line), projection (long / short position with risk-based MNQ / NQ / ES / MES sizing and the outcome on the bars,
+  forecast, bars pattern, ghost feed, projection), volume-based (anchored VWAP, fixed range and anchored volume profile
+  - on Dukascopy TICK volume, said so in each tool), measurer (price, date, date and price range), brushes (brush,
+  highlighter), arrows (marker, arrow, mark up / down), shapes (rectangle, rotated rectangle, path, circle, ellipse,
+  polyline, triangle, arc, curve, double curve), text and notes (text, anchored text, note, anchored note, price note,
+  pin, table, callout, comment, price label, signpost, flag mark) and emoji / stickers. Not included: image, tweet and
+  idea (TradingView social content). Points are stored as (UTC time, price) so drawings keep their place on every
+  timeframe and time zone (screen-anchored tools as pane fractions).
+- **Editing:** select, move, anchor editing (incl. rectangle corners / edges, position target / stop / end), Shift to
+  keep a level, weak / strong magnet to open / high / low / close, stay in drawing mode, press-drag or click-click
+  creation, floating toolbar (colour, width, style, settings, lock, clone, remove), settings dialog (Style incl. Fib /
+  Gann / pitchfork level tables, Text, Coordinates, Visibility per timeframe group, save as default / reset),
+  right-click menu (clone, copy, z-order, lock, hide, remove; chart: reset, paste, hide / remove all), object tree
+  (hide, lock, rename, remove), undo / redo, lock / hide / remove all, measure (also Shift + click), zoom box, eraser
+  cursor, keyboard shortcuts (Alt+T/H/J/V/C/F, Alt+Shift+R, Alt+I/L/P/R/G, Del, Ctrl+Z/Y/C/V, Esc, Enter).
+- **Version 0.6.0** (`edgelab.__version__`, web/package.json, package-lock.json, bundle).
+- **Tests:** anchoring (4h buckets 18-22-02-06-10-14, D / W / M), every bar = its source minutes, hourly source =
+  minutes, cache / no re-download of complete days / paging / live merge / reported download failure, refusals, store
+  and API (`tests/test_charts.py`, synthetic stand-in downloader); browser flow (`tests/test_charts_e2e.py`): every one of
+  the 87 tools drawn and saved without a page error, text dialog, right-click clone, undo / redo, delete, drawings per
+  symbol, custom timeframe and layout saved. A drawing made while a symbol was still loading is kept (found by the test).
+- **Never:** an order, a broker connection, a run, a trial, a holdout look, a change to backtests, rules, costs or configs.

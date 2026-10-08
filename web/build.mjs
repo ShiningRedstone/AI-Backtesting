@@ -57,6 +57,7 @@ const finish = () => {
   fs.copyFileSync(path.join(here, "index.html"), path.join(out, "index.html"));
   fs.copyFileSync(path.join(here, "src/styles.css"), path.join(out, "styles.css"));
   fs.cpSync(path.join(here, "src/fonts"), path.join(out, "fonts"), { recursive: true });   // self-hosted fonts + OFL texts
+  fs.cpSync(path.join(here, "src/licenses"), path.join(out, "licenses"), { recursive: true });   // bundled libraries' licences (ADR-111)
   const react = require(require.resolve("react/package.json", { paths: searchPaths })).version;
   fs.writeFileSync(path.join(out, "build-info.json"), JSON.stringify({
     source_sha256: sourceHash(), built_at: new Date().toISOString(), esbuild: esbuild.version, react,

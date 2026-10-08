@@ -3,6 +3,21 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Charts tab: live MNQ / NQ / ES / MES chart with every TradingView drawing tool; version 0.6.0 (ADR-111)
+
+| Item | Status |
+|---|---|
+| Charts tab: live Dukascopy prices (index CFDs that follow NQ / ES; labelled), MNQ / NQ / ES / MES, refreshed every 2 seconds | IMPLEMENTED, TESTED (synthetic stand-in downloader) |
+| Timeframes 1m ... 4h, 1D, 1W, 1M and custom ones (e.g. 7m, 6h), favourites; bars anchored at the 18:00 New York open | IMPLEMENTED, TESTED |
+| Chart types (bars, candles, hollow, Heikin Ashi, line, markers, step, area, baseline, columns); pan, zoom, stretch scales; auto / log / % / indexed / inverted; time zones; date ranges; go to date; older history while scrolling | IMPLEMENTED |
+| 87 drawing tools in TradingView's groups with select / move / anchors / magnet / settings (style, levels, text, coordinates, visibility) / right-click menu / object tree / undo / redo / lock / hide / remove all / measure / zoom | IMPLEMENTED, TESTED (browser: every tool drawn and saved) |
+| Drawings saved per symbol, chart layout and tool defaults saved in the workspace | IMPLEMENTED, TESTED |
+| Chart settings (colour palettes incl. TradingView green / red, grid, crosshair, watermark, session breaks, scale side), snapshot, full screen | IMPLEMENTED |
+| Live Dukascopy download | REQUIRES REAL DATA (cannot be reached from the build environment; check in the app) |
+| Simulated orders (Tradovate order types) under LucidFlex 50K rules + tracker for the real account | NOT IMPLEMENTED (round 2) |
+| The predictor on the live chart | NOT IMPLEMENTED (round 3) |
+| Backtests, rules, costs, configs, tries, the research protocol, holdout looks | UNCHANGED |
+
 ## Market simulator: reorganised tabs, working new days, report card with graphs (ADR-110)
 
 | Item | Status |

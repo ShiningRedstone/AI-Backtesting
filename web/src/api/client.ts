@@ -48,4 +48,5 @@ export const viewCache = {
 export const api = {
   get: <T>(url: string) => request<T>("GET", url),
   post: <T>(url: string, body: unknown = {}) => { viewCache.clear(); return request<T>("POST", url, body); },
+  put: <T>(url: string, body: unknown) => request<T>("PUT", url, body),                  // ADR-111: saved chart state
 };

@@ -87,7 +87,7 @@ research run reads (preflight, progress, stop) via `campaign.read_outside_lock`;
 ADR-79: Run backtest = Research runs | Single backtest (Experiments tab removed; `/research` -> `/runs`, job/id deep links kept); `results_view.session_group`
 (market-hours groups, `session_group` breakdown); deep-rose decorative gradient; desktop relaunch waits for a closing instance (`_hand_off` ->
 `HANDOFF_WAIT`, `_wait_for_previous`), runtime.json removed first on shutdown, splash `edgelab/desktop_splash.py` (`EdgeLab.exe --splash`).
-Version 0.3.0 (after the V0.2 save point): version bump only, no behaviour change. Version 0.5.0 came with ADR-97.
+Version 0.3.0 (after the V0.2 save point): version bump only, no behaviour change. Version 0.5.0 came with ADR-97, 0.6.0 with ADR-111.
 ADR-80: `core/fsutil.atomic_write_text` (unique temp + `replace_with_retry` on Windows sharing violations) for run records,
 scopes and run names; a research run no longer dies with WinError 5 while a page reads its run record.
 ADR-81: paper trading in simulated prop accounts (`edgelab/paper/`: `feed.py` daily Dukascopy download via dukascopy-python, in-memory
@@ -205,14 +205,19 @@ SECOND holdout look = companion role `market_sim_direction` (1 look, exposure no
 ADR-110: Market simulator UI in `web/src/pages/market/*` (7 tabs: Start here, Market behaviour, Patterns, Predictions, Day replay, Live (new days),
 Holdout tests; old routes kept); report card `market/report.py` (`/api/market/report`, saved predictions only: discovery / holdout / new-day skill,
 monthly, calibration); new days predicted from day 1 with the holdout as plain history once a look is used (`newdays._history`), problems shown.
+ADR-111 (version 0.6.0): tab "Charts" (`edgelab/charts/`: `feed.py` live Dukascopy BID USATECH / USA500 1m + 1h, cache under
+`<data>/charts/cache/`, 2 s live poller, bars anchored at 18:00 NY; `store.py` drawings per symbol + layout JSON; `/api/charts*`)
+with a TradingView-style chart (`web/src/pages/charts/`, Lightweight Charts 5, Apache-2.0) and 87 drawing tools with full editing.
+Round 1 of 3: round 2 = SIMULATED orders (all Tradovate order types, never real) under LucidFlex 50K rules + a tracker for the real
+account; round 3 = the Market simulator predictor drawn live on the chart. Never a run / try / look.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-110.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-111.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
-## The app today (version 0.5.0)
+## The app today (version 0.6.0)
 
-- **Version:** `edgelab.__version__` = **0.5.0** (web/package.json and package-lock.json must match; the frontend build
+- **Version:** `edgelab.__version__` = **0.6.0** (web/package.json and package-lock.json must match; the frontend build
   records it in `edgelab/web/static/build-info.json`). Save points (never modify or delete them):
   - branch `backup/main-2026-10-01` = 0d0baeb
   - branch `V0.2` = 716da4d, the last 0.2.0 state
@@ -266,6 +271,8 @@ remains. Do not rely on this file alone.
   - Market simulator (ADR-106 ... 110): Start here (data, news, analysis, direction analysis, new days), Market behaviour (Days & sessions |
     NQ vs ES | News & shocks), Patterns (+ edge scan), Predictions (report card: works / no skill, monthly, calibration, details), Day replay
     (level map + calls per candle), Live (new days), Holdout tests (first look + second, direction-only look, mistakes reports).
+  - Charts (ADR-111): live MNQ / NQ / ES / MES (Dukascopy CFDs, labelled), TradingView-style chart, 87 drawing tools,
+    drawings per symbol and the layout saved in the workspace.
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -492,4 +499,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-110). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-111). Update `README.md` status for phases.

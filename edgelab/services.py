@@ -2841,6 +2841,45 @@ class Services:
         return self._market_jobs().start("market_holdout", lambda step: _market_light(H.run(self, lock=self.lock, progress=step)),
                                          meta={"what": "holdout"})
 
+    # ============================================================ LIVE CHARTS (ADR-111)
+    def _charts_feed(self):
+        f = self.__dict__.get("_charts_feed_obj")
+        if f is None:
+            from edgelab.charts.feed import Feed
+            f = self.__dict__["_charts_feed_obj"] = Feed(self.data_root)
+        return f
+
+    def charts_meta(self) -> dict:
+        from edgelab.charts import feed as CF
+        st = self._charts_feed().status
+        return {"symbols": [{"symbol": k, **v, "source": CF.SOURCE[v["code"]]} for k, v in CF.SYMBOLS.items()],
+                "timeframes": [{"tf": t, "label": CF.tf_label(t)} for t in CF.TIMEFRAMES],
+                "status": {k: dict(v) for k, v in st.items()}}
+
+    def charts_bars(self, symbol: str, tf: str, to_s: int | None = None, count: int = 1500) -> dict:
+        from edgelab.charts import feed as CF
+        return self._charts_feed().bars(symbol, CF.parse_tf(tf), None if to_s is None else int(to_s) * CF.NS, count)
+
+    def charts_live(self, symbol: str, tf: str, since_s: int) -> dict:
+        from edgelab.charts import feed as CF
+        return self._charts_feed().live_bars(symbol, CF.parse_tf(tf), int(since_s))
+
+    def charts_drawings(self, symbol: str) -> dict:
+        from edgelab.charts import store as CS
+        return {"symbol": symbol, "drawings": CS.drawings(self.data_root, symbol)}
+
+    def charts_save_drawings(self, symbol: str, items) -> dict:
+        from edgelab.charts import store as CS
+        return CS.save_drawings(self.data_root, symbol, items)
+
+    def charts_layout(self) -> dict:
+        from edgelab.charts import store as CS
+        return CS.layout(self.data_root)
+
+    def charts_save_layout(self, obj) -> dict:
+        from edgelab.charts import store as CS
+        return CS.save_layout(self.data_root, obj)
+
     def market_report(self) -> dict:
         """ADR-110: the report card of every forecast (saved predictions only; discovery, holdout after a look, new days)."""
         from edgelab.market import report as RP

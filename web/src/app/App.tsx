@@ -22,6 +22,7 @@ import { RunBacktestPage } from "../pages/RunBacktest";
 import { MyAutotunePage } from "../pages/MyAutotune";
 import { MarketBehaviourPage, MarketDayReplayPage, MarketHoldoutPage, MarketLivePage, MarketPatternsPage, MarketPredictionsPage, MarketStartPage } from "../pages/Market";
 import { EdgeCheckPage, TradeAnatomyPage } from "../pages/Edge";
+import { ChartsPage } from "../pages/charts/ChartsPage";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
@@ -40,6 +41,7 @@ const NAV: NavItem[] = [
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
+  { path: "/charts", label: "Charts", tid: "charts", icon: "candles", heads: ["charts"] },                    // ADR-111: live charts
   { path: "/edge", label: "Edge lab", tid: "edge", icon: "search", heads: ["edge", "edge-anatomy"] },          // ADR-104
   { path: "/market", label: "Market simulator", tid: "market", icon: "pulse",
     heads: ["market", "market-behaviour", "market-trend", "market-nqes", "market-patterns", "market-news", "market-predictions", "market-sim",
@@ -132,6 +134,7 @@ function Page() {
     case "my-setup": return <MySetupReviewPage />;               // ADR-96
     case "my-autotune": return <MyAutotunePage />;               // ADR-97
     case "my-plan": return <MyPlanResultPage />;
+    case "charts": return <ChartsPage />;                        // ADR-111: live charts
     case "edge": return <EdgeCheckPage />;                       // ADR-104: Edge lab
     case "edge-anatomy": return <TradeAnatomyPage />;
     case "market": return <MarketStartPage />;                   // ADR-106 / ADR-110: Market simulator (old routes kept)
@@ -240,7 +243,7 @@ function ShellBody() {
           no broker connections</div>
       </nav>
       <div className="scrim" onClick={() => setMenu(false)} />
-      <main className="main">{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} sub={active === "paper" && route.parts[1] === "new" ? "paper/new" : (MARKET_ALIAS[active] ?? active)} /><Page /></>}</main>
+      <main className={`main${active === "charts" ? " main-charts" : ""}`}>{firstRun && ws.data ? <WelcomePage state={ws.data} /> : <><SubNav head={active} sub={active === "paper" && route.parts[1] === "new" ? "paper/new" : (MARKET_ALIAS[active] ?? active)} /><Page /></>}</main>
       <Toasts />
     </div>
   );

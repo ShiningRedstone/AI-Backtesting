@@ -1,7 +1,7 @@
 {
   "name": "edgelab-web",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "EdgeLab Strategy Builder & research UI (Phase 3.5). Python/Flask is the backend; this is the browser client.",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "lightweight-charts": "^5.2.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

@@ -70,6 +70,8 @@ def strategy_source(x: Any) -> Any:
     raise _bad("a strategy must be a JSON object (DSL document) or a strategy id like STR_0123456789AB")
 
 
+CHART_SYMBOL = re.compile(r"\A(MNQ|NQ|ES|MES)\Z")                 # ADR-111
+CHART_TF = re.compile(r"\A([0-9]{1,4}[mh]?|1D|1W|1M)\Z")
 MARKET_SECTION = re.compile(r"\A[a-z_]{1,32}\Z")                 # ADR-106
 MARKET_DAY = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 EDGE_SOURCE = re.compile(r"\A[A-Za-z0-9_.:\-]{1,200}\Z")      # ADR-105: "discovery" or a dataset id
@@ -187,6 +189,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, (MarketDataError, NewsError, NewDaysError, HoldoutTestError)):      # ADR-106 / ADR-107
             return jsonify({"error": {"kind": "market", "code": e.code, "message": e.message}}), \
                 409 if e.code == "HOLDOUT_LOOK_USED" else 422
+        from edgelab.charts.feed import ChartError
+        if isinstance(e, ChartError):                        # ADR-111: live charts
+            return jsonify({"error": {"kind": "charts", "code": e.code, "message": e.message}}), \
+                503 if e.code == "DOWNLOAD_FAILED" else 422
         from edgelab.mystrategy.params import SettingsError
         from edgelab.mystrategy.runner import MyStrategyError
         if isinstance(e, SettingsError):                     # ADR-93
@@ -1239,6 +1245,52 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if not isinstance(confirm, str):
             raise _bad("confirm must be text")
         return jsonify(call(svc.market_holdout_run, confirm)), 202
+
+    @app.get("/api/charts")                            # ADR-111: live charts
+    def charts_meta():
+        return jsonify(call(svc.charts_meta))
+
+    @app.get("/api/charts/bars")
+    def charts_bars():
+        a = request.args
+        to = a.get("to")
+        if to is not None and not to.isdigit():
+            raise _bad("to must be a unix time in seconds")
+        cnt = a.get("count", "1500")
+        if not cnt.isdigit():
+            raise _bad("count must be a number")
+        return jsonify(call(svc.charts_bars, _id(a.get("symbol", ""), CHART_SYMBOL, "symbol"), _id(a.get("tf", ""), CHART_TF, "tf"),
+                            int(to) if to else None, int(cnt)))
+
+    @app.get("/api/charts/live")
+    def charts_live():
+        a = request.args
+        since = a.get("since", "0")
+        if not since.isdigit():
+            raise _bad("since must be a unix time in seconds")
+        return jsonify(call(svc.charts_live, _id(a.get("symbol", ""), CHART_SYMBOL, "symbol"), _id(a.get("tf", ""), CHART_TF, "tf"), int(since)))
+
+    @app.get("/api/charts/drawings/<symbol>")
+    def charts_drawings(symbol):
+        return jsonify(call(svc.charts_drawings, _id(symbol, CHART_SYMBOL, "symbol")))
+
+    @app.put("/api/charts/drawings/<symbol>")
+    def charts_save_drawings(symbol):
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("drawings"), list):
+            raise _bad("send {drawings: [...]}")
+        return jsonify(call(svc.charts_save_drawings, _id(symbol, CHART_SYMBOL, "symbol"), body["drawings"]))
+
+    @app.get("/api/charts/layout")
+    def charts_layout():
+        return jsonify(call(svc.charts_layout))
+
+    @app.put("/api/charts/layout")
+    def charts_save_layout():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            raise _bad("send a JSON object")
+        return jsonify(call(svc.charts_save_layout, body))
 
     @app.get("/api/market/report")                     # ADR-110: report card of every forecast
     def market_report():
