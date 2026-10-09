@@ -3111,3 +3111,31 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   start with 20 micros, custom starting balance, Day expiry, tick cursor after a pause, persistence, API) and
   `tests/test_charts_sim_e2e.py` (browser: account, bracket market order, right-click limit, working orders, exit all).
 - **Never:** a real order, a broker connection, a run, a trial, a holdout look, a change to backtests, prop rules, costs or configs.
+
+### ADR-113 Charts: the Market simulator's predictor on the live chart (15-minute candle forecast + level map)
+- **Request (user), round 3 of the Charts work:** the analyser / predictor as the chart's only "indicator", working live.
+  Answers: draw the 15-minute candle forecast and the level map (not the direction calls, not the analyser markers);
+  forecasts without proven skill are shown faded and labelled "no skill"; a banner (no sound) when a new level map is made.
+- **Models** (`edgelab/charts/predictor.py`): the FINAL models of the current analysis, trained on ALL discovery candles /
+  decisions and frozen, exactly as the "Live (new days)" test: `newdays.train_candles` (new, the training step factored out
+  of `newdays.predict`, which now calls it - same models, same seeds) and `levelmap.fit_frozen`; the analysis' chosen model
+  per forecast; size ranges from the discovery out-of-sample residuals (`newdays.size_residuals`, also factored out) and
+  landing bands from `levelmap.bands_from_analysis`. Trained once per app start in a background thread.
+- **Live inputs:** the last 120 calendar days of 1-minute NQ and ES from the Charts feed (Dukascopy USATECH / USA500 BID,
+  the series the analysis used) as history, the minute still forming dropped; scheduled news from the stored calendar (a
+  caveat when it ends before today). A 15-minute candle is predicted at its open, a level map is made at 9:30 ... 15:30 New
+  York; for today's level maps "minutes left in the session" uses the SCHEDULED end (the usual last minute of the earlier
+  days), not the last minute seen. Outcomes appear only once known (a candle closed; a level touched, or 2 hours over).
+- **Verdicts:** every forecast shows its report-card verdict (discovery months the model choice never saw: "beats its
+  baseline" or "no proven skill", with the skill). NQ / MNQ charts only (the models are NQ's, ES is context).
+- **API / UI:** `GET /api/charts/predictor?symbol=` (state training / computing / ready / error; recomputed at most every
+  60 s while asked). Top-bar "Predictor": badges above every 15-minute window of today (▲ / ▼ with the chance, expected size
+  and 50 % range, ✓ / ✗ once closed; charts of 15 minutes or less), the chosen level map's levels (chance traded within 2
+  hours, reaction chance, ★ turning levels) and the 2-hour landing band; a panel with the current candle, the level-map
+  times, verdicts and caveats; a banner when a new level map arrives.
+- **Tests** (`tests/test_market.py::test_new_days_zlive_predictor`): on the same minutes the live predictor gives exactly
+  the new-days test's predictions (same frozen models and inputs); cutting the last day at 11:00 changes no candle forecast
+  or level probability before 11:00 and hides every outcome not known by then; ES charts are refused. The new-days test is
+  unchanged (`test_new_days_after_research_data`).
+- **Never:** training on or storing these days, a run, a try, a holdout look, a change to the analysis, backtests, rules, costs
+  or configs.

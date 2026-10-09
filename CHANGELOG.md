@@ -3,6 +3,19 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Charts: the predictor on the live chart (ADR-113)
+
+| Item | Status |
+|---|---|
+| 15-minute candle forecast on the live NQ / MNQ chart (chance up / down, expected size and range, ✓ / ✗ once closed) | IMPLEMENTED, TESTED |
+| Level map on the live chart at 9:30 ... 15:30 New York (levels with the chance of being traded within 2 h and of a reaction, turning levels, 2-hour landing band) | IMPLEMENTED, TESTED |
+| The same frozen models as the "Live (new days)" test (identical predictions on the same minutes); live inputs only (no lookahead) | TESTED (known answer + cut-at-11:00 check) |
+| Report-card verdict on every forecast; "no proven skill" shown faded | IMPLEMENTED |
+| Banner when a new level map is made | IMPLEMENTED |
+| Live Dukascopy minutes | REQUIRES REAL DATA (not reachable from the build environment) |
+| Direction calls and analyser markers on the chart | NOT IMPLEMENTED (not chosen) |
+| Analysis, backtests, rules, costs, configs, tries, holdout looks | UNCHANGED |
+
 ## Charts: simulated LucidFlex 50K accounts with every Tradovate order type (ADR-112)
 
 | Item | Status |

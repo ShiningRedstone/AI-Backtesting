@@ -1303,6 +1303,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("send a JSON object")
         return jsonify(call(svc.charts_save_layout, body))
 
+    @app.get("/api/charts/predictor")                  # ADR-113: the predictor drawn on the live chart
+    def charts_predictor():
+        return jsonify(call(svc.charts_predictor, _id(request.args.get("symbol", ""), CHART_SYMBOL, "symbol")))
+
     @app.get("/api/sim/accounts")                      # ADR-112: simulated Lucid accounts (never real orders)
     def sim_accounts():
         return jsonify(call(svc.sim_accounts))

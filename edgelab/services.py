@@ -2880,6 +2880,15 @@ class Services:
         from edgelab.charts import store as CS
         return CS.save_layout(self.data_root, obj)
 
+    # ============================================================ LIVE PREDICTOR ON THE CHART (ADR-113)
+    def charts_predictor(self, symbol: str) -> dict:
+        """The Market simulator's frozen candle forecast + level map on today's live prices (display only)."""
+        p = self.__dict__.get("_predictor_obj")
+        if p is None:
+            from edgelab.charts.predictor import LivePredictor
+            p = self.__dict__["_predictor_obj"] = LivePredictor(self)
+        return _jsonable(p.get(symbol))
+
     # ============================================================ SIMULATED LUCID ACCOUNTS (ADR-112)
     def _sim(self):
         m = self.__dict__.get("_sim_obj")

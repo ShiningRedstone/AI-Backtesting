@@ -79,6 +79,11 @@ class Layer implements ISeriesPrimitive<Time> {
 
 /** ADR-112: working orders and positions of the simulated account drawn on the chart (drag to modify, x to cancel / close). */
 export interface TradeLine { id: string; kind: "order" | "position"; price: number; label: string; color: string; draggable: boolean; pnl?: number }
+/** ADR-113: what the predictor overlay draws (prepared by the page from /api/charts/predictor). */
+export interface PredCandle { t: number; up: boolean; text: string; sub: string; mark: string; high: number; faded: boolean; current: boolean }
+export interface PredLevel { price: number; text: string; side: number; turn: boolean; faded: boolean }
+export interface PredOverlay { candles: PredCandle[]; levelsFrom: number | null; levels: PredLevel[];
+  land: { lo: number; hi: number; mid: number | null; to: number; faded: boolean } | null }
 interface TradeHit { line: TradeLine; y: number; box: { x: number; y: number; w: number; h: number }; close: { x: number; y: number; w: number; h: number } }
 
 interface Creating { tool: ToolDef; points: Pt[]; cursor: Pt | null; downAt: XY | null }
@@ -108,6 +113,8 @@ export class ChartCtl {
   private clipboard: Drawing | null = null;
   onTextEdit: ((d: Drawing) => void) | null = null;
   tradeLines: TradeLine[] = [];
+  pred: PredOverlay | null = null;
+  setPredictor(p: PredOverlay | null) { this.pred = p; this.redraw(); }
   private tradeHits: TradeHit[] = [];
   private tradeDrag: { line: TradeLine; price: number; moved: boolean } | null = null;
   onTradeDrag: ((line: TradeLine, price: number) => void) | null = null;
@@ -567,6 +574,7 @@ export class ChartCtl {
       const P = new Painter(c, e, d.style);
       c.save(); TOOL.date_price_range.draw(P, d.points.map((p) => toXY(e, d, p)), d, e); c.restore();
     }
+    this.renderPredictor(c, e);
     this.renderTrades(c, e);
     if (this.zoom) {
       const { a, b } = this.zoom;
@@ -595,6 +603,71 @@ export class ChartCtl {
       c.fillStyle = this.theme.bg; c.strokeStyle = L.color; c.beginPath(); c.roundRect(cx, by, h, h, 3); c.fill(); c.stroke();
       c.fillStyle = L.color; c.fillText("×", cx + 5, y);
       this.tradeHits.push({ line: L, y, box: { x: bx, y: by, w: tw + 12, h }, close: { x: cx, y: by, w: h, h } });
+    }
+    c.restore();
+  }
+  private renderPredictor(c: CanvasRenderingContext2D, e: Env) {
+    const P = this.pred;
+    if (!P || !this.bars.length) return;
+    const UP = "#26a69a", DOWN = "#f57c00";
+    const xT = (t: number) => e.xOfL(this.map.toLogical(t));
+    c.save();
+    // level map: levels from the decision moment to the right edge, the 2-hour landing band
+    if (P.levelsFrom != null) {
+      const x0 = Math.max(0, xT(P.levelsFrom));
+      if (P.land) {
+        const x1 = Math.min(e.w, xT(P.land.to)), yA = e.yOf(P.land.hi), yB = e.yOf(P.land.lo);
+        if (Number.isFinite(yA) && Number.isFinite(yB) && x1 > x0) {
+          c.globalAlpha = P.land.faded ? 0.35 : 0.8;
+          c.fillStyle = "rgba(91, 140, 255, 0.10)"; c.fillRect(x0, Math.min(yA, yB), x1 - x0, Math.abs(yB - yA));
+          if (P.land.mid != null) { const ym = e.yOf(P.land.mid); c.strokeStyle = "#5b8cff"; c.setLineDash([2, 3]); c.lineWidth = 1;
+            c.beginPath(); c.moveTo(x0, ym); c.lineTo(x1, ym); c.stroke(); }
+          c.globalAlpha = 1;
+        }
+      }
+      c.font = "600 11px Inter, system-ui, sans-serif"; c.textBaseline = "middle";
+      const placed: number[] = [];
+      const lv = [...P.levels].sort((a, b) => Number(b.turn) - Number(a.turn));     // turning levels keep their label first
+      for (const L of lv) {
+        const y = Math.round(e.yOf(L.price)) + 0.5;
+        if (!Number.isFinite(y) || y < -10 || y > e.h + 10) continue;
+        const col = L.side > 0 ? "#5b8cff" : "#c77dff";
+        c.globalAlpha = L.faded ? 0.45 : 0.95;
+        c.strokeStyle = col; c.lineWidth = L.turn ? 2 : 1; c.setLineDash(L.turn ? [] : [5, 4]);
+        c.beginPath(); c.moveTo(x0, y); c.lineTo(e.w, y); c.stroke();
+        c.setLineDash([]);
+        if (placed.some((p) => Math.abs(p - y) < 15)) continue;                 // no overlapping labels (the line stays)
+        placed.push(y);
+        const text = `${L.turn ? "★ " : ""}${L.text}`, tw = c.measureText(text).width;
+        const bx = Math.max(4, e.w - tw - 10);
+        c.fillStyle = this.theme.bg; c.fillRect(bx - 4, y - 8, tw + 8, 16);
+        c.fillStyle = col; c.fillText(text, bx, y);
+      }
+      c.globalAlpha = 1;
+    }
+    // 15-minute candle forecasts: a badge above each 15-minute window (only on charts of 15 minutes or less)
+    if (this.tf <= 15) {
+      c.font = "600 11px Inter, system-ui, sans-serif"; c.textBaseline = "alphabetic"; c.textAlign = "center";
+      let lastX = -1e9;
+      for (const k of P.candles) {
+        const xa = xT(k.t), xb = xT(k.t + 15 * 60), xm = (xa + xb) / 2 + (this.tf === 15 ? 0 : -e.spacing / 2);
+        if (xb < -40 || xa > e.w + 40) continue;
+        const y = e.yOf(k.high) - 8;
+        if (!Number.isFinite(y)) continue;
+        c.globalAlpha = k.faded ? 0.55 : 1;
+        if (k.current) {                                               // the candle now: the full forecast
+          c.font = "600 11px Inter, system-ui, sans-serif"; c.fillStyle = k.up ? UP : DOWN;
+          c.fillText(k.text, xm, y - 13);
+          c.font = "500 10px Inter, system-ui, sans-serif"; c.fillStyle = this.theme.muted;
+          c.fillText(k.sub, xm, y - 1);
+          c.strokeStyle = k.up ? UP : DOWN; c.setLineDash([2, 2]); c.strokeRect(xa, y - 26, Math.max(4, xb - xa), 30); c.setLineDash([]);
+        } else if (xm - lastX >= 16) {                                 // earlier candles: a small arrow and the outcome
+          c.font = "600 10px Inter, system-ui, sans-serif"; c.fillStyle = k.up ? UP : DOWN;
+          c.fillText(`${k.up ? "▲" : "▼"}${k.mark}`, xm, y);
+          lastX = xm;
+        }
+      }
+      c.globalAlpha = 1; c.textAlign = "left";
     }
     c.restore();
   }

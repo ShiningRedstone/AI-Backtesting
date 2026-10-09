@@ -535,6 +535,61 @@ class TestMarketService(unittest.TestCase):
         finally:
             svc.store.close()
 
+    def test_new_days_zlive_predictor(self):
+        """ADR-113: the chart predictor = the new-days models (identical predictions on the same minutes); live only
+        (cutting the day at 11:00 changes nothing before it; outcomes appear only once known); NQ / MNQ only."""
+        from edgelab.charts import predictor as PR
+        from edgelab.market import analysis as A
+        from edgelab.market import newdays as ND
+        from edgelab.services import Services
+        svc = Services(root=self.root)
+        try:
+            summary = A.latest(svc.data_root)
+            fz = PR.train(svc, summary)
+            mk = D.discovery(svc)
+            hist = ND._history(svc, mk)
+            nq = ND._concat(hist[0], ND.load(svc.data_root, "nq"))
+            es = ND._concat(hist[1], ND.load(svc.data_root, "es"))
+            news = N.events(svc.data_root, int(nq.ts[0]), int(nq.ts[-1]) + 86_400 * 10**9) if fz["ok_news"] else []
+            work = self.root / "pred_tmp"
+            full = PR.predict_live(fz, nq, es, news, work, int(nq.ts[-1]) + 60 * 10**9)
+            self.assertGreater(len(full["candles"]), 20)
+            with np.load(ND.folder(svc.data_root, "") / f"predictions_{self.res['key']}.npz") as z:
+                ref = {int(t) // 10**9: (float(p), float(sz)) for t, p, sz in
+                       zip(z["t"], z[f"p_up_{fz['up_chosen']}"], z[f"size_{fz['size_chosen']}"])}
+            got = [c for c in full["candles"] if c["t"] in ref]
+            self.assertGreater(len(got), 20)
+            for c in got:                                                   # the same models, the same inputs
+                self.assertAlmostEqual(c["p_up"], ref[c["t"]][0], places=9)
+            # live: cut the last day at 11:00 New York
+            day = nq.day[-1]
+            cut = int(pd.Timestamp(f"{day} 11:00", tz="America/New_York").tz_convert("UTC").value)
+            keep = nq.ts < cut
+            nq_cut = D.Minute(nq.ts[keep], nq.o[keep], nq.h[keep], nq.l[keep], nq.c[keep])
+            part = PR.predict_live(fz, nq_cut, es, news, work, cut)
+            fullc = {c["t"]: c for c in full["candles"]}
+            for c in part["candles"]:
+                self.assertAlmostEqual(c["p_up"], fullc[c["t"]]["p_up"], places=12)
+                self.assertAlmostEqual(c["size_pts"], fullc[c["t"]]["size_pts"], places=9)
+            self.assertFalse(part["candles"][-1]["complete"]) if part["candles"][-1]["t"] * 10**9 + 15 * 60 * 10**9 > cut else None
+            fulll = {d["t"]: d for d in full["levelmaps"]}
+            self.assertTrue(part["levelmaps"])
+            for d in part["levelmaps"]:
+                self.assertLess(d["t"] * 10**9, cut)
+                f = fulll[d["t"]]
+                self.assertEqual([x["price"] for x in d["levels"]], [x["price"] for x in f["levels"]])
+                for x, y in zip(d["levels"], f["levels"]):
+                    self.assertAlmostEqual(x["p_reach2h"] or 0, y["p_reach2h"] or 0, places=6)
+                    if x["touched_at"] is not None:
+                        self.assertLess(x["touched_at"] * 10**9, cut)
+                    if d["t"] * 10**9 + 2 * 3600 * 10**9 > cut and x["touched_at"] is None:
+                        self.assertIsNone(x["within2h"])                 # not known yet at 11:00
+                self.assertIsNone(d["land"]["land"]["actual"])
+            lp = PR.LivePredictor(svc)
+            self.assertFalse(lp.get("ES")["available"])
+        finally:
+            svc.store.close()
+
     def test_holdout_test_one_look_recorded_first(self):
         from edgelab.market import holdout as H
         from edgelab.services import Services

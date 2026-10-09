@@ -15,6 +15,7 @@ import { ChartDialog, ContextMenu, DrawingDialog, FloatingBar, ObjectTree, ToolI
 import type { GroupId } from "./tools";
 import { GROUPS, TOOL, TOOLS } from "./tools";
 import { AccountPanel, TradePanel, useSim } from "./trading";
+import { PredictorPanel, usePredictor } from "./predictor";
 import { sim } from "../../api/sim";
 
 type Ev = { target: HTMLInputElement & HTMLSelectElement; key: string; stopPropagation(): void; preventDefault(): void };
@@ -22,13 +23,15 @@ type ScaleMode = "normal" | "log" | "percent" | "indexed";
 interface Layout {
   symbol: string; tf: number; type: ChartType; tz: string; scale: ScaleMode; invert: boolean; style: ChartStyle; favTfs: number[]; favTools: string[];
   lastTool: Partial<Record<GroupId, string>>; toolDefaults: Record<string, Partial<Style>>; magnet: number; stay: boolean; tree: boolean;
-  trade: boolean; simAccount: string | null; tradeQty: number;                        // ADR-112: simulated trading
+  trade: boolean; simAccount: string | null; tradeQty: number;
+  pred: boolean; predShow: { candles: boolean; levels: boolean };                     // ADR-113: the predictor on the chart                        // ADR-112: simulated trading
 }
 const STD_TFS = [1, 2, 3, 5, 10, 15, 30, 45, 60, 120, 180, 240, DAY, WEEK, MONTH];
 const DEFAULT_LAYOUT: Layout = {
   symbol: "MNQ", tf: 5, type: "candles", tz: "America/New_York", scale: "normal", invert: false, style: DEFAULT_STYLE,
   favTfs: [1, 5, 15, 60, 240, DAY], favTools: ["trend_line", "horizontal_line", "fib_retracement", "rectangle", "long_position"],
   lastTool: {}, toolDefaults: {}, magnet: 0, stay: false, tree: false, trade: false, simAccount: null, tradeQty: 1,
+  pred: false, predShow: { candles: true, levels: true },
 };
 const RANGES: { id: string; tf: number; days: number }[] = [
   { id: "1D", tf: 1, days: 1 }, { id: "5D", tf: 5, days: 5 }, { id: "1M", tf: 30, days: 31 }, { id: "3M", tf: 60, days: 92 },
@@ -187,6 +190,7 @@ export function ChartsPage() {
   const symbol = lay ? symOf(lay.symbol) : null;
 
   const setSimAccount = useCallback((id: string | null) => patch({ simAccount: id }), [patch]);
+  const predAns = usePredictor(!!lay?.pred, lay?.symbol ?? "MNQ");
   const simS = useSim(!!lay?.trade, lay?.symbol ?? "MNQ", meta?.symbols ?? [], ctl, lay?.simAccount ?? null, setSimAccount);
   useEffect(() => { if (ctl && symbol) ctl.tick = symbol.tick; }, [ctl, symbol]);
   const tradeMenu = (() => {
@@ -253,6 +257,8 @@ export function ChartsPage() {
         <button type="button" className="ch-ib" title="Undo (Ctrl+Z)" disabled={!st?.canUndo} onClick={() => ctl?.undoStep()} data-testid="ch-undo">↶</button>
         <button type="button" className="ch-ib" title="Redo (Ctrl+Y)" disabled={!st?.canRedo} onClick={() => ctl?.redoStep()} data-testid="ch-redo">↷</button>
         <span className="ch-sep" />
+        <button type="button" className={`ch-tb tr-toggle${lay.pred ? " on" : ""}`} title="The Market simulator's forecasts on the live chart (NQ / MNQ)"
+          onClick={() => patch({ pred: !lay.pred })} data-testid="ch-predictor">Predictor</button>
         <button type="button" className={`ch-tb tr-toggle${lay.trade ? " on" : ""}`} title="Simulated trading (LucidFlex 50K rules, no real orders)"
           onClick={() => patch({ trade: !lay.trade })} data-testid="ch-trade">Trade</button>
         <span className="ch-sep" />
@@ -273,6 +279,8 @@ export function ChartsPage() {
           <div className="ch-chart-wrap" onMouseDown={() => { setSymOpen(false); setTfOpen(false); setTypeOpen(false); }}>
             <div className={`ch-chart${cursor === "dot" ? " dot" : ""}`} ref={host} data-testid="ch-chart" />
             <LegendView ctl={ctl} sym={symbol} lay={lay} st={st} />
+            {lay.pred && <PredictorPanel ans={predAns} ctl={ctl} show={lay.predShow ?? { candles: true, levels: true }}
+              setShow={(v) => patch({ predShow: v })} />}
             {st?.menu && ctl && <ContextMenu ctl={ctl} menu={st.menu} onSettings={(id) => setDlg({ id })} onChartSettings={() => setChartDlg(true)} trade={tradeMenu} />}
             {selected && st?.floating && ctl && !dlg && <FloatingBar ctl={ctl} d={selected} pos={st.floating} onSettings={() => setDlg({ id: selected.id })} />}
             {st?.tool && <div className="ch-hint" data-testid="ch-hint">{hintFor(st.tool)} · Esc to stop</div>}

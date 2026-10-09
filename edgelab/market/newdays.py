@@ -173,6 +173,43 @@ def set_problem(data_root, problem: dict | None) -> None:
     atomic_write_text(p, json.dumps({**problem, "at": datetime.now(timezone.utc).isoformat()}))
 
 
+def train_candles(svc, progress=None) -> dict:
+    """The final 15-minute candle models (up / down and size), trained on ALL discovery candles and frozen. Shared by the
+    new-days prediction and the live chart predictor (ADR-113), so both use exactly the same models."""
+    from edgelab.market import forecast as F
+    from edgelab.market import gbm as G
+    from edgelab.market import news as N
+    step = progress or (lambda s: None)
+    step("Rebuilding the discovery inputs to train the final models")
+    mk = D.discovery(svc)
+    cal = N.calendar(svc.data_root)
+    ok_news = bool(cal and not cal.get("refused"))
+    news_d = N.events(svc.data_root, mk.start.value, mk.end.value) if ok_news else []
+    cxd = F.Context(mk.nq, mk.es, news_d)
+    crd = F.candle_rows(cxd)
+    Xd, names, _ = F.features(cxd, crd["t"])
+    upm = crd["up"] != 0
+    yb = (crd["up"] > 0).astype(float)
+    step("Training on all discovery candles")
+    models = {"logistic": G.Logistic().fit(Xd[upm], yb[upm]),
+              "boosting": G.GBM(n_trees=90, seed=1).fit(Xd[upm], yb[upm])}
+    size_models = {"logistic": G.Ridge().fit(Xd, crd["size"]), "boosting": G.GBM(loss="l2", n_trees=90, seed=2).fit(Xd, crd["size"])}
+    return {"ok_news": ok_news, "cxd": cxd, "crd": crd, "Xd": Xd, "names": names, "upm": upm, "yb": yb, "models": models,
+            "size_models": size_models}
+
+
+def size_residuals(data_root, analysis_key: str, model: str) -> np.ndarray | None:
+    """q10 / q25 / q75 / q90 of the discovery walk-forward's OUT-OF-SAMPLE size residuals of ``model`` (None = too few)."""
+    from edgelab.market import analysis as A
+    try:
+        with np.load(A.home(data_root) / f"analysis_{analysis_key}" / "forecast.npz") as z:
+            pr_, yy_ = z[f"size_{model}"].astype(float), z["size"].astype(float)
+    except (OSError, KeyError):
+        return None
+    ok_ = np.isfinite(pr_)
+    return np.quantile((yy_ - pr_)[ok_], [0.1, 0.25, 0.75, 0.9]) if ok_.sum() > 300 else None
+
+
 def predict(svc, analysis_key: str, progress=None) -> dict:
     """Train on the whole discovery period, predict every new day live, score the completed ones. History in front of
     the new days: the holdout once a holdout look is used (every new day predicted), else the first WARMUP_DAYS new
@@ -180,7 +217,6 @@ def predict(svc, analysis_key: str, progress=None) -> dict:
     from edgelab.core.fsutil import atomic_write_text
     from edgelab.market import analysis as A
     from edgelab.market import forecast as F
-    from edgelab.market import gbm as G
     from edgelab.market import news as N
     step = progress or (lambda s: None)
     nq_new = load(svc.data_root, "nq")
@@ -203,20 +239,9 @@ def predict(svc, analysis_key: str, progress=None) -> dict:
         nq, es = _concat(hist[0], nq_new), _concat(hist[1], es_new)
         scored_days, warm = new_days, 0
     start_new = int(nq_new.ts[np.searchsorted(nq_new.day, scored_days[0])])
-    step("Rebuilding the discovery inputs to train the final models")
-    mk = D.discovery(svc)
-    cal = N.calendar(svc.data_root)
-    ok_news = bool(cal and not cal.get("refused"))
-    news_d = N.events(svc.data_root, mk.start.value, mk.end.value) if ok_news else []
-    cxd = F.Context(mk.nq, mk.es, news_d)
-    crd = F.candle_rows(cxd)
-    Xd, names, _ = F.features(cxd, crd["t"])
-    upm = crd["up"] != 0
-    yb = (crd["up"] > 0).astype(float)
-    step("Training on all discovery candles")
-    models = {"logistic": G.Logistic().fit(Xd[upm], yb[upm]),
-              "boosting": G.GBM(n_trees=90, seed=1).fit(Xd[upm], yb[upm])}
-    size_models = {"logistic": G.Ridge().fit(Xd, crd["size"]), "boosting": G.GBM(loss="l2", n_trees=90, seed=2).fit(Xd, crd["size"])}
+    fz = train_candles(svc, progress=step)
+    ok_news, crd, Xd, upm, yb = fz["ok_news"], fz["crd"], fz["Xd"], fz["upm"], fz["yb"]
+    models, size_models, cxd = fz["models"], fz["size_models"], fz["cxd"]
     news_n = N.events(svc.data_root, int(nq.ts[0]), int(nq.ts[-1]) + 86_400_000_000_000) if ok_news else []
     step("Predicting the new days with live knowledge" + (" (holdout minutes as history)" if hist is not None else ""))
     cxn = F.Context(nq, es, news_n)
@@ -241,14 +266,9 @@ def predict(svc, analysis_key: str, progress=None) -> dict:
     # size ranges: the chosen size model + the discovery walk-forward's out-of-sample residual quantiles (as the holdout test)
     sz_m = ((summary.get("forecast") or {}).get("size") or {}).get("chosen") or "logistic"
     size_q = np.full((int(sel.sum()), 4), np.nan)
-    try:
-        with np.load(A.home(svc.data_root) / f"analysis_{analysis_key}" / "forecast.npz") as z:
-            pr_, yy_ = z[f"size_{sz_m}"].astype(float), z["size"].astype(float)
-        ok_ = np.isfinite(pr_)
-        if ok_.sum() > 300 and sz_m in sz:
-            size_q = sz[sz_m][:, None] + np.quantile((yy_ - pr_)[ok_], [0.1, 0.25, 0.75, 0.9])[None, :]
-    except (OSError, KeyError):
-        pass
+    rq = size_residuals(svc.data_root, analysis_key, sz_m)
+    if rq is not None and sz_m in sz:
+        size_q = sz[sz_m][:, None] + rq[None, :]
     np.savez_compressed(folder(svc.data_root, "") / f"predictions_{analysis_key}.npz", **out,
                         **{f"p_up_{k}": v for k, v in p.items()}, **{f"size_{k}": v for k, v in sz.items()},
                         size_q=size_q.astype(np.float32), day=dd.astype("datetime64[D]").astype(np.int64))
