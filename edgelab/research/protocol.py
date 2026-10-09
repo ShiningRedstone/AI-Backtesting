@@ -171,13 +171,20 @@ MARKET_SIM_ROLE = "market_sim"                # ADR-107: the Market simulator's 
 MARKET_SIM_SCOPE_SUFFIX = "#market_sim"
 MARKET_DIRECTION_ROLE = "market_sim_direction"   # ADR-109: the second Market simulator look (direction calls only)
 MARKET_DIRECTION_SCOPE_SUFFIX = "#market_sim_direction"
+FAIR_STRATEGY_ROLE = "fair_price"             # ADR-114: Fair price backtests (own budget, like My strategy)
+FAIR_STRATEGY_SCOPE_SUFFIX = "#fair_price"
+FAIR_OPTIMIZER_ROLE = "fair_optimizer"        # ADR-114: Fair price Strategy autotuner
+FAIR_OPTIMIZER_SCOPE_SUFFIX = "#fair_optimizer"
+FAIR_HOLDOUT_ROLE = "fair_holdout"            # ADR-114: Fair price holdout allowance (2 strategies, automatic + manual)
+FAIR_HOLDOUT_SCOPE_SUFFIX = "#fair_holdout"
 
 
 def is_companion(rec: Mapping) -> bool:
     """True for a companion protocol (flip, My strategy, autotuner): it never governs library strategies or campaigns."""
     mat = rec.get("material", rec)
     return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE, OPTIMIZER_ROLE,
-                               MY_HOLDOUT_ROLE, MARKET_SIM_ROLE, MARKET_DIRECTION_ROLE)
+                               MY_HOLDOUT_ROLE, MARKET_SIM_ROLE, MARKET_DIRECTION_ROLE, FAIR_STRATEGY_ROLE,
+                               FAIR_OPTIMIZER_ROLE, FAIR_HOLDOUT_ROLE)
 
 
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,

@@ -3139,3 +3139,53 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   unchanged (`test_new_days_after_research_data`).
 - **Never:** training on or storing these days, a run, a try, a holdout look, a change to the analysis, backtests, rules, costs
   or configs.
+
+### ADR-114 Fair price: a second hand-built strategy (the "fair pricing theory") on the My strategy machinery
+- **Request (user):** rebuild the strategy of a video transcript (a trader's "fair pricing theory" for NQ on prop accounts)
+  so it works like My strategy's autotuner: the same prop firm chain, holdout and everything not specific to the strategy;
+  ask instead of assuming. Answers: a new tab "Fair price"; sessions NY open 9:30, NY afternoon 14:00, Asia 20:00 New York,
+  London 03:00 (first 90 minutes each, all on); evaluation and funded rules switched by the prop chain; scheduled 8:30 news
+  included (Market simulator calendar); one simulated account; opening-candle continuation = a close beyond the last 1m
+  swing, bias = the reversal of the last 12 hours, evaluations only; funded take profit from the room to the fair price
+  (steps of 25, 80 % rule) sized for a fixed dollar win ($1,500); afternoon fair price = the 9:30 open; consolidation fair
+  price as an optional rule; headline numbers = the trades the chain took; open trades closed 2 hours after the window.
+- **Rules** (`edgelab/fairprice/{params,logic,strategy}.py`, 52 settings, `PARAMS_VERSION` 1, `RULES_VERSION` 1): per
+  trading date and enabled session a window from the opening minute; fair price = the opening price (afternoon: the 9:30
+  open; 8:30 news days: the price before the release from the release to 11:00; optional consolidation rule). One
+  opening-candle continuation per session (colour of the first candle, a close beyond the structure in the first 5 minutes,
+  agreeing with the bias; 25 / 38 points, doubled with an opening candle over 25 points). Reversions towards the fair price
+  on a 1-minute close: displacement (bigger body, close beyond the previous wick, previous candle of the other colour) or
+  break of structure (close beyond the most recent unbroken swing, confirmed by later candles <= the decision bar).
+  Evaluation rules: static 38 / 25 points, $500 risk; funded rules: break of structure only, take profit = the largest
+  25-point step <= room / 0.8, static stop, a per-signal dollar budget = win x stop / target. Room >= 80 % of the target;
+  a session stops after 3 losses in a row (the strategy's own copy of each trade, engine rules, only for counting; the
+  signal is always emitted - found by the lookahead check in development). Causal; every variant passes the engine check.
+- **Engine addition (requested sizing):** `SignalSet.risk_usd` (optional per-bar dollar budget for `risk` sizing, NaN =
+  the sizing's own; the same floor rule; part of the empirical lookahead check; refused with other sizing modes; absent =
+  byte-identical results, `ReplayStrategy` copies it). No other engine, fill, cost, prop-rule or config change.
+- **Phases** (`edgelab/fairprice/chain.py`): a backtest runs the engine twice (evaluation rules, funded rules; each with
+  its lookahead check, both recorded as runs, the evaluation run carries the trial). The chain (`paper.engine.run_attempts`
+  over the UNCHANGED lifecycle) gives an attempt the evaluation trades until its evaluation passes (pass day found by the
+  lifecycle on the evaluation trades) and the funded trades from the end of the pass day (after the last evaluation trade
+  closed). Headline metrics / autotuner goals = the trades the pass-criteria account's chain took ("as traded"); each phase
+  on its own is reported (`phases`); every profile's chain stored as before (fees applied at read time).
+- **Shared machinery** (`edgelab/mystrategy/kind.py`): runner, optimizer, holdout allowance and setup review take a
+  strategy `Kind` (folder, schema, companion roles, extra input, execution); BP Blake (`my`) is the default everywhere, so
+  My strategy is unchanged (its tests pass unchanged). Fair price: `<data>/fair_price/`, companion roles `fair_price`
+  (300 tries + 1 look), `fair_optimizer` (5,000 tries + 1 look), `fair_holdout` (2 strategies x automatic + manual); its own
+  skip reasons; the autotuner never tweaks the session opening times, the news time or the contract cap, and DOES tune the
+  evaluation risk and the funded dollar win; its cache key includes the pass-criteria account (as-traded metrics depend on it).
+  News input = the high-impact USD releases of the stored calendar (content hash in the strategy id and trial key); no
+  calendar = every day trades the normal rules (counted as "news unknown").
+- **API / UI:** every `/api/my/*` route is also served under `/api/fair/*` (the view reads its kind from the path; not the
+  ES import). Tab "Fair price" (Overview with the summary `web/src/content/fair_price.md` in our own words, Settings,
+  Backtest with an "Evaluation and funded rules" card, Trades with rules / session / setup, Strategy autotuner, Setup review,
+  Holdout review); the My strategy pages read their strategy from `web/src/pages/myKind.tsx`; fair-price trade charts and
+  reasons in `web/src/pages/fairExplain.tsx`.
+- **Tests** (`tests/test_fair_price.py`): settings; a hand-built day gives the expected break-of-structure short (38 / 25
+  evaluation, 50-point funded target with 15 MNQ); causality of rule variants in both phases with synthetic news; the
+  per-signal budget (sizes, lookahead caught, refusal); the phase chain (switch after a pass, no overlap, failed evaluations
+  take evaluation trades only); autotuner tweaks; a workspace flow (own protocol, both runs, setup review, holdout allowance,
+  My strategy untouched) and the `/api/fair` routes.
+- **Not copied:** several accounts at once, discretionary fair-price moves, mid-candle / wick entries, unexpected news,
+  live-account and bonus tactics.

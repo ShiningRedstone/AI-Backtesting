@@ -4,10 +4,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError } from "../api/client";
-import { my } from "../api/my";
+
 import type { ChallengeSummary, ChallengeView, OptBest, OptLive, OptRun, OptStatus, OptTry, PartScore } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
+import { useKind } from "./myKind";
 import { useMoney } from "../app/money";
 import { XYScatter } from "../components/charts";
 import type { ScatterGroup } from "../components/charts";
@@ -35,6 +36,7 @@ const STOP_REASON: Record<string, string> = {
 const fmtVal = (v: unknown) => (typeof v === "boolean" ? (v ? "on" : "off") : v === null || v === undefined ? "–" : String(v));
 
 export function MyAutotunePage() {
+  const { api: my } = useKind();
   const route = useRoute();
   const { data: st, error, reload } = useApi<OptStatus>(my.autotuneUrl);
   const running = !!st?.run.running;
@@ -71,11 +73,14 @@ export function MyAutotunePage() {
 const statusWord = (s: string) => ({ running: "running", finished: "finished", stopped: "stopped", failed: "failed" } as Record<string, string>)[s] ?? s;
 
 function HowCard({ st }: { st: OptStatus }) {
+  const { id: kindId } = useKind();
   const d = st.protocol.discovery;
   return (
     <Card title="How it works" testId="at-how">
       <ol className="small at-how">
-        <li>Pick one of your backtests. Its settings are the starting point (position size and the flip switch are never changed).</li>
+        <li>Pick one of your backtests. Its settings are the starting point {kindId === "fair"
+          ? "(the session opening times and the contract cap are never changed; the evaluation risk and the funded dollar win are tuned like every other setting)."
+          : "(position size and the flip switch are never changed)."}</li>
         <li>The autotuner tries one change at a time: a switch flipped, another choice, a number one step up or down, a time 15 minutes earlier or later.
           Settings that cannot change any trade with the current settings are skipped.</li>
         <li>Every try is a backtest of the discovery period{d ? ` (${new Date(d.start).toLocaleDateString()} – ${new Date(d.end).toLocaleDateString()})` : ""} through
@@ -149,6 +154,7 @@ function chainOf(v: ChallengeView | null | undefined): ChallengeSummary | null {
 }
 
 function StartCard({ st, onChange }: { st: OptStatus; onChange: () => void }) {
+  const { api: my, r: kr } = useKind();
   const money = useMoney();
   const run = st.run;
   const running = !!run.running;
@@ -166,7 +172,7 @@ function StartCard({ st, onChange }: { st: OptStatus; onChange: () => void }) {
     try {
       const res = await my.autotuneStart({ start_id: chosen, processes: cores ?? st.processes_default, max_tries: maxTries });
       onChange();
-      go(res.run_id ? `/my-autotune?run=${res.run_id}` : "/my-autotune");
+      go(res.run_id ? `${kr("autotune")}?run=${res.run_id}` : kr("autotune"));
     } catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
   };
   const stop = async () => { setBusy(true); try { await my.autotuneStop(); onChange(); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); } };
@@ -223,6 +229,7 @@ function LiveLine({ live }: { live: OptLive }) {
 }
 
 function RunsCard({ st, selected }: { st: OptStatus; selected: string | null }) {
+  const { r: kr } = useKind();
   const money = useMoney();
   if (!st.runs.length) return null;
   return (
@@ -234,7 +241,7 @@ function RunsCard({ st, selected }: { st: OptStatus; selected: string | null }) 
           const fin = x.final_full ?? x.start_full;
           const c = fin?.chains ? (fin.chains[x.profile] as ChallengeSummary | undefined) : undefined;
           return (
-            <tr key={x.id} className={x.id === selected ? "selected" : ""} onClick={() => go(`/my-autotune?run=${x.id}`)} style={{ cursor: "pointer" }}
+            <tr key={x.id} className={x.id === selected ? "selected" : ""} onClick={() => go(`${kr("autotune")}?run=${x.id}`)} style={{ cursor: "pointer" }}
               data-testid={`at-run-${x.id}`}>
               <td>{new Date(x.created_at).toLocaleString()}</td><td>{x.start.label || "–"}</td>
               <td><Badge tone={x.status === "finished" ? "ok" : x.status === "failed" ? "error" : x.status === "running" ? "info" : "neutral"}>{statusWord(x.status)}</Badge></td>
@@ -259,6 +266,7 @@ const YAXES: Record<YKey, { label: string; get: (t: OptTry) => number | null; fm
 };
 
 function RunView({ id, live, onChanged }: { id: string; live: OptLive | null; onChanged: () => void }) {
+  const { api: my, r: kr } = useKind();
   const { data, error, reload } = useApi<OptRun>(my.autotuneRunUrl(id), [id]);
   const money = useMoney();
   const [y, setY] = useState<YKey>("net_r_check");
@@ -295,7 +303,7 @@ function RunView({ id, live, onChanged }: { id: string; live: OptLive | null; on
   return (
     <>
       <Card title={`Run of ${new Date(data.created_at).toLocaleString()}`} testId="at-run-view"
-        actions={data.final_backtest ? <a className="btn btn-secondary btn-sm" href={href(`/my-backtest?r=${data.final_backtest}`)}
+        actions={data.final_backtest ? <a className="btn btn-secondary btn-sm" href={href(`${kr("backtest")}?r=${data.final_backtest}`)}
           data-testid="at-final-link">Final backtest with trades</a> : undefined}>
         <p className="muted small">Started from <b>{data.start.label || data.start.id}</b> · scored on {data.profile_name} ·
           first 70 % until {new Date(data.window.split).toLocaleDateString()} · {data.tries.toLocaleString()} tries
@@ -331,7 +339,7 @@ function RunView({ id, live, onChanged }: { id: string; live: OptLive | null; on
                 {b.status === "discarded" && <span className="muted small"> (thrown away: built on a result that failed the check)</span>}</td>
               <td><PartLine s={b.train} money={money.fmt} /></td><td><PartLine s={b.check} money={money.fmt} /></td>
               <td><LookBadge b={b} /></td>
-              <td>{savedOf(b.n) ? <a href={href(`/my-backtest?r=${savedOf(b.n)!.id}`)}>Open backtest</a>
+              <td>{savedOf(b.n) ? <a href={href(`${kr("backtest")}?r=${savedOf(b.n)!.id}`)}>Open backtest</a>
                 : b.status === "best" && b.n > 0 && !running ? <Button small onClick={() => save(b.n)} busy={job?.state === "running"}
                   testId={`at-save-${b.n}`}>Save as backtest</Button> : null}</td>
             </tr>))}</tbody></table></TableWrap>

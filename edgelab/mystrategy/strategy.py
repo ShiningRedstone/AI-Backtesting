@@ -85,9 +85,12 @@ class ReplayStrategy(Strategy):
                         trail_level_long=None if src.trail_level_long is None else src.trail_level_long[:n].copy(),
                         trail_level_short=None if src.trail_level_short is None else src.trail_level_short[:n].copy(),
                         max_trades_per_day=src.max_trades_per_day, exit_cooldown_bars=src.exit_cooldown_bars,
-                        block_after=src.block_after)
+                        block_after=src.block_after,
+                        risk_usd=None if src.risk_usd is None else src.risk_usd[:n].copy())
         for i in self._removed:
             if i < n:
                 out.direction[i] = 0
                 out.entry_price[i] = out.stop_price[i] = out.target_price[i] = np.nan
+                if out.risk_usd is not None:
+                    out.risk_usd[i] = np.nan
         return out

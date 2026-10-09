@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from edgelab.mystrategy import challenge as CH
+from edgelab.mystrategy import kind as KD
 from edgelab.mystrategy import params as P
 from edgelab.mystrategy import runner as R
 from edgelab.mystrategy.logic import RULES_VERSION
@@ -135,26 +136,25 @@ GOAL_KEYS = ("win_rate", "trades_per_week", "losing_months", "profit", "rr", "pr
 _FILE_LOCK = threading.Lock()
 
 
-def home(svc) -> Path:
-    p = R.home(svc) / "optimizer"
+def home(svc, K=None) -> Path:
+    p = R.home(svc, K) / "optimizer"
     (p / "runs").mkdir(parents=True, exist_ok=True)
     return p
 
 
 # =============================================================================================== protocol
-def _scope(parent: dict) -> str:
-    from edgelab.research.protocol import OPTIMIZER_SCOPE_SUFFIX
+def _scope(parent: dict, K=None) -> str:
     sc = parent["material"]["scope"]
-    return R.svc_scope(sc["instrument"], sc["provider"]) + OPTIMIZER_SCOPE_SUFFIX
+    return R.svc_scope(sc["instrument"], sc["provider"]) + KD.of(K).optimizer_suffix
 
 
-def build_material(parent: dict) -> dict:
-    from edgelab.research import protocol as rp
-    mat = R.build_material(parent, budget=TRIAL_BUDGET, looks=HOLDOUT_LOOKS)
+def build_material(parent: dict, K=None) -> dict:
+    K = KD.of(K)
+    mat = R.build_material(parent, budget=TRIAL_BUDGET, looks=HOLDOUT_LOOKS, K=K)
     mat.update({
-        "role": rp.OPTIMIZER_ROLE, "name": "Strategy autotuner",
+        "role": K.optimizer_role, "name": "Strategy autotuner" if K.id == "my" else f"{K.label} Strategy autotuner",
         "search_constraints": {
-            "strategies": "settings combinations of the 'My strategy' rules reached by the step-by-step optimiser "
+            "strategies": f"settings combinations of the '{K.label}' rules reached by the step-by-step optimiser "
                           f"(version {OPTIMIZER_VERSION}) from the user's own backtests; one trial = one settings "
                           "combination on one evaluated window",
             "evaluation_windows": "the whole discovery window (split 70 / 30 by trading days into a choosing and a "
@@ -162,16 +162,16 @@ def build_material(parent: dict) -> dict:
             "stages": {"discovery": "optimiser tries, their lookahead checks and saved backtests",
                        "holdout": "one holdout look"}},
     })
+    src = "BP Blake's public videos" if K.id == "my" else K.texts["source"]
     mat["pre_protocol_exposure"] = {
-        "statement": "The rules were written from BP Blake's public videos. Every optimiser run starts from a backtest the "
-                     "user chose after discovery-period backtests of the My strategy protocol, so the starting points "
-                     "are already selected on the discovery period. The videos show trades from May-August 2026, which "
-                     "may lie inside the holdout window.",
+        "statement": f"The rules were written from {src}. Every optimiser run starts from a backtest the "
+                     f"user chose after discovery-period backtests of the {K.label} protocol, so the starting points "
+                     "are already selected on the discovery period. " + K.texts["dates_note"],
         "runs": []}
     return mat
 
 
-def ensure_protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | None]:
+def ensure_protocol(svc, lock=None, create: bool = True, K=None) -> tuple[dict, dict | None]:
     from edgelab.research import protocol as rp
     guard = lock if lock is not None else nullcontext()
     with guard:
@@ -179,12 +179,12 @@ def ensure_protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | N
         if parent is None:
             raise R.MyStrategyError("NO_PROTOCOL", "The autotuner needs the workspace's active research protocol (its "
                                                    "data, discovery and holdout dates). None, or more than one, is active.")
-        rows = [p for p in svc.store.list_protocols(_scope(parent), "ACTIVE")
+        rows = [p for p in svc.store.list_protocols(_scope(parent, K), "ACTIVE")
                 if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
         mine = rows[0] if rows else None
         if mine is None and create:
-            rec = rp.make_record(build_material(parent), {"code_version": R._code_version()})
-            svc.store.save_protocol(rec, _scope(parent))
+            rec = rp.make_record(build_material(parent, K), {"code_version": R._code_version()})
+            svc.store.save_protocol(rec, _scope(parent, K))
             mine = svc.store.get_protocol(rec["protocol_id"])
         if mine is not None:
             rp.verify_record(mine)
@@ -192,8 +192,16 @@ def ensure_protocol(svc, lock=None, create: bool = True) -> tuple[dict, dict | N
 
 
 # =============================================================================================== tweaks
-def _step_values(p: dict, v) -> list[tuple[int, object]]:
-    step = STEPS[p["key"]]
+def _opt(K=None) -> dict:
+    """The tweak rules of a strategy kind (BP Blake: this module's constants)."""
+    K = KD.of(K)
+    if K.id == "my":
+        return {"fixed": FIXED, "steps": STEPS, "inert_unless": INERT_UNLESS, "contradicts": CONTRADICTS}
+    return K.optimizer
+
+
+def _step_values(p: dict, v, steps=None) -> list[tuple[int, object]]:
+    step = (steps or STEPS)[p["key"]]
     out = []
     for sgn in (1, -1):
         x = v + sgn * step
@@ -208,21 +216,24 @@ def _step_values(p: dict, v) -> list[tuple[int, object]]:
 
 
 def _time_values(v: str) -> list[tuple[int, str]]:
-    m = P.minutes(v)
+    m = P.minutes(v)                            # the same HH:MM parser for every kind
     return [(sgn, f"{x // 60:02d}:{x % 60:02d}") for sgn in (1, -1) for x in [m + sgn * TIME_STEP] if 0 <= x < 1440]
 
 
-def tunable() -> list[str]:
-    return [p["key"] for p in P.SCHEMA if p["key"] not in FIXED]
+def tunable(K=None) -> list[str]:
+    o = _opt(K)
+    return [p["key"] for p in KD.of(K).P.SCHEMA if p["key"] not in o["fixed"]]
 
 
-def neighbours(s: dict, es_ok: bool) -> list[dict]:
+def neighbours(s: dict, es_ok: bool, K=None) -> list[dict]:
     """Every one-setting tweak of the resolved settings ``s`` that is valid, can change the trades and is new."""
-    seen = {P.settings_hash(s)}
+    K = KD.of(K)
+    Pk, o = K.P, _opt(K)
+    seen = {Pk.settings_hash(s)}
     out = []
-    for p in P.SCHEMA:
+    for p in Pk.SCHEMA:
         k = p["key"]
-        if k in FIXED or not INERT_UNLESS.get(k, lambda _s: True)(s):
+        if k in o["fixed"] or not o["inert_unless"].get(k, lambda _s: True)(s):
             continue
         cur, t = s[k], p["type"]
         if t == "bool":
@@ -230,24 +241,26 @@ def neighbours(s: dict, es_ok: bool) -> list[dict]:
         elif t == "choice":
             cands = [(0, o) for o in p["options"] if o != cur]
         elif t in ("int", "float"):
-            cands = _step_values(p, cur)
+            if k not in o["steps"]:
+                continue
+            cands = _step_values(p, cur, o["steps"])
         else:
             cands = _time_values(cur)
         for sgn, v in cands:
             new = {**s, k: v}
-            if k == "filters.min_quality" and not es_ok and not s["filters.smt"]:
+            if K.id == "my" and k == "filters.min_quality" and not es_ok and not s["filters.smt"]:
                 new["filters.smt_in_score"] = False      # without ES data a higher score cannot count SMT
             try:
-                rs = P.resolve(P.changed(new))
+                rs = Pk.resolve(Pk.changed(new))
             except P.SettingsError:
                 continue
-            if any(c(rs) for c in CONTRADICTS) or (P.smt_used(rs) and not es_ok):
+            if any(c(rs) for c in o["contradicts"]) or (Pk.smt_used(rs) and not es_ok):
                 continue
-            h = P.settings_hash(rs)
+            h = Pk.settings_hash(rs)
             if h in seen:
                 continue
             seen.add(h)
-            out.append({"key": k, "from": cur, "to": v, "dir": sgn, "overrides": P.changed(rs), "settings_hash": h})
+            out.append({"key": k, "from": cur, "to": v, "dir": sgn, "overrides": Pk.changed(rs), "settings_hash": h})
     return out
 
 
@@ -413,14 +426,61 @@ def _raise_priority() -> None:
 
 
 def _worker_init(cfg: dict, data, es, root: str, win: tuple, split, td_from: int, memo_entries: int = 0,
-                 high_priority: bool = False) -> None:
+                 high_priority: bool = False, kind_id: str = "my", metrics_profile: str | None = None) -> None:
     from edgelab.mystrategy import logic as L
     ds, shm = _attach(data) if isinstance(data, dict) else (data, None)
     if memo_entries:
         L.enable_shared_memo(memo_entries)
     if high_priority:
         _raise_priority()
-    _W.update(cfg=cfg, ds=ds, es=es, root=root, win=win, split=split, td_from=td_from, shm=shm)
+    _W.update(cfg=cfg, ds=ds, es=es, root=root, win=win, split=split, td_from=td_from, shm=shm, kind=kind_id,
+              metrics_profile=metrics_profile)
+
+
+def evaluate_phased(K, cfg: dict, ds, extra, root, win: tuple, split, td_from: int, overrides: dict,
+                    profiles: list[str] | None, metrics_profile: str, *, check: bool = False) -> dict:
+    """ADR-114 (a phased kind, Fair price): both phases through the engine, then per part the prop challenge chain
+    of each profile (evaluation trades until a pass, funded trades after) and the metrics of the trades the
+    pass-criteria account's chain took ('as traded'). Pure: no files."""
+    from edgelab.core.identity import hash_obj
+    from edgelab.fairprice.chain import phase_chain
+    from edgelab.mystrategy.records import report_numbers
+    from edgelab.prop.service import default_profiles
+    s = K.P.resolve(overrides)
+    _, pr = K.execute(cfg, root, ds, s, extra, td_from=td_from, check=check, profile=None, start=win[0])
+    ev, fu = pr.results["eval"].trades, pr.results["funded"].trades
+    allp = {p["profile_id"]: p for p in default_profiles(root)}
+    profs = [p for pid, p in allp.items() if profiles is None or pid in profiles]
+    sample = cfg.get("sample_size")
+    parts = {}
+    plan = [("train", win[0], split), ("check", split, win[1])] + ([("full", win[0], win[1])] if check else [])
+    for name, a, b in plan:
+        until = b if name == "train" else None
+        chains, traded = {}, None
+        for p in profs:
+            raw, tr = phase_chain(ev, fu, p, a, until)
+            chains[p["profile_id"]] = raw
+            if p["profile_id"] == metrics_profile:
+                traded = tr
+        if traded is None and metrics_profile in allp:
+            traded = phase_chain(ev, fu, allp[metrics_profile], a, until)[1]
+        if traded is None:
+            traded = ev.iloc[0:0]
+        nums = report_numbers(traded, a, b, sample)
+        met = nums["metrics"]
+        part = {"metrics": {k: met.get(k) for k in METRIC_KEYS}, "chains": chains,
+                "phase_trades": {"eval": int((traded["phase"] == "eval").sum()) if len(traded) else 0,
+                                 "funded": int((traded["phase"] == "funded").sum()) if len(traded) else 0}}
+        if name == "full":
+            part["monthly"] = nums["monthly"]
+            part["weekly"] = met.get("weekly")
+            part["prop_brief_all"] = True
+        parts[name] = part
+    passed = pr.causality.passed if pr.causality is not None else None
+    return {"settings_hash": K.P.settings_hash(s), "strategy_id": pr.strategy_id,
+            "trades_hash": hash_obj({"eval": pr.results["eval"].trades_hash, "funded": pr.results["funded"].trades_hash}, 16),
+            "causality_passed": passed, "n_signals": pr.n_signals, "trade_count": int(len(ev) + len(fu)),
+            "parts": parts, "evaluated_content_hash": K.evaluated_hash(ds, s, extra)}
 
 
 def evaluate(cfg: dict, ds, es, root, win: tuple, split, td_from: int, overrides: dict, profiles: list[str] | None,
@@ -477,8 +537,13 @@ def evaluate(cfg: dict, ds, es, root, win: tuple, split, td_from: int, overrides
 def _task(kind: str, tag, overrides: dict, profiles) -> dict:
     t0 = time.perf_counter()
     try:
-        out = evaluate(_W["cfg"], _W["ds"], _W["es"], _W["root"], _W["win"], _W["split"], _W["td_from"], overrides,
-                       profiles, check=(kind == "check"))
+        K = KD.get(_W.get("kind") or "my")
+        if K.phased:
+            out = evaluate_phased(K, _W["cfg"], _W["ds"], _W["es"], _W["root"], _W["win"], _W["split"], _W["td_from"],
+                                  overrides, profiles, _W.get("metrics_profile"), check=(kind == "check"))
+        else:
+            out = evaluate(_W["cfg"], _W["ds"], _W["es"], _W["root"], _W["win"], _W["split"], _W["td_from"], overrides,
+                           profiles, check=(kind == "check"))
     except Exception as exc:                             # noqa: BLE001 - recorded as a failed try / check
         code = getattr(exc, "code", None)
         msg = getattr(exc, "message", None) or str(exc)
@@ -489,22 +554,15 @@ def _task(kind: str, tag, overrides: dict, profiles) -> dict:
 
 
 # =============================================================================================== inputs
-def load_inputs(svc, protocol: dict, lock=None):
+def load_inputs(svc, protocol: dict, lock=None, K=None):
     """(ds, es, start, end, td_from) of a protocol's whole discovery window: the 1-minute source dataset (validated,
-    ASK prices required) and the ES series when it covers the window (else None)."""
+    ASK prices required) and the ES series when it covers the window (else None); Fair price: the news input."""
     w = R.windows(protocol["material"])
     start, end = R._ts(w["discovery"]["start"]), R._ts(w["discovery"]["end"])
     ds = svc._cell_dataset(R.dataset_1m(svc, protocol), (start, end), lock)
     if not ds.bars.has_ask_ohlc:
         raise R.MyStrategyError("ASK_OHLC_REQUIRED", "The dataset has no ASK prices; BID/ASK execution needs them.")
-    from edgelab.mystrategy import es as ES
-    try:
-        es = ES.load(svc.data_root)
-    except ES.EsError:
-        es = None
-    if es is not None and not es.covers(max(int(start.value), int(ds.bars.ts_ns[0])),
-                                        min(int(end.value), int(ds.bars.ts_ns[-1])) - 3 * 86_400_000_000_000):
-        es = None
+    es = KD.of(K).load_extra(svc, protocol, ds, start, end)
     return ds, es, start, end, R._trading_date_ord(ds.calendar, start)
 
 
@@ -522,17 +580,22 @@ def split_point(ds, start, end) -> tuple[pd.Timestamp, float]:
 
 
 # =============================================================================================== stored tries (cache)
-def _tries_path(svc) -> Path:
-    return home(svc) / "tries.jsonl"
+def _tries_path(svc, K=None) -> Path:
+    return home(svc, K) / "tries.jsonl"
 
 
-def cache_key(settings_hash: str, content: str, split: pd.Timestamp, config_hash: str) -> str:
-    return f"{settings_hash}|{content}|{split.isoformat()}|{config_hash}|r{RULES_VERSION}|c{CH.CHAIN_VERSION}"
+def cache_key(settings_hash: str, content: str, split: pd.Timestamp, config_hash: str, K=None,
+              profile: str | None = None) -> str:
+    K = KD.of(K)
+    if K.id == "my":
+        return f"{settings_hash}|{content}|{split.isoformat()}|{config_hash}|r{RULES_VERSION}|c{CH.CHAIN_VERSION}"
+    from edgelab.fairprice.chain import CHAIN_VERSION as FV       # as-traded metrics depend on the criteria account
+    return f"{settings_hash}|{content}|{split.isoformat()}|{config_hash}|r{K.rules_version}|c{CH.CHAIN_VERSION}.{FV}|{profile}"
 
 
-def read_cache(svc) -> dict[str, dict]:
+def read_cache(svc, K=None) -> dict[str, dict]:
     out: dict[str, dict] = {}
-    p = _tries_path(svc)
+    p = _tries_path(svc, K)
     if not p.exists():
         return out
     with open(p, encoding="utf-8") as f:
@@ -569,17 +632,18 @@ def _append(path: Path, row: dict) -> None:
 
 
 # =============================================================================================== the run
-def _run_path(svc, run_id: str) -> Path:
+def _run_path(svc, run_id: str, K=None) -> Path:
     import re
     if not re.fullmatch(r"OPT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}", run_id or ""):
         raise KeyError(run_id)
-    return home(svc) / "runs" / f"{run_id}.json"
+    return home(svc, K) / "runs" / f"{run_id}.json"
 
 
 class Run:
     """The one optimiser run of this process (background thread + worker processes)."""
 
-    def __init__(self):
+    def __init__(self, K=None):
+        self.K = KD.of(K)
         self.state: dict = {"running": False}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -636,16 +700,17 @@ class Run:
         guard = lock if lock is not None else nullcontext()
         self._rec = None
         self._set(step="Checking the protocol and the starting backtest")
-        _, mine = ensure_protocol(svc, lock)
+        K, P = self.K, self.K.P
+        _, mine = ensure_protocol(svc, lock, K=K)
         mat = mine["material"]
         if svc._config_hash() != mat["config_hash"]:
             raise R.MyStrategyError("PROTOCOL_CONFIG_CHANGED", "The research settings (costs, fills, sessions) differ "
                                                                "from the protocol's. Restore them first.")
-        start_sm = start_summary(svc, start_id)
+        start_sm = start_summary(svc, start_id, K)
         s0 = P.resolve(start_sm.get("settings_changed") or {})
         ctx = run_context(svc)
         self._set(step="Loading and checking the price data")
-        ds, es, start, end, td_from = load_inputs(svc, mine, lock)
+        ds, es, start, end, td_from = load_inputs(svc, mine, lock, K)
         if P.smt_used(s0) and es is None:
             raise R.MyStrategyError("ES_DATA_REQUIRED", "The starting backtest uses SMT divergence with ES. Import ES data "
                                                         "that covers the whole discovery period first (My strategy -> "
@@ -653,7 +718,7 @@ class Run:
         split, train_share = split_point(ds, start, end)
         run_id = R.new_id("OPT")
         self._rec = {
-            "id": run_id, "optimizer_version": OPTIMIZER_VERSION, "rules_version": RULES_VERSION,
+            "id": run_id, "optimizer_version": OPTIMIZER_VERSION, "rules_version": K.rules_version, "strategy_kind": K.id,
             "app_version": R._code_version(), "created_at": R._now(), "status": "running", "protocol_id": mine["protocol_id"],
             "start": {"id": start_id, "label": start_sm.get("label") or "", "created_at": start_sm.get("created_at"),
                       "overrides": P.changed(s0), "settings_hash": P.settings_hash(s0)},
@@ -661,7 +726,8 @@ class Run:
             "window": {"start": start.isoformat(), "end": end.isoformat(), "split": split.isoformat(),
                        "train_share": round(train_share, 6)},
             "max_tries": int(max_tries), "batch": BATCH, "dataset_content_hash": ds.manifest.content_hash,
-            "es_content_hash": None if es is None else es.content_hash,
+            "es_content_hash": None if es is None or K.phased else es.content_hash,
+            "news_content_hash": es.content_hash if K.phased and es is not None else None,
             "tries": 0, "reused": 0, "failed": 0, "rejected_by_check": 0, "bests": [], "stop_reason": None,
             "final_backtest": None, "finished_at": None, "error": None}
         self._set(run_id=run_id)
@@ -669,14 +735,14 @@ class Run:
         ctx = {**ctx, "train_share": train_share, "check_share": 1 - train_share}
         self._ctx, self._mine, self._ds, self._es = ctx, mine, ds, es
         self._split, self._win = split, (start, end)
-        self._cache = read_cache(svc)
-        self._tries_file = home(svc) / "runs" / f"{run_id}.tries.jsonl"
+        self._cache = read_cache(svc, K)
+        self._tries_file = home(svc, K) / "runs" / f"{run_id}.tries.jsonl"
         shm, payload = share_dataset(ds)
         shared = shm is not None
         pl = plan_workers(processes, ds, shared)
         self._set(processes=pl["processes"], memory_note=plan_note(pl, shared), memory_plan=pl, step="Running")
         self._rec["memory_plan"] = pl
-        self._pool_args = (dict(svc.cfg), payload, es, str(svc.root), (start, end), split, td_from)
+        self._pool_args = (dict(svc.cfg), payload, es, str(svc.root), (start, end), split, td_from, K.id, ctx["profile"])
         self._n_workers, self._memo = pl["processes"], pl["memo_entries"]
         self._pool = None
         self._checks: dict = {}                          # future -> best index
@@ -699,10 +765,11 @@ class Run:
     def _new_pool(self) -> None:
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
-        cfg, payload, es, root, win, split, td_from = self._pool_args
+        cfg, payload, es, root, win, split, td_from, kind_id, mprof = self._pool_args
         self._pool = ProcessPoolExecutor(max_workers=self._n_workers, mp_context=multiprocessing.get_context("spawn"),
                                          initializer=_worker_init,
-                                         initargs=(cfg, payload, es, root, win, split, td_from, self._memo, True))
+                                         initargs=(cfg, payload, es, root, win, split, td_from,
+                                                   self._memo if kind_id == "my" else 0, True, kind_id, mprof))
 
     def _close_pool(self, cancel: bool) -> None:
         if self._pool is None:
@@ -734,10 +801,11 @@ class Run:
 
     # ------------------------------------------------------------------------------------------- search
     def _key_of(self, settings_hash: str, content: str) -> str:
-        return cache_key(settings_hash, content, self._split, self._mine["material"]["config_hash"])
+        return cache_key(settings_hash, content, self._split, self._mine["material"]["config_hash"], self.K,
+                         self._ctx["profile"])
 
     def _content(self, overrides: dict) -> str:
-        return R.evaluated_hash(self._ds, P.resolve(overrides), self._es)
+        return self.K.evaluated_hash(self._ds, self.K.P.resolve(overrides), self._es)
 
     def _cached(self, key: str) -> dict | None:
         c = self._cache.get(key)
@@ -749,7 +817,7 @@ class Run:
         return None
 
     def _search(self, svc, s0: dict, max_tries: int, guard) -> None:
-        rec = self._rec
+        rec, P = self._rec, self.K.P
         start = {"key": None, "from": None, "to": None, "dir": 0, "overrides": P.changed(s0),
                  "settings_hash": P.settings_hash(s0)}
         self._set(step="Scoring the starting backtest")
@@ -767,7 +835,7 @@ class Run:
         while not self._stop.is_set():
             cur = rec["bests"][self._current]
             s = P.resolve(cur["overrides"])
-            nbs = [n for n in neighbours(s, self._es is not None) if n["settings_hash"] not in seen]
+            nbs = [n for n in neighbours(s, self._es is not None, self.K) if n["settings_hash"] not in seen]
             nbs = ordered(nbs, cur["settings_hash"], last)
             self._set(step=f"Trying tweaks of best #{cur['n']} ({len(nbs)} to try)", neighbourhood=len(nbs))
             if not nbs:
@@ -930,9 +998,10 @@ class Run:
         with guard:
             svc.store.add_trial_event({
                 "protocol_id": pid, "trial_id": "TR_" + tk[:12].upper(), "trial_key": tk,
-                "status": "failed" if failed else "completed", "entry_point": ENTRY_POINT,
+                "status": "failed" if failed else "completed",
+                "entry_point": ENTRY_POINT if self.K.id == "my" else f"{self.K.folder}_optimizer",
                 "strategy_id": out.get("strategy_id"), "logic_hash": nb["settings_hash"],
-                "definition_hash": nb["settings_hash"], "family": "my_strategy", "dataset_id": ds.manifest.dataset_id,
+                "definition_hash": nb["settings_hash"], "family": self.K.family, "dataset_id": ds.manifest.dataset_id,
                 "source_dataset_id": ds.manifest.dataset_id, "evaluated_content_hash": out.get("evaluated_content_hash") or content,
                 "window_start": str(w["start"]), "window_end": str(w["end"]), "config_hash": mat["config_hash"],
                 "cost_scenario": mat["execution"].get("cost_scenario"), "proposal_id": None, "search_id": None,
@@ -944,10 +1013,10 @@ class Run:
         self._bump("tries_now")
         self._set(last_duration_s=out.get("duration_s"))
         row = {"key": key, "settings_hash": nb["settings_hash"], "overrides": nb["overrides"],
-               "rules_version": RULES_VERSION, "finished_at": R._now(), "run_id": self._rec["id"],
+               "rules_version": self.K.rules_version, "finished_at": R._now(), "run_id": self._rec["id"],
                **{k: out.get(k) for k in ("trades_hash", "strategy_id", "trade_count", "n_signals", "duration_s",
                                           "causality_passed", "parts", "error")}}
-        _append(_tries_path(svc), {k: v for k, v in row.items() if v is not None or k == "causality_passed"})
+        _append(_tries_path(svc, self.K), {k: v for k, v in row.items() if v is not None or k == "causality_passed"})
         if not failed:
             prev = self._cache.get(key)
             self._cache[key] = row if prev is None else {**prev, **row}
@@ -1002,10 +1071,10 @@ class Run:
         if ok and "error" not in out:
             key = self._key_of(b["settings_hash"], out.get("evaluated_content_hash") or self._content(b["overrides"]))
             row = {"key": key, "settings_hash": b["settings_hash"], "overrides": b["overrides"],
-                   "rules_version": RULES_VERSION, "finished_at": R._now(), "run_id": rec["id"], "check_run": True,
+                   "rules_version": self.K.rules_version, "finished_at": R._now(), "run_id": rec["id"], "check_run": True,
                    **{k: out.get(k) for k in ("trades_hash", "strategy_id", "trade_count", "n_signals",
                                               "causality_passed", "parts")}}
-            _append(_tries_path(svc), row)
+            _append(_tries_path(svc, self.K), row)
             prev = self._cache.get(key) or {}
             parts = {**(prev.get("parts") or {})}
             for nm, v in row["parts"].items():
@@ -1076,7 +1145,7 @@ class Run:
             self._set(step="Backtesting the final best normally (trade records, candles, lookahead check)")
             self._save(svc)
             try:
-                sm = save_backtest(svc, rec["id"], fb["n"], lock=lock, record=rec)
+                sm = save_backtest(svc, rec["id"], fb["n"], lock=lock, record=rec, K=self.K)
                 rec["final_backtest"] = sm["id"]
             except Exception as exc:                     # noqa: BLE001 - the search result stays; the error is shown
                 rec["final_error"] = getattr(exc, "message", None) or str(exc)
@@ -1090,13 +1159,15 @@ class Run:
         if rec is None:
             return
         rec["current"] = getattr(self, "_current", None)
-        R._write_json(_run_path(svc, rec["id"]), rec)
+        R._write_json(_run_path(svc, rec["id"], self.K), rec)
 
 
-def run_of(svc) -> Run:
-    r = svc.__dict__.get("_my_optimizer_run")
+def run_of(svc, K=None) -> Run:
+    K = KD.of(K)
+    attr = "_my_optimizer_run" if K.id == "my" else f"_{K.folder}_optimizer_run"
+    r = svc.__dict__.get(attr)
     if r is None:
-        r = svc.__dict__["_my_optimizer_run"] = Run()
+        r = svc.__dict__[attr] = Run(K)
         r._reverted = False
     return r
 
@@ -1131,11 +1202,11 @@ def run_context(svc) -> dict:
             "fees": fees_all[profile], "fees_all": fees_all}
 
 
-def start_summary(svc, start_id: str) -> dict:
+def start_summary(svc, start_id: str, K=None) -> dict:
     try:
-        folder = R._bt_folder(svc, str(start_id))
+        folder = R._bt_folder(svc, str(start_id), K)
     except KeyError:
-        raise R.MyStrategyError("NO_START", "Pick one of your My strategy backtests to start from.")
+        raise R.MyStrategyError("NO_START", f"Pick one of your {KD.of(K).label} backtests to start from.")
     sm = R._read_json(folder / "summary.json") or {}
     if sm.get("kind") != "discovery_backtest":
         raise R.MyStrategyError("NO_START", "The autotuner starts from a discovery backtest (not a holdout report).")
@@ -1143,9 +1214,9 @@ def start_summary(svc, start_id: str) -> dict:
 
 
 # =============================================================================================== read views
-def protocol_status(svc) -> dict:
+def protocol_status(svc, K=None) -> dict:
     try:
-        parent, mine = ensure_protocol(svc, create=False)
+        parent, mine = ensure_protocol(svc, create=False, K=K)
         return {"ready": True, "protocol_id": mine["protocol_id"] if mine else None, "created": mine is not None,
                 **R.windows((mine or parent)["material"]),
                 "config_ok": svc._config_hash() == (mine or parent)["material"]["config_hash"],
@@ -1166,24 +1237,25 @@ def _brief(rec: dict) -> dict:
         "final_n": None if fb is None else fb["n"]}
 
 
-def list_runs(svc) -> list[dict]:
+def list_runs(svc, K=None) -> list[dict]:
     out = []
-    for f in sorted((home(svc) / "runs").glob("OPT_*.json"), reverse=True):
+    for f in sorted((home(svc, K) / "runs").glob("OPT_*.json"), reverse=True):
         rec = R._read_json(f)
         if rec:
             out.append(_brief(rec))
     return out
 
 
-def run_detail(svc, run_id: str) -> dict:
-    rec = R._read_json(_run_path(svc, run_id))
+def run_detail(svc, run_id: str, K=None) -> dict:
+    Pk = KD.of(K).P
+    rec = R._read_json(_run_path(svc, run_id, K))
     if rec is None:
         raise KeyError(run_id)
-    live = run_of(svc).info()
+    live = run_of(svc, K).info()
     if live.get("running") and live.get("run_id") == run_id:
         rec["live"] = live
     tries = []
-    p = home(svc) / "runs" / f"{run_id}.tries.jsonl"
+    p = home(svc, K) / "runs" / f"{run_id}.tries.jsonl"
     if p.exists():
         with open(p, encoding="utf-8") as f:
             for line in f:
@@ -1192,27 +1264,27 @@ def run_detail(svc, run_id: str) -> dict:
                 except ValueError:
                     continue
     rec["tries_log"] = tries
-    labels = {d["key"]: d["label"] for d in P.SCHEMA}
+    labels = {d["key"]: d["label"] for d in Pk.SCHEMA}
     fb = rec["bests"][rec["final"]] if rec.get("final") is not None else \
         next((b for b in reversed(rec["bests"]) if b["status"] == "best"), None)
     if fb is not None and rec["bests"]:
-        a, b = P.resolve(rec["bests"][0]["overrides"]), P.resolve(fb["overrides"])
+        a, b = Pk.resolve(rec["bests"][0]["overrides"]), Pk.resolve(fb["overrides"])
         rec["changes"] = [{"key": k, "label": labels.get(k, k), "from": a[k], "to": b[k]} for k in a if a[k] != b[k]]
     rec["labels"] = {k: labels[k] for k in {b["change"]["key"] for b in rec["bests"] if b.get("change")}
                      | {t["key"] for t in tries if t.get("key")} if k in labels}
     saved = []
-    for b in R.list_backtests(svc):
-        sm = R._read_json(R.home(svc) / "backtests" / b["id"] / "summary.json") or {}
+    for b in R.list_backtests(svc, K=K):
+        sm = R._read_json(R.home(svc, K) / "backtests" / b["id"] / "summary.json") or {}
         if sm.get("optimizer_run") == run_id:
             saved.append({"id": b["id"], "best": sm.get("optimizer_best"), "created_at": b["created_at"]})
     rec["saved"] = saved
     return R.jsonable(rec)
 
 
-def save_backtest(svc, run_id: str, n: int, *, lock=None, progress=None, record: dict | None = None) -> dict:
+def save_backtest(svc, run_id: str, n: int, *, lock=None, progress=None, record: dict | None = None, K=None) -> dict:
     """One best of a run as a normal My strategy backtest (trade records, candles, the lookahead check) under the
     autotuner's protocol: the same trial as the try, never a new one."""
-    rec = record or R._read_json(_run_path(svc, run_id))
+    rec = record or R._read_json(_run_path(svc, run_id, K))
     if rec is None:
         raise R.MyStrategyError("NO_RUN", f"There is no autotuner run {run_id}.")
     if not (0 <= int(n) < len(rec["bests"])):
@@ -1220,16 +1292,17 @@ def save_backtest(svc, run_id: str, n: int, *, lock=None, progress=None, record:
     b = rec["bests"][int(n)]
     if b["status"] == "failed_lookahead":
         raise R.MyStrategyError("LOOKAHEAD", "This result failed the lookahead check.")
-    _, mine = ensure_protocol(svc, lock)
+    _, mine = ensure_protocol(svc, lock, K=K)
     label = f"Autotuner {run_id[4:19]} best #{b['n']}" + (" (final)" if rec.get("final") == b["n"] else "")
     return R.backtest(svc, b["overrides"], label=label, lock=lock, progress=progress, protocol=mine,
-                      extra={"optimizer_run": run_id, "optimizer_best": int(b["n"])})
+                      extra={"optimizer_run": run_id, "optimizer_best": int(b["n"])}, K=K)
 
 
-def status(svc) -> dict:
+def status(svc, K=None) -> dict:
     from edgelab.mystrategy import es as ES
+    K = KD.of(K)
     try:
-        es = ES.status(svc.data_root)
+        es = ES.status(svc.data_root) if K.id == "my" else None
     except Exception:                                    # noqa: BLE001 - status only
         es = None
     try:
@@ -1237,10 +1310,10 @@ def status(svc) -> dict:
         ctx_problem = None
     except R.MyStrategyError as e:
         ctx, ctx_problem = None, {"kind": e.code, "message": e.message}
-    starts = [b for b in R.list_backtests(svc) if b.get("kind") == "discovery_backtest"]     # newest first
+    starts = [b for b in R.list_backtests(svc, K=K) if b.get("kind") == "discovery_backtest"]     # newest first
     starts = [b for b in starts if b.get("favorite")] + [b for b in starts if not b.get("favorite")]
-    return R.jsonable({"protocol": protocol_status(svc), "run": run_of(svc).info(), "runs": list_runs(svc)[:50],
+    return R.jsonable({"protocol": protocol_status(svc, K), "run": run_of(svc, K).info(), "runs": list_runs(svc, K)[:50],
                        "starts": starts, "es": es, "cpu_count": os.cpu_count() or 1,
                        "context": None if ctx is None else {k: ctx[k] for k in ("goals", "profile", "profile_name", "fees")},
                        "context_problem": ctx_problem, "default_max_tries": DEFAULT_MAX_TRIES, "batch": BATCH,
-                       "train_share": TRAIN_SHARE, "fixed": list(FIXED), "rules_version": RULES_VERSION})
+                       "train_share": TRAIN_SHARE, "fixed": list(_opt(K)["fixed"]), "rules_version": K.rules_version})

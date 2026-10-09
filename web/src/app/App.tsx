@@ -24,6 +24,7 @@ import { MarketBehaviourPage, MarketDayReplayPage, MarketHoldoutPage, MarketLive
 import { EdgeCheckPage, TradeAnatomyPage } from "../pages/Edge";
 import { ChartsPage } from "../pages/charts/ChartsPage";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
+import { FAIR_KIND, KindProvider } from "../pages/myKind";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
@@ -41,6 +42,8 @@ const NAV: NavItem[] = [
     heads: ["dashboard", "explorer", "holdout-results", "results", "compare", "controls", "pipeline"] },
   { path: "/paper", label: "Prop Trading", tid: "paper", icon: "shield", heads: ["paper", "prop"] },
   { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
+  { path: "/fair", label: "Fair price", tid: "fair", icon: "compare",                                             // ADR-114
+    heads: ["fair", "fair-settings", "fair-backtest", "fair-trades", "fair-holdout", "fair-plan", "fair-setup", "fair-autotune"] },
   { path: "/charts", label: "Charts", tid: "charts", icon: "candles", heads: ["charts"] },                    // ADR-111: live charts
   { path: "/edge", label: "Edge lab", tid: "edge", icon: "search", heads: ["edge", "edge-anatomy"] },          // ADR-104
   { path: "/market", label: "Market simulator", tid: "market", icon: "pulse",
@@ -69,6 +72,10 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
   my: [{ path: "/my", label: "Overview", head: "my" }, { path: "/my-settings", label: "Settings", head: "my-settings" },
     { path: "/my-backtest", label: "Backtest", head: "my-backtest" }, { path: "/my-trades", label: "Trades", head: "my-trades" },
     { path: "/my-autotune", label: "Strategy autotuner", head: "my-autotune" }, { path: "/my-setup", label: "Setup review", head: "my-setup" }, { path: "/my-holdout", label: "Holdout review", head: "my-holdout" }],
+  fair: [{ path: "/fair", label: "Overview", head: "fair" }, { path: "/fair-settings", label: "Settings", head: "fair-settings" },     // ADR-114
+    { path: "/fair-backtest", label: "Backtest", head: "fair-backtest" }, { path: "/fair-trades", label: "Trades", head: "fair-trades" },
+    { path: "/fair-autotune", label: "Strategy autotuner", head: "fair-autotune" }, { path: "/fair-setup", label: "Setup review", head: "fair-setup" },
+    { path: "/fair-holdout", label: "Holdout review", head: "fair-holdout" }],
 };
 
 const MARKET_ALIAS: Record<string, string> = { "market-trend": "market-behaviour", "market-nqes": "market-behaviour",   // ADR-110: old routes
@@ -134,6 +141,15 @@ function Page() {
     case "my-setup": return <MySetupReviewPage />;               // ADR-96
     case "my-autotune": return <MyAutotunePage />;               // ADR-97
     case "my-plan": return <MyPlanResultPage />;
+    case "fair": case "fair-settings": case "fair-backtest": case "fair-trades": case "fair-holdout": case "fair-setup":
+    case "fair-autotune": case "fair-plan": {                    // ADR-114: the same pages for the Fair price strategy
+      const page = route.parts[0] === "fair" ? <MyOverviewPage /> : route.parts[0] === "fair-settings" ? <MySettingsPage />
+        : route.parts[0] === "fair-backtest" ? <MyBacktestPage />
+        : route.parts[0] === "fair-trades" ? (route.parts[2] ? <MyTradePage key={`${route.parts[1]}/${route.parts[2]}`} /> : <MyTradesPage key={route.parts[1] ?? ""} />)
+        : route.parts[0] === "fair-holdout" ? <MyHoldoutPage /> : route.parts[0] === "fair-setup" ? <MySetupReviewPage />
+        : route.parts[0] === "fair-autotune" ? <MyAutotunePage /> : <MyPlanResultPage />;
+      return <KindProvider kind={FAIR_KIND}>{page}</KindProvider>;
+    }
     case "charts": return <ChartsPage />;                        // ADR-111: live charts
     case "edge": return <EdgeCheckPage />;                       // ADR-104: Edge lab
     case "edge-anatomy": return <TradeAnatomyPage />;

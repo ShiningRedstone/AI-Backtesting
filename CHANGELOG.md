@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Fair price: the "fair pricing theory" strategy as a second hand-built strategy (ADR-114)
+
+| Item | Status |
+|---|---|
+| Tab "Fair price" with Overview, Settings, Backtest, Trades, Strategy autotuner, Setup review, Holdout review (same machinery as My strategy) | IMPLEMENTED, TESTED |
+| Rules: sessions (NY open, NY afternoon, Asia 20:00, London 03:00), fair price (open / 9:30 open / pre-news), continuation, displacement and break-of-structure reversions, 80 % room rule, 3 losses in a row | IMPLEMENTED, TESTED (known answer + lookahead check) |
+| Evaluation and funded rules switched by the prop challenge chain; headline numbers = the trades the chain took | IMPLEMENTED, TESTED |
+| Funded take profit from the room to the fair price, sized for a fixed dollar win (engine: optional per-signal dollar budget, absent = unchanged) | IMPLEMENTED, TESTED |
+| Scheduled 8:30 news days from the Market simulator calendar | IMPLEMENTED, TESTED (synthetic news) |
+| Own protocols: 300 tries + 1 look, autotuner 5,000 tries + 1 look, holdout allowance 2 strategies x automatic + manual | IMPLEMENTED, TESTED |
+| Real NQ results | REQUIRES REAL DATA (run on your PC) |
+| Several accounts at once, discretionary fair-price moves, unexpected news, live-account / bonus tactics | NOT IMPLEMENTED |
+| My strategy (BP Blake), other backtests, fills, costs, prop rules, configs | UNCHANGED |
+
 ## Charts: the predictor on the live chart (ADR-113)
 
 | Item | Status |

@@ -218,8 +218,15 @@ ADR-113: Charts round 3 = the Market simulator predictor live on NQ / MNQ charts
 UI `web/src/pages/charts/predictor.tsx`): 15-min candle forecast + level map from the FINAL frozen discovery models (`newdays.train_candles`,
 `levelmap.fit_frozen`; identical to the new-days test), 120 days of live minutes as history, scheduled session end, outcomes only once known,
 report-card verdicts ("no proven skill" faded), banner on a new level map. Display only.
+ADR-114: tab "Fair price" (`edgelab/fairprice/`): the "fair pricing theory" from a user-supplied video transcript, 52 settings
+(sessions NY 9:30 / 14:00, Asia 20:00, London 03:00; fair price = session open, afternoon = 9:30 open, pre-news price on 8:30
+news days; continuation + displacement / break-of-structure reversions; 3 losses in a row). Two engine runs (evaluation rules,
+funded rules) combined by the prop chain (`fairprice/chain.py`: eval trades until the pass day ends, funded after); headline =
+as traded under the pass-criteria account. Engine: optional `SignalSet.risk_usd` per-signal budget (funded dollar win; absent =
+unchanged). The My strategy runner / optimizer / holdout / setup review take a `mystrategy/kind.py` Kind (BP = default, unchanged);
+Fair price routes = `/api/fair/*`, pages via `web/src/pages/myKind.tsx`; own companion roles `fair_price` / `fair_optimizer` / `fair_holdout`.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-113.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-114.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -283,6 +290,8 @@ remains. Do not rely on this file alone.
     drawings per symbol and the layout saved in the workspace.
     "Trade" (ADR-112): simulated LucidFlex 50K accounts, order ticket, account panel, order lines on the chart.
     "Predictor" (ADR-113): the 15-min candle forecast and the level map drawn live on NQ / MNQ charts.
+  - Fair price (ADR-114): the same sub-tabs as My strategy for the "fair pricing theory" strategy (evaluation / funded rules
+    switched by the prop chain).
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -509,4 +518,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-113). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-114). Update `README.md` status for phases.

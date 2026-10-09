@@ -41,12 +41,15 @@ export interface TradeRow {
   target_price: number; exit_price_theo: number; exit_reason: string; net_r: number; net_usd: number; contracts: number;
   risk_points: number; model?: string; checklist?: Record<string, boolean | null>; quality?: number;
   confirmation_tf?: string; r_planned?: number;
+  phase?: "eval" | "funded"; session?: string; target_points?: number; attempt?: number;     // ADR-114 (Fair price)
 }
 export interface Report extends ReportRow {
   settings: Record<string, unknown>; monthly: MonthRow[]; rule_stats: Record<string, number>; n_signals: number;
   skipped: Record<string, number>; causality_passed: boolean | null; run_id: string | null; trial_id: string | null;
   dataset: Record<string, unknown>; trades: TradeRow[]; decisions?: Record<string, { take: boolean }>; note?: string;
   review_id?: string; criteria_profile?: string;
+  /** ADR-114 (Fair price): each rule set traded on every day; the headline trades are the chain's under criteria_profile */
+  phases?: Record<"eval" | "funded", { trade_count: number; metrics: Metrics; monthly: MonthRow[] }>;
 }
 
 export interface Zone { kind: string; tf: string; top: number; bottom: number; t_from: string; known_ts: string; ce?: number;
@@ -91,7 +94,8 @@ export interface ExportResult { path: string; file: string; folder: string; byte
 export interface Overview {
   protocol: ProtocolInfo; settings_hash: string | null; settings_changed: Record<string, unknown>; backtests: ReportRow[];
   reports: ReportRow[]; plans: { id: string; name: string; created_at: string; variants: number; exported?: unknown }[];
-  job: MyJob | null; es?: EsStatus; criteria_profile?: string;
+  job: MyJob | null; es?: EsStatus | null; criteria_profile?: string;
+  news?: { downloaded: boolean; events?: number; high?: number; first?: string | null; last?: string | null; refused?: unknown; zone?: string | null } | null;
   review: { id: string; status: string; created_at: string; settings_hash: string; mechanical_report: string; final_report: string | null } | null;
 }
 
@@ -186,38 +190,44 @@ export interface OptStatus {
   train_share: number; fixed: string[];
 }
 
-export const my = {
-  overviewUrl: "/api/my",
-  settingsUrl: "/api/my/settings",
-  esUrl: "/api/my/es",
-  importEs: (path: string, identity_confirmed: boolean) => api.post<MyJob>("/api/my/es/import", { path, identity_confirmed }),
-  reviewUrl: "/api/my/review",
-  holdoutUrl: "/api/my/holdout",
-  holdoutAutomatic: (ref: string) => api.post<MyJob>("/api/my/holdout/automatic", { ref }),
-  holdoutManual: (strategy: number) => api.post<{ id: string }>("/api/my/holdout/manual", { strategy }),
-  reportUrl: (id: string) => `/api/my/reports/${enc(id)}`,
-  tradeUrl: (id: string, n: number) => `/api/my/reports/${enc(id)}/trades/${n}`,
-  planResultUrl: (id: string) => `/api/my/plan-results/${enc(id)}`,
-  saveSettings: (overrides: Record<string, unknown>) => api.post<SettingsPayload>("/api/my/settings", { overrides }),
-  startBacktest: (b: { start?: string | null; end?: string | null; label?: string }) => api.post<MyJob>("/api/my/backtests", b),
-  job: (id: string) => api.get<MyJob>(`/api/my/jobs/${enc(id)}`),
-  startReview: () => api.post<MyJob>("/api/my/review", {}),
-  decide: (signal_bar: number, take: boolean) => api.post<Decision>("/api/my/review/decide", { signal_bar, take }),
-  exportReports: (report_ids: string[], include_candles: boolean) => api.post<ExportResult>("/api/my/export", { report_ids, include_candles }),
-  openExports: () => api.post<{ folder: string }>("/api/my/exports/open", {}),
-  checkPlan: (plan: unknown) => api.post<{ name?: string; note?: string; variants: PlanVariant[] }>("/api/my/plans/check", { plan }),
-  runPlan: (plan: unknown) => api.post<MyJob>("/api/my/plans/run", { plan }),
-  setupReviewsUrl: "/api/my/setup-reviews",
-  setupReviewUrl: (id: string) => `/api/my/setup-reviews/${enc(id)}`,
-  startSetupReview: (report_id: string) => api.post<{ id: string }>("/api/my/setup-reviews", { report_id }),
-  setupDecide: (id: string, trade_no: number, take: boolean, reasons: string[], note: string) =>
-    api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/decide`, { trade_no, take, reasons, note }),
-  autotuneUrl: "/api/my/autotune",
-  autotuneRunUrl: (id: string) => `/api/my/autotune/runs/${enc(id)}`,
-  autotuneStart: (b: { start_id: string; processes: number; max_tries: number }) => api.post<OptLive>("/api/my/autotune/start", b),
-  autotuneStop: () => api.post<OptLive>("/api/my/autotune/stop", {}),
-  autotuneSave: (id: string, n: number) => api.post<MyJob>(`/api/my/autotune/runs/${enc(id)}/bests/${n}/save`, {}),
-  setMeta: (id: string, b: { favorite?: boolean; label?: string }) =>
-    api.post<{ id: string; favorite: boolean; label: string }>(`/api/my/reports/${enc(id)}/meta`, b),
-  setupUndo: (id: string) => api.post<{ trade_no: number; progress: SetupProgress }>(`/api/my/setup-reviews/${enc(id)}/undo`, {}),
-};
+/** Every URL of a My strategy-style tab (ADR-114: base base = My strategy, "/api/fair" = Fair price). */
+export function makeMy(base: string) {
+  return {
+    overviewUrl: base,
+    settingsUrl: base + "/settings",
+    esUrl: base + "/es",
+    importEs: (path: string, identity_confirmed: boolean) => api.post<MyJob>(base + "/es/import", { path, identity_confirmed }),
+    reviewUrl: base + "/review",
+    holdoutUrl: base + "/holdout",
+    holdoutAutomatic: (ref: string) => api.post<MyJob>(base + "/holdout/automatic", { ref }),
+    holdoutManual: (strategy: number) => api.post<{ id: string }>(base + "/holdout/manual", { strategy }),
+    reportUrl: (id: string) => `${base}/reports/${enc(id)}`,
+    tradeUrl: (id: string, n: number) => `${base}/reports/${enc(id)}/trades/${n}`,
+    planResultUrl: (id: string) => `${base}/plan-results/${enc(id)}`,
+    saveSettings: (overrides: Record<string, unknown>) => api.post<SettingsPayload>(base + "/settings", { overrides }),
+    startBacktest: (b: { start?: string | null; end?: string | null; label?: string }) => api.post<MyJob>(base + "/backtests", b),
+    job: (id: string) => api.get<MyJob>(`${base}/jobs/${enc(id)}`),
+    startReview: () => api.post<MyJob>(base + "/review", {}),
+    decide: (signal_bar: number, take: boolean) => api.post<Decision>(base + "/review/decide", { signal_bar, take }),
+    exportReports: (report_ids: string[], include_candles: boolean) => api.post<ExportResult>(base + "/export", { report_ids, include_candles }),
+    openExports: () => api.post<{ folder: string }>(base + "/exports/open", {}),
+    checkPlan: (plan: unknown) => api.post<{ name?: string; note?: string; variants: PlanVariant[] }>(base + "/plans/check", { plan }),
+    runPlan: (plan: unknown) => api.post<MyJob>(base + "/plans/run", { plan }),
+    setupReviewsUrl: base + "/setup-reviews",
+    setupReviewUrl: (id: string) => `${base}/setup-reviews/${enc(id)}`,
+    startSetupReview: (report_id: string) => api.post<{ id: string }>(base + "/setup-reviews", { report_id }),
+    setupDecide: (id: string, trade_no: number, take: boolean, reasons: string[], note: string) =>
+      api.post<{ trade_no: number; progress: SetupProgress }>(`${base}/setup-reviews/${enc(id)}/decide`, { trade_no, take, reasons, note }),
+    autotuneUrl: base + "/autotune",
+    autotuneRunUrl: (id: string) => `${base}/autotune/runs/${enc(id)}`,
+    autotuneStart: (b: { start_id: string; processes: number; max_tries: number }) => api.post<OptLive>(base + "/autotune/start", b),
+    autotuneStop: () => api.post<OptLive>(base + "/autotune/stop", {}),
+    autotuneSave: (id: string, n: number) => api.post<MyJob>(`${base}/autotune/runs/${enc(id)}/bests/${n}/save`, {}),
+    setMeta: (id: string, b: { favorite?: boolean; label?: string }) =>
+      api.post<{ id: string; favorite: boolean; label: string }>(`${base}/reports/${enc(id)}/meta`, b),
+    setupUndo: (id: string) => api.post<{ trade_no: number; progress: SetupProgress }>(`${base}/setup-reviews/${enc(id)}/undo`, {}),
+  };
+}
+
+export type MyApi = ReturnType<typeof makeMy>;
+export const my = makeMy("/api/my");

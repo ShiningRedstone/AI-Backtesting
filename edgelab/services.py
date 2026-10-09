@@ -2611,32 +2611,43 @@ class Services:
         from edgelab.research import lab
         return _jsonable(lab.oos_control(self, src, dataset_id, split_at, n_controls, seed))
 
-    # ------------------------------------------------------------------ My strategy (ADR-93)
-    def my_strategy_overview(self) -> dict:
-        from edgelab.mystrategy import es as ES, params as P, review as RV, runner as R
-        ov = R.load_overrides(self)
+    # ------------------------------------------------------------------ My strategy (ADR-93) / Fair price (ADR-114)
+    # Every method takes ``kind``: None / "my" = My strategy (BP Blake), "fair" = Fair price (mystrategy.kind).
+    def my_strategy_overview(self, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import es as ES, kind as KD, review as RV, runner as R
+        K = KD.get(kind)
+        ov = R.load_overrides(self, K)
         try:
-            h = P.settings_hash(ov)
-        except P.SettingsError:
+            h = K.P.settings_hash(ov)
+        except K.P.SettingsError:
             h = None
-        st = RV.current(self)
+        st = RV.current(self, K)
         fees, crit = self.my_challenge_fees(), self.ui_preferences().get("prop_criteria_profile")
-        bts, reps = R.list_backtests(self), R.all_reports(self)
+        bts, reps = R.list_backtests(self, K=K), R.all_reports(self, K)
         for row in bts + reps:                                  # ADR-101: the criteria account's chain, fees applied
             row["challenge"] = self._challenge_view(row.get("challenge"), fees, crit)
-        return _jsonable({"protocol": R.protocol_info(self), "settings_hash": h, "settings_changed": ov,
-                          "criteria_profile": crit, "backtests": bts, "reports": reps,
-                          "plans": R.list_plan_results(self)[:20], "es": ES.status(self.data_root),
+        return _jsonable({"protocol": R.protocol_info(self, K), "settings_hash": h, "settings_changed": ov,
+                          "criteria_profile": crit, "backtests": bts, "reports": reps, "strategy_kind": K.id,
+                          "plans": R.list_plan_results(self, K)[:20],
+                          "es": ES.status(self.data_root) if K.id == "my" else None,
+                          "news": self._fair_news_status() if K.id == "fair" else None,
                           "review": None if st is None else {k: st.get(k) for k in ("id", "status", "created_at",
                                                                                      "settings_hash", "mechanical_report",
                                                                                      "final_report")},
-                          "job": R.jobs_of(self).active()})
+                          "job": R.jobs_of(self, K).active()})
 
-    def my_strategy_es(self) -> dict:
+    def _fair_news_status(self) -> dict:
+        """ADR-114: the Market simulator news calendar Fair price reads (8:30 news days)."""
+        from edgelab.market import news as NW
+        st = NW.status(self.data_root)
+        return {k: st.get(k) for k in ("downloaded", "events", "high", "first", "last", "refused")} | {
+            "zone": (st.get("timezone") or {}).get("zone")}
+
+    def my_strategy_es(self, kind: str | None = None) -> dict:
         from edgelab.mystrategy import es as ES
         return _jsonable(ES.status(self.data_root))
 
-    def my_strategy_import_es(self, path: str, identity_confirmed: bool) -> dict:
+    def my_strategy_import_es(self, path: str, identity_confirmed: bool, kind: str | None = None) -> dict:
         """ES reference prices for SMT (ADR-95): validated, hashed, stored as a My strategy job (never a dataset)."""
         from edgelab.mystrategy import es as ES, runner as R
         if identity_confirmed is not True:
@@ -2652,68 +2663,73 @@ class Services:
                 raise R.MyStrategyError(e.code, e.message)
         return R.jobs_of(self).start("es_import", work)
 
-    def my_strategy_settings(self) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable(R.settings_payload(self))
+    def my_strategy_settings(self, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable(R.settings_payload(self, KD.get(kind)))
 
-    def my_strategy_save_settings(self, overrides: Mapping) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable(R.save_overrides(self, dict(overrides)))
+    def my_strategy_save_settings(self, overrides: Mapping, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable(R.save_overrides(self, dict(overrides), KD.get(kind)))
 
     def my_strategy_start_backtest(self, overrides: Mapping | None, start: Any = None, end: Any = None,
-                                   label: str = "") -> dict:
-        from edgelab.mystrategy import params as P, runner as R
-        ov = dict(overrides) if overrides is not None else R.load_overrides(self)
-        R.es_for(self, P.resolve(ov))                          # refuse bad settings / missing ES before a job starts
-        return R.jobs_of(self).start("backtest", lambda step: R.backtest(self, ov, start, end, label=label,
-                                                                         lock=self.lock, progress=step))
+                                   label: str = "", kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        K = KD.get(kind)
+        ov = dict(overrides) if overrides is not None else R.load_overrides(self, K)
+        K.inputs(self, K.P.resolve(ov))                        # refuse bad settings / missing ES before a job starts
+        return R.jobs_of(self, K).start("backtest", lambda step: R.backtest(self, ov, start, end, label=label,
+                                                                            lock=self.lock, progress=step, K=K))
 
-    def my_strategy_job(self, job_id: str) -> dict:
-        from edgelab.mystrategy import runner as R
-        return R.jobs_of(self).get(job_id)
+    def my_strategy_job(self, job_id: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return R.jobs_of(self, KD.get(kind)).get(job_id)
 
-    def my_strategy_backtest(self, bt_id: str) -> dict:
-        from edgelab.mystrategy import runner as R
-        out = R.get_backtest(self, bt_id)
+    def my_strategy_backtest(self, bt_id: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        out = R.get_backtest(self, bt_id, KD.get(kind))
         out["challenge"] = self._challenge_view(out.get("challenge"), self.my_challenge_fees())
-        out["criteria_profile"] = self.ui_preferences().get("prop_criteria_profile")
+        out["criteria_profile_now"] = self.ui_preferences().get("prop_criteria_profile")
+        out.setdefault("criteria_profile", out["criteria_profile_now"])
         return _jsonable(out)
 
-    def my_strategy_trade(self, bt_id: str, trade_no: int) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable(R.get_trade(self, bt_id, trade_no))
+    def my_strategy_trade(self, bt_id: str, trade_no: int, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable(R.get_trade(self, bt_id, trade_no, KD.get(kind)))
 
-    def my_strategy_review(self) -> dict:
-        from edgelab.mystrategy import review as RV
-        return _jsonable(RV.view(self, self.lock))
+    def my_strategy_review(self, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, review as RV
+        return _jsonable(RV.view(self, self.lock, KD.get(kind)))
 
-    def my_strategy_start_review(self, overrides: Mapping | None) -> dict:
-        from edgelab.mystrategy import review as RV, runner as R
+    def my_strategy_start_review(self, overrides: Mapping | None, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, review as RV, runner as R
+        if KD.get(kind).id != "my":
+            raise R.MyStrategyError("USE_HOLDOUT_ALLOWANCE", "Use the holdout allowance (Holdout review tab).")
         ov = dict(overrides) if overrides is not None else R.load_overrides(self)
         return R.jobs_of(self).start("holdout", lambda step: RV.start(self, ov, lock=self.lock, progress=step))
 
-    def my_holdout(self) -> dict:
+    def my_holdout(self, kind: str | None = None) -> dict:
         """ADR-102: the 2-look holdout allowance (automatic, then manual), the strategy picker and the review."""
-        from edgelab.mystrategy import review as RV
-        out = RV.allowance_view(self, self.lock)
+        from edgelab.mystrategy import kind as KD, review as RV, runner as R
+        K = KD.get(kind)
+        out = RV.allowance_view(self, self.lock, K)
         out["job"] = None
-        from edgelab.mystrategy import runner as R
-        j = R.jobs_of(self).active()
+        j = R.jobs_of(self, K).active()
         if j and j.get("kind") == "holdout_automatic":
             out["job"] = j
         return out
 
-    def my_holdout_start_automatic(self, ref: str) -> dict:
-        from edgelab.mystrategy import review as RV, runner as R
-        parent, _ = RV.holdout_protocol(self, self.lock, create=False)
-        s, _label = RV._resolve_ref(self, ref)                 # refused before a job starts (and before a look is spent)
-        R.es_for(self, s)
-        return R.jobs_of(self).start("holdout_automatic", lambda step: RV.start_automatic(self, ref, lock=self.lock,
-                                                                                          progress=step))
+    def my_holdout_start_automatic(self, ref: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, review as RV, runner as R
+        K = KD.get(kind)
+        parent, _ = RV.holdout_protocol(self, self.lock, create=False, K=K)
+        s, _label = RV._resolve_ref(self, ref, K)              # refused before a job starts (and before a look is spent)
+        K.inputs(self, s)
+        return R.jobs_of(self, K).start("holdout_automatic", lambda step: RV.start_automatic(
+            self, ref, lock=self.lock, progress=step, K=K))
 
-    def my_holdout_start_manual(self, n: int) -> dict:
-        from edgelab.mystrategy import review as RV
-        return _jsonable(RV.start_manual(self, int(n), lock=self.lock))
+    def my_holdout_start_manual(self, n: int, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, review as RV
+        return _jsonable(RV.start_manual(self, int(n), lock=self.lock, K=KD.get(kind)))
 
     # ------------------------------------------------------------------ Edge lab (ADR-104)
     def _edge_jobs(self):
@@ -3119,32 +3135,36 @@ class Services:
         chosen = {k: v for k, v in chosen.items() if v}
         return L.day_levels(lm, lo, hi, chosen)
 
-    def my_strategy_decide(self, signal_bar: int, take: bool) -> dict:
-        from edgelab.mystrategy import review as RV
-        return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock))
+    def my_strategy_decide(self, signal_bar: int, take: bool, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, review as RV
+        return _jsonable(RV.decide(self, int(signal_bar), bool(take), self.lock, KD.get(kind)))
 
-    def my_strategy_setup_reviews(self) -> dict:
+    def my_strategy_setup_reviews(self, kind: str | None = None) -> dict:
         """Setup reviews on the discovery period (ADR-96): list, the open one, the reason tags, the backtests to start from."""
-        from edgelab.mystrategy import runner as R, setup_review as SR
-        return _jsonable({"reviews": SR.list_reviews(self), "open": SR.in_progress(self), "reasons": SR.REASONS,
-                          "sample_size": SR.SAMPLE_SIZE,
-                          "backtests": [{k: v for k, v in b.items() if k != "challenge"} for b in R.list_backtests(self)]})
+        from edgelab.mystrategy import kind as KD, runner as R, setup_review as SR
+        K = KD.get(kind)
+        return _jsonable({"reviews": SR.list_reviews(self, K), "open": SR.in_progress(self, K),
+                          "reasons": SR.reasons_of(K), "sample_size": SR.SAMPLE_SIZE,
+                          "backtests": [{k: v for k, v in b.items() if k != "challenge"}
+                                        for b in R.list_backtests(self, K=K)]})
 
-    def my_strategy_start_setup_review(self, report_id: str, size: int | None = None) -> dict:
-        from edgelab.mystrategy import setup_review as SR
-        return _jsonable(SR.start(self, report_id, SR.SAMPLE_SIZE if size is None else int(size)))
+    def my_strategy_start_setup_review(self, report_id: str, size: int | None = None, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, setup_review as SR
+        return _jsonable(SR.start(self, report_id, SR.SAMPLE_SIZE if size is None else int(size), KD.get(kind)))
 
-    def my_strategy_setup_review(self, sr_id: str) -> dict:
-        from edgelab.mystrategy import setup_review as SR
-        return SR.view(self, sr_id, self.lock)
+    def my_strategy_setup_review(self, sr_id: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, setup_review as SR
+        return SR.view(self, sr_id, self.lock, KD.get(kind))
 
-    def my_strategy_setup_decide(self, sr_id: str, trade_no: int, take: bool, reasons: list, note: str = "") -> dict:
-        from edgelab.mystrategy import setup_review as SR
-        return _jsonable(SR.decide(self, sr_id, int(trade_no), bool(take), reasons, note))
+    def my_strategy_setup_decide(self, sr_id: str, trade_no: int, take: bool, reasons: list, note: str = "",
+                                 kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, setup_review as SR
+        return _jsonable(SR.decide(self, sr_id, int(trade_no), bool(take), reasons, note, KD.get(kind)))
 
-    def my_strategy_setup_undo(self, sr_id: str) -> dict:
-        from edgelab.mystrategy import setup_review as SR
-        return _jsonable(SR.undo(self, sr_id))
+    def my_strategy_setup_undo(self, sr_id: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, setup_review as SR
+        return _jsonable(SR.undo(self, sr_id, KD.get(kind)))
+
 
     # ------------------------------------------------------------------ Strategy autotuner (ADR-101)
     def my_challenge_fees(self) -> dict:
@@ -3168,9 +3188,9 @@ class Services:
                if only is None or pid == only}
         return {"profiles": out, "start": raw.get("start"), "names": {pid: names.get(pid, pid) for pid in out}}
 
-    def my_autotune_status(self) -> dict:
-        from edgelab.mystrategy import optimizer as O
-        out = O.status(self)
+    def my_autotune_status(self, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, optimizer as O
+        out = O.status(self, KD.get(kind))
         out["processes_default"] = self.research_processes()["processes"]
         crit = self.ui_preferences().get("prop_criteria_profile")
         fees = self.my_challenge_fees()
@@ -3178,62 +3198,66 @@ class Services:
             b["challenge"] = self._challenge_view(b.get("challenge"), fees, crit)
         return out
 
-    def my_autotune_run(self, run_id: str) -> dict:
-        from edgelab.mystrategy import optimizer as O
-        return O.run_detail(self, str(run_id))
+    def my_autotune_run(self, run_id: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, optimizer as O
+        return O.run_detail(self, str(run_id), KD.get(kind))
 
-    def my_autotune_start(self, start_id: str, processes: int | None = None, max_tries: int | None = None) -> dict:
-        from edgelab.mystrategy import optimizer as O, params as P
+    def my_autotune_start(self, start_id: str, processes: int | None = None, max_tries: int | None = None,
+                          kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, optimizer as O
+        K = KD.get(kind)
         n = self.research_processes()["processes"] if processes is None else int(processes)
         mt = O.DEFAULT_MAX_TRIES if max_tries is None else int(max_tries)
         if not 1 <= mt <= O.MAX_TRIES_LIMIT:
             raise ValueError(f"max_tries must be between 1 and {O.MAX_TRIES_LIMIT}")
         if n < 1:
             raise ValueError("processes must be at least 1")
-        O.ensure_protocol(self, self.lock)                     # refused before a run starts: protocol, start, fees
-        sm = O.start_summary(self, str(start_id))
-        P.resolve(sm.get("settings_changed") or {})
+        O.ensure_protocol(self, self.lock, K=K)                # refused before a run starts: protocol, start, fees
+        sm = O.start_summary(self, str(start_id), K)
+        K.P.resolve(sm.get("settings_changed") or {})
         O.run_context(self)
-        return O.run_of(self).start(self, str(start_id), n, mt, self.lock)
+        return O.run_of(self, K).start(self, str(start_id), n, mt, self.lock)
 
-    def my_autotune_stop(self) -> dict:
-        from edgelab.mystrategy import optimizer as O
-        return O.run_of(self).stop()
+    def my_autotune_stop(self, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, optimizer as O
+        return O.run_of(self, KD.get(kind)).stop()
 
-    def my_autotune_save(self, run_id: str, n: int) -> dict:
+    def my_autotune_save(self, run_id: str, n: int, kind: str | None = None) -> dict:
         """One best result of a run as a normal backtest with trade records and candles (not a new try)."""
-        from edgelab.mystrategy import optimizer as O, runner as R
-        rec = O.run_detail(self, str(run_id))
+        from edgelab.mystrategy import kind as KD, optimizer as O, runner as R
+        K = KD.get(kind)
+        rec = O.run_detail(self, str(run_id), K)
         if not 0 <= int(n) < len(rec["bests"]):
             raise R.MyStrategyError("NO_BEST", f"Run {run_id} has no best result #{n}.")
-        return R.jobs_of(self).start("autotune_save", lambda step: O.save_backtest(self, str(run_id), int(n), lock=self.lock,
-                                                                                   progress=step),
-                                     {"run_id": str(run_id), "best": int(n)})
+        return R.jobs_of(self, K).start("autotune_save", lambda step: O.save_backtest(
+            self, str(run_id), int(n), lock=self.lock, progress=step, K=K), {"run_id": str(run_id), "best": int(n)})
 
-    def my_strategy_set_meta(self, bt_id: str, favorite: Any = None, label: Any = None) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable(R.set_meta(self, str(bt_id), favorite=favorite, label=label))
+    def my_strategy_set_meta(self, bt_id: str, favorite: Any = None, label: Any = None, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable(R.set_meta(self, str(bt_id), favorite=favorite, label=label, K=KD.get(kind)))
 
-    def my_strategy_export(self, report_ids: list, include_candles: bool = False) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable(R.export(self, [str(x) for x in report_ids], include_candles))
+    def my_strategy_export(self, report_ids: list, include_candles: bool = False, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable(R.export(self, [str(x) for x in report_ids], include_candles, KD.get(kind)))
 
-    def my_strategy_open_exports(self) -> dict:
+    def my_strategy_open_exports(self, kind: str | None = None) -> dict:
         from edgelab.mystrategy import runner as R
         return R.open_export_folder()
 
-    def my_strategy_check_plan(self, plan: Mapping) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable({"name": plan.get("name"), "note": plan.get("note"), "variants": R.check_plan(dict(plan))})
+    def my_strategy_check_plan(self, plan: Mapping, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable({"name": plan.get("name"), "note": plan.get("note"),
+                          "variants": R.check_plan(dict(plan), KD.get(kind))})
 
-    def my_strategy_plan_result(self, pl_id: str) -> dict:
-        from edgelab.mystrategy import runner as R
-        return _jsonable(R.plan_result(self, pl_id))
+    def my_strategy_plan_result(self, pl_id: str, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        return _jsonable(R.plan_result(self, pl_id, KD.get(kind)))
 
-    def my_strategy_run_plan(self, plan: Mapping) -> dict:
-        from edgelab.mystrategy import runner as R
+    def my_strategy_run_plan(self, plan: Mapping, kind: str | None = None) -> dict:
+        from edgelab.mystrategy import kind as KD, runner as R
+        K = KD.get(kind)
         plan = dict(plan)
-        R.check_plan(plan)                                      # refused before a job starts
-        return R.jobs_of(self).start("plan", lambda step: R.run_plan(self, {**plan, "name": plan.get("name") or "plan"},
-                                                                     lock=self.lock, progress=step),
-                                     {"plan": plan.get("name")})
+        R.check_plan(plan, K)                                   # refused before a job starts
+        return R.jobs_of(self, K).start("plan", lambda step: R.run_plan(self, {**plan, "name": plan.get("name") or "plan"},
+                                                                        lock=self.lock, progress=step, K=K),
+                                        {"plan": plan.get("name")})

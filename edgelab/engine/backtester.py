@@ -181,6 +181,8 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
 
     sig = strategy.generate_signals(bars)
     validate_signals(sig, len(bars), order)
+    if sig.risk_usd is not None and sizing.get("mode") != "risk":
+        raise BacktestError("per-signal risk budgets (risk_usd) need 'risk' sizing")
 
     if costs.spread_source == "dataset" and bars.spread is None:
         raise BacktestError("cost model uses dataset spread, but this dataset has no spread column")
@@ -254,7 +256,10 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
         planned_entry = level if order.entry_type != "market" else A_ent.c[i]
         planned_risk = abs(planned_entry - stop_abs) if not math.isnan(stop_abs) else order.stop_points
         try:
-            sz = size_trade(sizing, planned_risk, inst, equity)
+            if sig.risk_usd is not None and not math.isnan(sig.risk_usd[i]):     # ADR-114 per-signal budget
+                sz = size_trade({**sizing, "risk_usd": float(sig.risk_usd[i])}, planned_risk, inst, equity)
+            else:
+                sz = size_trade(sizing, planned_risk, inst, equity)
         except ValueError as exc:
             if not contract_name:
                 raise
@@ -430,6 +435,9 @@ def run_backtest(ds: ValidatedDataset, strategy: Strategy, costs: CostModel, bt_
             "path_dependent": "sizes depend on earlier trades of THIS run (a different window or start changes them)"}
         if eq_from_ns is not None:                  # ADR-81 paper accounts only
             assumptions["equity_sizing"]["equity_from_ts"] = pd.Timestamp(eq_from_ns, tz="UTC").isoformat()
+    if sig.risk_usd is not None:
+        assumptions["per_signal_risk_usd"] = ("ADR-114: the strategy sets each signal's dollar risk budget at the signal "
+                                              "bar's close (NaN = the sizing's risk_usd); same rounding-down rule")
     if sig.max_trades_per_day or sig.exit_cooldown_bars or sig.block_after:
         assumptions["strategy_trade_management"] = {
             "max_trades_per_day": sig.max_trades_per_day, "exit_cooldown_bars": sig.exit_cooldown_bars,

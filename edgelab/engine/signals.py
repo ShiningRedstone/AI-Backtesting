@@ -127,6 +127,9 @@ class SignalSet:
     exit_cooldown_bars: int = 0                  # no new signal for N bars after a trade EXIT (signal bar - exit bar < N)
     block_after: str | None = None               # "stop" | "target" | "any": no further entry that trading date
     # after an exit of that class (stop: STOP/STOP_GAP/TRAIL_STOP*; target: TARGET/TARGET_GAP)
+    # ADR-114 (optional): a per-signal dollar risk budget for ``risk`` sizing (KNOWN AT THE SIGNAL BAR'S CLOSE); NaN =
+    # the sizing's own risk_usd. None = Phase 1 behaviour, unchanged.
+    risk_usd: np.ndarray | None = None
 
     @classmethod
     def empty(cls, n: int) -> "SignalSet":
@@ -190,6 +193,8 @@ def validate_signals(sig: SignalSet, n: int, order: OrderSpec) -> None:
             raise ValueError("ATR-based trailing needs the trail_atr array")
     elif sig.trail_arrays():
         raise ValueError("trail arrays without a TrailSpec")
+    if sig.risk_usd is not None and (len(sig.risk_usd) != n or sig.risk_usd.dtype.kind != "f"):
+        raise ValueError(f"risk_usd must be a float array of length {n}")
     if sig.block_after not in (None, "stop", "target", "any"):
         raise ValueError("block_after must be None, stop, target or any")
     if sig.exit_cooldown_bars < 0 or (sig.max_trades_per_day is not None and sig.max_trades_per_day < 1):
@@ -248,6 +253,16 @@ def check_causality(strategy: Strategy, bars: BarArrays, n_cuts: int = 20,
                 return CausalityReport(False, cuts, bad, k,
                                        f"'{name}' at bar {bad} changes when history is cut at {k}: "
                                        "the trailing rule uses information from after the decision bar")
+        if (full.risk_usd is None) != (part.risk_usd is None):
+            return CausalityReport(False, cuts, None, k, "risk_usd present/absent inconsistently")
+        if full.risk_usd is not None:
+            a, b = full.risk_usd[:k], part.risk_usd
+            same = (a == b) | (np.isnan(a) & np.isnan(b)) if len(b) == k else np.zeros(k, bool)
+            if not np.all(same):
+                bad = int(np.flatnonzero(~same)[0])
+                return CausalityReport(False, cuts, bad, k,
+                                       f"'risk_usd' at bar {bad} changes when history is cut at {k}: "
+                                       "the sizing uses information from after the decision bar")
         fx, px = full.exit_arrays(), part.exit_arrays()
         if set(fx) != set(px):
             return CausalityReport(False, cuts, None, k, "exit arrays present/absent inconsistently")

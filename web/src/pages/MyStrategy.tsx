@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, viewCache } from "../api/client";
-import { my } from "../api/my";
+
 import type { Candle, ChallengeSummary, Decision, EsStatus, ExportResult, Explanation, HoldoutAllowance, HoldoutSlot, MyJob, Overview, PlanResult, PlanVariant, Report, ReportRow, ReviewView,
   SettingDef, SettingsPayload, SetupReviews, SetupStats, SetupView, TradeDoc, TradeRow } from "../api/my";
 import { useApi, useApp } from "../app/context";
 import { go, href, useRoute } from "../app/router";
+import { useKind } from "./myKind";
 import { useMoney } from "../app/money";
 import { profileLabel } from "../app/labels";
 import { CandleChart, nyTime } from "../components/candles";
@@ -17,6 +18,9 @@ import { Markdown } from "../components/markdown";
 import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, Field, Kpi, NumberInput, PageSkeleton, Select,
   TableWrap, Tabs, TechDetails, TextInput, bytes, n, pct, r, signCls } from "../components/ui";
 import summaryText from "../content/my_strategy.md";
+import fairSummaryText from "../content/fair_price.md";
+import { FairExplain, FairTradeCharts, PHASE_WORD, SETUP_WORD } from "./fairExplain";
+import type { FairExplanation } from "./fairExplain";
 
 const TF_MIN: Record<string, number> = { "1m": 1, "2m": 2, "3m": 3, "4m": 4, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1D": 1440 };
 const sec = (iso: string | null | undefined) => (iso ? Math.floor(Date.parse(iso) / 1000) : NaN);
@@ -50,9 +54,10 @@ const STAT_LABEL: Record<string, string> = {
   signals_declined_in_review: "Declined in the holdout review", signals_flipped: "Flipped (traded the other way)",
   setup_rejected_no_smt: "No SMT divergence with ES", setup_rejected_smt_unknown: "SMT unknown (ES minutes missing)",
 };
-export const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step" : m ?? "–");
+export const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step" : m ? (SETUP_WORD[m] ?? m) : "–");
 
 export function useJob(onDone?: (j: MyJob) => void): [MyJob | null, (j: MyJob) => void] {
+  const { api: my } = useKind();
   const [job, setJob] = useState<MyJob | null>(null);
   useEffect(() => {
     if (!job || job.state !== "running") return;
@@ -82,22 +87,32 @@ export function PageHead({ title, children }: { title: string; children?: ReactN
 
 // =============================================================================================== overview
 export function MyOverviewPage() {
+  const { api: my, r: kr, label: kindLabel, id: kindId } = useKind();
   const { data, error } = useApi<Overview>(my.overviewUrl);
   const latest = data?.backtests?.[0];
   return (
     <div className="page" data-testid="my-overview-page">
-      <PageHead title="My strategy">
-        <a className="btn btn-secondary" href={href("/my-settings")}>Settings</a>
-        <a className="btn btn-primary" href={href("/my-backtest")}>Backtest</a>
+      <PageHead title={kindLabel}>
+        <a className="btn btn-secondary" href={href(kr("settings"))}>Settings</a>
+        <a className="btn btn-primary" href={href(kr("backtest"))}>Backtest</a>
       </PageHead>
       {error && <ErrorPanel error={error} />}
       {data && !data.protocol.ready && <Banner tone="warn">{data.protocol.problem}</Banner>}
       {data && <StatusKpis data={data} latest={latest} />}
-      <Card title="BP Blake's strategy: summary" testId="my-summary">
-        <Markdown text={summaryText} />
+      {kindId === "fair" && data?.news && <NewsLine news={data.news} />}
+      <Card title={kindId === "fair" ? "Fair price strategy: summary" : "BP Blake's strategy: summary"} testId="my-summary">
+        <Markdown text={kindId === "fair" ? fairSummaryText : summaryText} />
       </Card>
     </div>
   );
+}
+
+/** ADR-114: the news calendar Fair price reads for its 8:30 news days (downloaded in Market simulator -> Start here). */
+function NewsLine({ news }: { news: NonNullable<Overview["news"]> }) {
+  if (!news.downloaded || news.refused) return <Banner tone="warn" testId="fair-news">No usable news calendar: every day trades the normal
+    session-open rules (no 8:30 news reversions). Download it in Market simulator → Start here.</Banner>;
+  return <p className="muted small" data-testid="fair-news">News calendar: {news.high ?? 0} high-impact releases, {day(news.first)} – {day(news.last)}
+    {news.zone ? ` (time zone ${news.zone}, proven)` : ""}. Days outside it trade the normal session-open rules.</p>;
 }
 
 function StatusKpis({ data, latest }: { data: Overview; latest?: ReportRow }) {
@@ -119,6 +134,7 @@ function StatusKpis({ data, latest }: { data: Overview; latest?: ReportRow }) {
 // =============================================================================================== settings
 /** ES reference prices for SMT divergence (ADR-95): status, and import of the Dukascopy ES file (never a dataset). */
 function EsDataCard() {
+  const { api: my } = useKind();
   const { data, error, reload } = useApi<EsStatus>(my.esUrl);
   const { toast } = useApp();
   const [path, setPath] = useState(String.raw`C:\NQ_DATA\es_1min_5years.csv`);
@@ -160,6 +176,7 @@ function EsDataCard() {
 }
 
 export function MySettingsPage() {
+  const { api: my, id: kindId } = useKind();
   const { data, error, reload } = useApi<SettingsPayload>(my.settingsUrl);
   const { toast } = useApp();
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
@@ -197,7 +214,7 @@ export function MySettingsPage() {
         settings. {defs.length} settings in {data.schema.groups.length} groups.</p>
       {data.problems.length > 0 && <Banner tone="warn">The saved settings file has problems: {data.problems.join("; ")}</Banner>}
       <ErrorPanel error={err} />
-      <EsDataCard />
+      {kindId === "my" && <EsDataCard />}
       <div className="filterbar">
         <TextInput value={filter} onChange={setFilter} placeholder="Find a setting…" ariaLabel="Find a setting" />
         <Checkbox checked={onlyChanged} onChange={setOnlyChanged} label="Only changed from default" />
@@ -251,6 +268,7 @@ function SettingRow({ d, value, changed, onChange }: { d: SettingDef; value: unk
 
 // =============================================================================================== backtest
 export function MyBacktestPage() {
+  const { api: my, r: kr, label: kindLabel } = useKind();
   const route = useRoute();
   const { data, error, reload } = useApi<Overview>(my.overviewUrl);
   const selected = route.query.get("r") ?? data?.backtests?.[0]?.id ?? null;
@@ -261,7 +279,7 @@ export function MyBacktestPage() {
   const [job, setJob] = useJob((j) => {
     reload();
     const id = (j.result as { id?: string } | null)?.id;
-    if (j.state === "completed" && id) go(`/my-backtest?r=${id}`);
+    if (j.state === "completed" && id) go(`${kr("backtest")}?r=${id}`);
   });
   useEffect(() => { if (data?.job && !job) setJob(data.job); }, [data?.job]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async () => {
@@ -272,7 +290,7 @@ export function MyBacktestPage() {
   const running = job?.state === "running";
   return (
     <div className="page" data-testid="my-backtest-page">
-      <PageHead title="Backtest My strategy" />
+      <PageHead title={`Backtest ${kindLabel}`} />
       {error && <ErrorPanel error={error} />}
       {p && !p.ready && <Banner tone="warn">{p.problem}</Banner>}
       {p?.ready && p.config_ok === false && <Banner tone="error">The research settings differ from the protocol's. Restore them under
@@ -292,7 +310,7 @@ export function MyBacktestPage() {
         <JobLine job={job} />
         <ErrorPanel error={err} />
       </Card>
-      {data && <ReportList rows={data.backtests} selected={selected} onOpen={(id) => go(`/my-backtest?r=${id}`)} onChanged={reload} editable
+      {data && <ReportList rows={data.backtests} selected={selected} onOpen={(id) => go(`${kr("backtest")}?r=${id}`)} onChanged={reload} editable
         title="Backtests" testId="my-reports" />}
       {selected ? <ReportView id={selected} title={data?.backtests.find((b) => b.id === selected)?.label || undefined} />
         : data && <Empty>No backtest yet. Run the first one above.</Empty>}
@@ -304,6 +322,7 @@ export function MyBacktestPage() {
 const BLAKE = { win_rate: 0.7, rr: "1:1 to 1:3", tpw: "3–5 (1 a day)" };
 
 export function ReportView({ id, title }: { id: string; title?: string }) {
+  const { api: my, r: kr, id: kindId } = useKind();
   const { data, error } = useApi<Report>(my.reportUrl(id), [id]);
   const money = useMoney();
   const curve = useMemoCurve(data?.trades ?? []);
@@ -314,13 +333,13 @@ export function ReportView({ id, title }: { id: string; title?: string }) {
   return (
     <>
       <Card title={title ?? (data.label || (isHoldout ? "Holdout" : "Backtest"))} testId="my-report"
-        actions={<a className="btn btn-secondary btn-sm" href={href(`/my-trades/${data.id}`)}>All {data.trade_count} trades</a>}>
+        actions={<a className="btn btn-secondary btn-sm" href={href(`${kr("trades")}/${data.id}`)}>All {data.trade_count} trades</a>}>
         <div className="muted small">{day(data.window.start)} – {day(data.window.end)} · {isHoldout ? "Holdout" : "Discovery"}
           {" "}· created {nyTime(sec(data.created_at))}{data.causality_passed ? " · lookahead check passed" : ""}</div>
         <div className="kpis">
           <Kpi label="Trades" value={data.trade_count} sub={`${n(m.trades_per_week, 2)} per week · ${m.sample_label ?? ""}`} />
-          <Kpi label="Win rate" value={pct(m.win_rate)} sub={`Blake: ~${pct(BLAKE.win_rate, 0)}`} accent />
-          <Kpi label="Average winner" value={r(m.avg_winner_r, 2)} sub={`planned ${n(m.avg_planned_rr, 2)} R · Blake ${BLAKE.rr}`} />
+          <Kpi label="Win rate" value={pct(m.win_rate)} sub={kindId === "my" ? `Blake: ~${pct(BLAKE.win_rate, 0)}` : undefined} accent />
+          <Kpi label="Average winner" value={r(m.avg_winner_r, 2)} sub={`planned ${n(m.avg_planned_rr, 2)} R` + (kindId === "my" ? ` · Blake ${BLAKE.rr}` : "")} />
           <Kpi label="Expectancy" value={r(m.expectancy_r)} tone={signCls(m.expectancy_r)} sub="per trade, after costs" />
           <Kpi label="Net result" value={money.fmt(m.net_usd ?? null)} tone={signCls(m.net_usd)} sub={r(m.net_r, 1)} />
           <Kpi label="Losing months" value={`${m.months_losing ?? 0} of ${m.months_total ?? 0}`} tone={(m.months_losing ?? 0) > 0 ? "neg" : "pos"} />
@@ -329,6 +348,7 @@ export function ReportView({ id, title }: { id: string; title?: string }) {
         </div>
         {curve.length > 0 && <StepTimeChart points={curve} start={data.window.start} end={data.window.end} label="Cumulative net R" testId="my-curve" />}
       </Card>
+      {data.phases && <PhasesCard data={data} />}
       <ChallengeCard data={data} money={money.fmt} />
       <div className="grid-cards">
         <Card title="Months" testId="my-months">
@@ -351,7 +371,7 @@ export function ReportView({ id, title }: { id: string; title?: string }) {
         </Card>
         <Card title="Why setups did or did not trade" testId="my-rule-stats">
           <dl className="kv">{Object.entries(data.rule_stats).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
-            <div key={k} className="kv-row"><dt>{STAT_LABEL[k] ?? k}</dt><dd>{v}</dd></div>))}</dl>
+            <div key={k} className="kv-row"><dt>{STAT_LABEL[k] ?? k.replace(/_/g, " ")}</dt><dd>{v}</dd></div>))}</dl>
         </Card>
         <Card title="Settings of this backtest">
           {Object.keys(data.settings_changed).length === 0 ? <p className="muted">All defaults.</p> :
@@ -367,6 +387,32 @@ export function ReportView({ id, title }: { id: string; title?: string }) {
 }
 
 /** ADR-101: the prop challenge chain of a report: fail -> next challenge, pass -> funded payouts, every fee deducted. */
+/** ADR-114 (Fair price): the headline numbers are the trades the pass-criteria account's prop chain took (evaluation
+    rules while evaluating, funded rules once funded); each rule set traded on every day is shown here too. */
+function PhasesCard({ data }: { data: Report }) {
+  const money = useMoney();
+  const ph = data.phases!;
+  const traded = data.trades.reduce((a, t) => { a[t.phase ?? "eval"] = (a[t.phase ?? "eval"] ?? 0) + 1; return a; }, {} as Record<string, number>);
+  return (
+    <Card title="Evaluation and funded rules" testId="fair-phases">
+      <p className="muted small">The headline numbers above are the trades the prop challenge chain of{" "}
+        <b>{data.challenge?.names?.[data.criteria_profile ?? ""] ?? profileLabel(data.criteria_profile ?? "")}</b> actually took: {traded.eval ?? 0} with the evaluation rules (while an evaluation
+        was running) and {traded.funded ?? 0} with the funded rules (once an evaluation passed, from the next trading day). Below: each
+        rule set traded on every day of the window, on its own.</p>
+      <TableWrap><table className="dense">
+        <thead><tr><th>Rules</th><th className="num">Trades</th><th className="num">Win rate</th><th className="num">Expectancy</th>
+          <th className="num">Net R</th><th className="num">Net</th><th className="num">Profit factor</th><th className="num">Max drawdown</th>
+          <th className="num">Losing months</th></tr></thead>
+        <tbody>{(["eval", "funded"] as const).map((k) => { const p = ph[k]; if (!p) return null; const m = p.metrics; return (
+          <tr key={k} data-testid={`fair-phase-${k}`}><td>{PHASE_WORD[k]} rules, every day</td><td className="num">{p.trade_count}</td>
+            <td className="num">{pct(m.win_rate)}</td><td className={`num ${signCls(m.expectancy_r)}`}>{r(m.expectancy_r)}</td>
+            <td className={`num ${signCls(m.net_r)}`}>{r(m.net_r, 1)}</td><td className={`num ${signCls(m.net_usd)}`}>{money.fmt(m.net_usd ?? null)}</td>
+            <td className="num">{n(m.profit_factor, 2)}</td><td className="num">{n(m.max_drawdown_r, 1)} R</td>
+            <td className="num">{m.months_losing ?? 0} of {m.months_total ?? 0}</td></tr>); })}</tbody></table></TableWrap>
+    </Card>
+  );
+}
+
 export function ChainLine({ c, money }: { c: ChallengeSummary | { error: string }; money: (v: number | null) => string }) {
   if ("error" in c && c.error) return <span className="muted small">{c.error}</span>;
   const x = c as ChallengeSummary;
@@ -439,6 +485,7 @@ function ReportList({ rows: allRows, selected, onOpen, title, testId, onChanged,
   rows: ReportRow[]; selected?: string | null; onOpen: (id: string) => void; title: string; testId?: string; onChanged?: () => void;
   editable?: boolean;
 }) {
+  const { api: my } = useKind();
   const { toast } = useApp();
   const money = useMoney();
   const [favOnly, setFavOnly] = useState(false);
@@ -530,13 +577,14 @@ function ReportList({ rows: allRows, selected, onOpen, title, testId, onChanged,
 }
 
 function PlansCard({ data, onChange }: { data: Overview; onChange: () => void }) {
+  const { api: my, r: kr } = useKind();
   const [text, setText] = useState("");
   const [plan, setPlan] = useState<{ raw: unknown; name?: string; note?: string; variants: PlanVariant[] } | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
   const [job, setJob] = useJob((j) => {
     onChange();
     const id = (j.result as { id?: string } | null)?.id;
-    if (j.state === "completed" && id) go(`/my-plan/${id}`);
+    if (j.state === "completed" && id) go(`${kr("plan")}/${id}`);
   });
   const check = async () => {
     setErr(null); setPlan(null);
@@ -571,7 +619,7 @@ function PlansCard({ data, onChange }: { data: Overview; onChange: () => void })
       <ErrorPanel error={err} />
       {data.plans.length > 0 && (
         <TableWrap><table className="dense"><thead><tr><th>Saved</th><th>Plan</th><th>When</th><th className="num">Variations</th></tr></thead>
-          <tbody>{data.plans.map((p) => <tr key={p.id} onClick={() => go(`/my-plan/${p.id}`)} style={{ cursor: "pointer" }}>
+          <tbody>{data.plans.map((p) => <tr key={p.id} onClick={() => go(`${kr("plan")}/${p.id}`)} style={{ cursor: "pointer" }}>
             <td>{p.exported ? <span className="my-saved-check">✓</span> : ""}</td><td>{p.name}</td><td>{nyTime(sec(p.created_at))}</td>
             <td className="num">{p.variants}</td></tr>)}</tbody>
         </table></TableWrap>)}
@@ -580,6 +628,7 @@ function PlansCard({ data, onChange }: { data: Overview; onChange: () => void })
 }
 
 export function MyPlanResultPage() {
+  const { api: my, r: kr } = useKind();
   const route = useRoute();
   const id = route.parts[1];
   const { data, error } = useApi<PlanResult>(id ? my.planResultUrl(id) : null, [id]);
@@ -587,12 +636,12 @@ export function MyPlanResultPage() {
     <div className="page" data-testid="my-plan-page">
       <PageHead title={data ? `Test plan: ${data.name}` : "Test plan"}>
         {data && <SaveOne id={data.id} done={!!data.exported} />}
-        <a className="btn btn-secondary" href={href("/my-backtest")}>Back</a></PageHead>
+        <a className="btn btn-secondary" href={href(kr("backtest"))}>Back</a></PageHead>
       {error && <ErrorPanel error={error} />}
       {data && <Card title="Variations">
         <TableWrap><table className="dense"><thead><tr><th>Variation</th><th className="num">Trades</th><th className="num">Per week</th>
           <th className="num">Win rate</th><th className="num">Expectancy R</th><th className="num">Net R</th><th className="num">Losing months</th><th>Prop</th></tr></thead>
-          <tbody>{data.variants.map((v, k) => <tr key={k} onClick={() => v.backtest_id && go(`/my-backtest?r=${v.backtest_id}`)} style={{ cursor: "pointer" }}>
+          <tbody>{data.variants.map((v, k) => <tr key={k} onClick={() => v.backtest_id && go(`${kr("backtest")}?r=${v.backtest_id}`)} style={{ cursor: "pointer" }}>
             <td>{v.label}{v.error && <span className="neg"> {v.error.message}</span>}</td><td className="num">{v.trade_count ?? "–"}</td>
             <td className="num">{n(v.metrics?.trades_per_week, 2)}</td><td className="num">{pct(v.metrics?.win_rate)}</td>
             <td className={`num ${signCls(v.metrics?.expectancy_r)}`}>{r(v.metrics?.expectancy_r)}</td>
@@ -605,6 +654,7 @@ export function MyPlanResultPage() {
 }
 
 export function SaveOne({ id, done }: { id: string; done: boolean }) {
+  const { api: my } = useKind();
   const { toast } = useApp();
   const [res, setRes] = useState<ExportResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -624,6 +674,7 @@ export function MyTradesPage() {
 }
 
 function MyReportsPage() {
+  const { api: my, r: kr } = useKind();
   const { data, error } = useApi<Overview>(my.overviewUrl);
   return (
     <div className="page" data-testid="my-reports-page">
@@ -631,12 +682,14 @@ function MyReportsPage() {
       <p className="muted">Pick a backtest to see all its trades. Holdout results appear here once the holdout review is finished.</p>
       {error && <ErrorPanel error={error} />}
       {!data ? <PageSkeleton layout="table" label="Loading backtests" /> :
-        <ReportList rows={data.reports} onOpen={(id) => go(`/my-trades/${id}`)} title="All backtests" testId="my-all-reports" />}
+        <ReportList rows={data.reports} onOpen={(id) => go(`${kr("trades")}/${id}`)} title="All backtests" testId="my-all-reports" />}
     </div>
   );
 }
 
 function MyTradeListPage({ id }: { id: string }) {
+  const { api: my, r: kr, id: kindId } = useKind();
+  const fair = kindId === "fair";
   const { data, error } = useApi<Report>(my.reportUrl(id), [id]);
   const money = useMoney();
   const [side, setSide] = useState<"all" | "win" | "loss">("all");
@@ -644,7 +697,7 @@ function MyTradeListPage({ id }: { id: string }) {
   return (
     <div className="page" data-testid="my-trades-page">
       <PageHead title={data ? `Trades: ${data.label || (data.kind.startsWith("holdout") ? "Holdout" : "Backtest")}` : "Trades"}>
-        <a className="btn btn-secondary" href={href("/my-trades")}>All backtests</a>
+        <a className="btn btn-secondary" href={href(kr("trades"))}>All backtests</a>
         <div className="segmented small" role="group">
           {(["all", "win", "loss"] as const).map((k) => <button key={k} className={side === k ? "on" : ""} onClick={() => setSide(k)}>
             {k === "all" ? "All" : k === "win" ? "Winners" : "Losers / breakeven"}</button>)}
@@ -655,22 +708,25 @@ function MyTradeListPage({ id }: { id: string }) {
         <Card title={`${rows.length} trades · ${day(data.window.start)} – ${day(data.window.end)}`}>
           <p className="muted small">Click a trade for its charts, levels and checklist.</p>
           <TableWrap><table className="dense" data-testid="my-trades-table">
-            <thead><tr><th className="num">#</th><th>Entry (New York)</th><th>Side</th><th>Model</th><th>Confirmation</th>
+            <thead><tr><th className="num">#</th><th>Entry (New York)</th><th>Side</th>{fair ? <><th>Rules</th><th>Session</th><th>Setup</th></>
+              : <><th>Model</th><th>Confirmation</th></>}
               <th className="num">Entry</th><th className="num">Stop</th><th className="num">Target</th><th className="num">Planned R</th>
-              <th>Exit</th><th className="num">Result R</th><th className="num">Result</th><th className="num">Score</th></tr></thead>
+              <th>Exit</th><th className="num">Result R</th><th className="num">Result</th>{!fair && <th className="num">Score</th>}</tr></thead>
             <tbody>{rows.map((t) => (
-              <tr key={t.trade_no} onClick={() => go(`/my-trades/${data.id}/${t.trade_no}`)} style={{ cursor: "pointer" }}>
-                <td className="num">{t.trade_no}</td><td>{nyTime(sec(t.entry_ts))}</td><td>{dirWord(t.direction)}</td><td>{MODEL(t.model)}</td>
-                <td>{t.confirmation_tf ?? "–"}</td><td className="num">{px(t.entry_price_theo)}</td><td className="num">{px(t.stop_price)}</td>
+              <tr key={t.trade_no} onClick={() => go(`${kr("trades")}/${data.id}/${t.trade_no}`)} style={{ cursor: "pointer" }}>
+                <td className="num">{t.trade_no}</td><td>{nyTime(sec(t.entry_ts))}</td><td>{dirWord(t.direction)}</td>
+                {fair ? <><td>{PHASE_WORD[t.phase ?? ""] ?? "–"}</td><td>{t.session ?? "–"}</td><td>{MODEL(t.model)}</td></>
+                  : <><td>{MODEL(t.model)}</td><td>{t.confirmation_tf ?? "–"}</td></>}<td className="num">{px(t.entry_price_theo)}</td><td className="num">{px(t.stop_price)}</td>
                 <td className="num">{px(t.target_price)}</td><td className="num">{n(t.r_planned, 2)}</td><td>{exitWord(t.exit_reason)}</td>
                 <td className={`num ${signCls(t.net_r)}`}>{r(t.net_r, 2)}</td><td className={`num ${signCls(t.net_usd)}`}>{money.fmt(t.net_usd)}</td>
-                <td className="num">{t.quality ?? "–"}</td></tr>))}</tbody></table></TableWrap>
+                {!fair && <td className="num">{t.quality ?? "–"}</td>}</tr>))}</tbody></table></TableWrap>
         </Card>)}
     </div>
   );
 }
 
 export function MyTradePage() {
+  const { api: my, r: kr } = useKind();
   const route = useRoute();
   const id = route.parts[1], no = Number(route.parts[2]);
   const { data, error } = useApi<TradeDoc>(id && no ? my.tradeUrl(id, no) : null, [id, no]);
@@ -678,9 +734,9 @@ export function MyTradePage() {
   return (
     <div className="page" data-testid="my-trade-page">
       <PageHead title={data ? `Trade ${data.trade_no}: ${dirWord(data.direction)} ${nyTime(sec(data.entry_ts))}` : "Trade"}>
-        <a className="btn btn-secondary" href={href(`/my-trades/${id}`)}>All trades</a>
-        <Button disabled={!data || no <= 1} onClick={() => go(`/my-trades/${id}/${no - 1}`)}>Previous</Button>
-        <Button disabled={!data || no >= (data?.count ?? 0)} onClick={() => go(`/my-trades/${id}/${no + 1}`)}>Next</Button>
+        <a className="btn btn-secondary" href={href(`${kr("trades")}/${id}`)}>All trades</a>
+        <Button disabled={!data || no <= 1} onClick={() => go(`${kr("trades")}/${id}/${no - 1}`)}>Previous</Button>
+        <Button disabled={!data || no >= (data?.count ?? 0)} onClick={() => go(`${kr("trades")}/${id}/${no + 1}`)}>Next</Button>
       </PageHead>
       {error && <ErrorPanel error={error} />}
       {!data ? <PageSkeleton layout="overview" label="Loading the trade" /> : (
@@ -689,7 +745,8 @@ export function MyTradePage() {
             <Kpi label="Result" value={r(data.net_r, 2)} tone={signCls(data.net_r)} sub={money.fmt(data.net_usd)} accent />
             <Kpi label="Exit" value={exitWord(data.exit_reason)} sub={nyTime(sec(data.exit_ts))} />
             <Kpi label="Entry / stop / target" value={px(data.entry_price_theo)} sub={`${px(data.stop_price)} / ${px(data.target_price)}`} />
-            <Kpi label="Model" value={MODEL(data.explanation?.model)} sub={`${data.contracts} MNQ · risk ${n(data.risk_points, 1)} pts`} />
+            <Kpi label={data.phase ? "Setup" : "Model"} value={MODEL(data.explanation?.model)}
+              sub={`${data.phase ? `${PHASE_WORD[data.phase]} rules · ` : ""}${data.contracts} MNQ · risk ${n(data.risk_points, 1)} pts`} />
           </div>
           <TradeCharts doc={data} />
           <TradeExplain e={data.explanation} />
@@ -732,7 +789,9 @@ export function explainText(e: Explanation): string[] {
 }
 
 function TradeExplain({ e }: { e: Explanation }) {
+  const { id } = useKind();
   if (!e) return null;
+  if (id === "fair") return <FairExplain e={e as unknown as FairExplanation} />;
   return (
     <div className="grid-cards">
       <Card title="Why it entered" testId="my-explain">
@@ -751,7 +810,13 @@ function TradeExplain({ e }: { e: Explanation }) {
 
 /** Charts of every timeframe a trade used, with entry / stop / target and the levels. ``until`` = holdout review before the
     decision: the candles stop at the signal and nothing after it is drawn. */
-export function TradeCharts({ doc, until }: { doc: { explanation: Explanation; charts: string[]; candles: Record<string, Candle[]>;
+/** The trade chart of the strategy the page shows (ADR-114: Fair price has its own). */
+export function TradeCharts(props: Parameters<typeof BpTradeCharts>[0]) {
+  const { id } = useKind();
+  return id === "fair" ? <FairTradeCharts {...(props as unknown as Parameters<typeof FairTradeCharts>[0])} /> : <BpTradeCharts {...props} />;
+}
+
+function BpTradeCharts({ doc, until }: { doc: { explanation: Explanation; charts: string[]; candles: Record<string, Candle[]>;
   entry_ts?: string; exit_ts?: string; exit_price_theo?: number; final_stop_price?: number; stop_price?: number; target_price?: number;
   entry_price_theo?: number; direction?: number }; until?: boolean }) {
   const e = doc.explanation;
@@ -812,6 +877,7 @@ export function TradeCharts({ doc, until }: { doc: { explanation: Explanation; c
 
 // =============================================================================================== holdout review
 export function MyHoldoutPage() {
+  const { api: my } = useKind();
   const { data, error, reload } = useApi<HoldoutAllowance>(my.holdoutUrl);
   const [confirm, setConfirm] = useState<null | { kind: "automatic" } | { kind: "manual"; n: number }>(null);
   const [typed, setTyped] = useState("");
@@ -986,6 +1052,7 @@ export function MySetupReviewPage() {
 }
 
 function SetupReviewStart() {
+  const { api: my, r: kr } = useKind();
   const { data, error } = useApi<SetupReviews>(my.setupReviewsUrl);
   const [base, setBase] = useState<string | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
@@ -995,7 +1062,7 @@ function SetupReviewStart() {
   const start = async () => {
     if (!pick) return;
     setBusy(true); setErr(null);
-    try { const st = await my.startSetupReview(pick); viewCache.clear(); go(`/my-setup/${st.id}`); }
+    try { const st = await my.startSetupReview(pick); viewCache.clear(); go(`${kr("setup")}/${st.id}`); }
     catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
   };
   return (
@@ -1003,7 +1070,7 @@ function SetupReviewStart() {
       <PageHead title="Setup review" />
       {error && <ErrorPanel error={error} />}
       {data?.open && <Banner tone="info">A setup review is in progress ({data.open.decided} of {data.open.size} decided).{" "}
-        <a href={href(`/my-setup/${data.open.id}`)} data-testid="my-setup-continue">Continue it</a></Banner>}
+        <a href={href(`${kr("setup")}/${data.open.id}`)} data-testid="my-setup-continue">Continue it</a></Banner>}
       {data && !data.open && (
         <Card title="Judge the strategy's setups yourself" testId="my-setup-new">
           <p>You see {data.sample_size} setups, picked at random from a discovery backtest (always the same ones for the same backtest).
@@ -1028,7 +1095,7 @@ function SetupReviewStart() {
           <TableWrap><table className="dense"><thead><tr><th title="Saved for Claude">Saved</th><th>Started</th><th>Backtest</th>
             <th className="num">Decided</th><th>Status</th><th /></tr></thead>
             <tbody>{data.reviews.map((v) => (
-              <tr key={v.id} onClick={() => go(`/my-setup/${v.id}`)} style={{ cursor: "pointer" }}>
+              <tr key={v.id} onClick={() => go(`${kr("setup")}/${v.id}`)} style={{ cursor: "pointer" }}>
                 <td>{v.exported ? <span className="my-saved-check" title={`Saved · ${v.exported.file}`}>✓</span> : ""}</td>
                 <td>{nyTime(sec(v.created_at))}</td><td>{v.base_label || v.base_report}</td>
                 <td className="num">{v.decided} / {v.size}</td>
@@ -1042,6 +1109,7 @@ function SetupReviewStart() {
 }
 
 function SetupReviewRun({ id }: { id: string }) {
+  const { api: my, r: kr } = useKind();
   const { data, error, reload } = useApi<SetupView>(my.setupReviewUrl(id), [id]);
   const [skipping, setSkipping] = useState(false);
   const [reasons, setReasons] = useState<Set<string>>(new Set());
@@ -1067,7 +1135,7 @@ function SetupReviewRun({ id }: { id: string }) {
     <div className="page" data-testid="my-setup-page">
       <PageHead title="Setup review">
         {rv?.status === "complete" && <SaveOne id={id} done={!!rv.exported} />}
-        <a className="btn btn-secondary" href={href("/my-setup")}>All setup reviews</a>
+        <a className="btn btn-secondary" href={href(kr("setup"))}>All setup reviews</a>
       </PageHead>
       {error && <ErrorPanel error={error} />}
       <ErrorPanel error={err} />
@@ -1108,6 +1176,7 @@ function SetupReviewRun({ id }: { id: string }) {
 }
 
 function SetupResults({ data }: { data: SetupView }) {
+  const { r: kr } = useKind();
   const res = data.results!;
   const rv = data.review;
   const [side, setSide] = useState<"all" | "take" | "skip">("all");
@@ -1141,7 +1210,7 @@ function SetupResults({ data }: { data: SetupView }) {
         <TableWrap className="my-setup-scroll"><table className="dense"><thead><tr><th className="num">#</th><th>Entry (New York)</th><th>Side</th>
           <th>Model</th><th>You</th><th>Why</th><th className="num">Score</th><th>Exit</th><th className="num">Result R</th></tr></thead>
           <tbody>{rows.map((x) => (
-            <tr key={x.trade_no} onClick={() => go(`/my-trades/${rv.base_report}/${x.trade_no}`)} style={{ cursor: "pointer" }}>
+            <tr key={x.trade_no} onClick={() => go(`${kr("trades")}/${rv.base_report}/${x.trade_no}`)} style={{ cursor: "pointer" }}>
               <td className="num">{x.trade_no}</td><td>{nyTime(sec(x.entry_ts))}</td><td>{dirWord(x.direction)}</td><td>{MODEL(x.model)}</td>
               <td>{x.take ? <Badge tone="ok">Took</Badge> : <Badge>Skipped</Badge>}</td>
               <td>{x.reasons.map((k) => data.reasons[k] ?? k).join(", ")}{x.note ? ` · ${x.note}` : ""}</td>

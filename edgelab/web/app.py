@@ -1128,21 +1128,25 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         The protocol record itself is never edited."""
         return jsonify(call(svc.restore_protocol_config, _id(pid, PROTOCOL_ID, "protocol id"), body().get("confirm")))
 
-    # ------------------------------------------------------------------ My strategy (ADR-93)
+    # ------------------------------------------------------------------ My strategy (ADR-93) / Fair price (ADR-114)
+    def _kind():
+        """The strategy kind of a My strategy route: /api/fair/* = Fair price, /api/my/* = My strategy (BP Blake)."""
+        return "fair" if request.path.startswith("/api/fair") else None
+
     @app.get("/api/my")
     def my_overview():
-        return jsonify(call(svc.my_strategy_overview))
+        return jsonify(call(svc.my_strategy_overview, kind=_kind()))
 
     @app.get("/api/my/settings")
     def my_settings():
-        return jsonify(call(svc.my_strategy_settings))
+        return jsonify(call(svc.my_strategy_settings, kind=_kind()))
 
     @app.post("/api/my/settings")
     def my_settings_save():
         ov = body().get("overrides")
         if not isinstance(ov, dict):
             raise _bad("overrides must be an object")
-        return jsonify(call(svc.my_strategy_save_settings, ov))
+        return jsonify(call(svc.my_strategy_save_settings, ov, kind=_kind()))
 
     def _my_window(b: dict):
         out = []
@@ -1161,11 +1165,11 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("overrides must be an object")
         start, end = _my_window(b)
         label = str(b.get("label") or "")[:80]
-        return jsonify(call(svc.my_strategy_start_backtest, ov, start, end, label)), 202
+        return jsonify(call(svc.my_strategy_start_backtest, ov, start, end, label, kind=_kind())), 202
 
     @app.get("/api/my/es")
     def my_es():
-        return jsonify(call(svc.my_strategy_es))
+        return jsonify(call(svc.my_strategy_es, kind=_kind()))
 
     @app.post("/api/my/es/import")
     def my_es_import():
@@ -1173,30 +1177,30 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         path = b.get("path")
         if not isinstance(path, str) or len(path) > 1000:
             raise _bad("path must be a string")
-        return jsonify(call(svc.my_strategy_import_es, path, b.get("identity_confirmed") is True)), 202
+        return jsonify(call(svc.my_strategy_import_es, path, b.get("identity_confirmed") is True, kind=_kind())), 202
 
     @app.get("/api/my/jobs/<jid>")
     def my_job(jid):
-        return jsonify(svc.my_strategy_job(_id(jid, MY_JOB_ID, "job id")))
+        return jsonify(svc.my_strategy_job(_id(jid, MY_JOB_ID, "job id"), kind=_kind()))
 
     @app.get("/api/my/reports/<rid>")
     def my_report(rid):
-        return jsonify(call(svc.my_strategy_backtest, _id(rid, MY_REPORT_ID, "report id")))
+        return jsonify(call(svc.my_strategy_backtest, _id(rid, MY_REPORT_ID, "report id"), kind=_kind()))
 
     @app.get("/api/my/reports/<rid>/trades/<int:n>")
     def my_trade(rid, n):
-        return jsonify(call(svc.my_strategy_trade, _id(rid, MY_REPORT_ID, "report id"), n))
+        return jsonify(call(svc.my_strategy_trade, _id(rid, MY_REPORT_ID, "report id"), n, kind=_kind()))
 
     @app.get("/api/my/review")
     def my_review():
-        return jsonify(call(svc.my_strategy_review))
+        return jsonify(call(svc.my_strategy_review, kind=_kind()))
 
     @app.post("/api/my/review")
     def my_review_start():
         ov = body().get("overrides")
         if ov is not None and not isinstance(ov, dict):
             raise _bad("overrides must be an object")
-        return jsonify(call(svc.my_strategy_start_review, ov)), 202
+        return jsonify(call(svc.my_strategy_start_review, ov, kind=_kind())), 202
 
     @app.get("/api/edge")                              # ADR-104: Edge lab
     def edge_status():
@@ -1378,21 +1382,21 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
 
     @app.get("/api/my/holdout")                        # ADR-102: automatic + manual holdout of one strategy
     def my_holdout():
-        return jsonify(call(svc.my_holdout))
+        return jsonify(call(svc.my_holdout, kind=_kind()))
 
     @app.post("/api/my/holdout/automatic")
     def my_holdout_automatic():
         ref = body().get("ref")
         if not isinstance(ref, str) or not re.fullmatch(r"bt:BT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}|opt:OPT_[0-9]{8}_[0-9]{6}_[0-9a-f]{4}:[0-9]{1,4}", ref):
             raise _bad("ref must name one of your backtests or an autotuner result")
-        return jsonify(call(svc.my_holdout_start_automatic, ref)), 202
+        return jsonify(call(svc.my_holdout_start_automatic, ref, kind=_kind())), 202
 
     @app.post("/api/my/holdout/manual")
     def my_holdout_manual():
         n = body().get("strategy")
         if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 2:
             raise _bad("strategy must be 1 or 2")
-        return jsonify(call(svc.my_holdout_start_manual, n))
+        return jsonify(call(svc.my_holdout_start_manual, n, kind=_kind()))
 
     @app.post("/api/my/review/decide")
     def my_review_decide():
@@ -1400,7 +1404,7 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         sb, take = b.get("signal_bar"), b.get("take")
         if not isinstance(sb, int) or isinstance(sb, bool) or not isinstance(take, bool):
             raise _bad("signal_bar (integer) and take (true/false) are required")
-        return jsonify(svc.my_strategy_decide(sb, take))       # computes outside the service lock
+        return jsonify(svc.my_strategy_decide(sb, take, kind=_kind()))       # computes outside the service lock
 
     @app.post("/api/my/export")
     def my_export():
@@ -1409,11 +1413,11 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if not isinstance(ids, list) or not ids or len(ids) > 200:
             raise _bad("report_ids must be a non-empty list")
         ids = [_id(x, MY_EXPORT_ID, "report id") for x in ids]
-        return jsonify(call(svc.my_strategy_export, ids, bool(b.get("include_candles", False))))
+        return jsonify(call(svc.my_strategy_export, ids, bool(b.get("include_candles", False)), kind=_kind()))
 
     @app.get("/api/my/setup-reviews")
     def my_setup_reviews():
-        return jsonify(call(svc.my_strategy_setup_reviews))
+        return jsonify(call(svc.my_strategy_setup_reviews, kind=_kind()))
 
     @app.post("/api/my/setup-reviews")
     def my_setup_review_start():
@@ -1421,11 +1425,11 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         size = b.get("size")
         if size is not None and (not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 2000):
             raise _bad("size must be an integer between 1 and 2000")
-        return jsonify(call(svc.my_strategy_start_setup_review, _id(b.get("report_id"), MY_REPORT_ID, "report id"), size))
+        return jsonify(call(svc.my_strategy_start_setup_review, _id(b.get("report_id"), MY_REPORT_ID, "report id"), size, kind=_kind()))
 
     @app.get("/api/my/setup-reviews/<sid>")
     def my_setup_review(sid):
-        return jsonify(call(svc.my_strategy_setup_review, _id(sid, MY_SETUP_ID, "setup review id")))
+        return jsonify(call(svc.my_strategy_setup_review, _id(sid, MY_SETUP_ID, "setup review id"), kind=_kind()))
 
     @app.post("/api/my/setup-reviews/<sid>/decide")
     def my_setup_decide(sid):
@@ -1438,19 +1442,19 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if not isinstance(note, str):
             raise _bad("note must be a string")
         return jsonify(call(svc.my_strategy_setup_decide, _id(sid, MY_SETUP_ID, "setup review id"), n, take, reasons,
-                            note))
+                            note, kind=_kind()))
 
     @app.post("/api/my/setup-reviews/<sid>/undo")
     def my_setup_undo(sid):
-        return jsonify(call(svc.my_strategy_setup_undo, _id(sid, MY_SETUP_ID, "setup review id")))
+        return jsonify(call(svc.my_strategy_setup_undo, _id(sid, MY_SETUP_ID, "setup review id"), kind=_kind()))
 
     @app.get("/api/my/autotune")                       # ADR-101: Strategy autotuner (step-by-step optimiser)
     def my_autotune():
-        return jsonify(call(svc.my_autotune_status))
+        return jsonify(call(svc.my_autotune_status, kind=_kind()))
 
     @app.get("/api/my/autotune/runs/<rid>")
     def my_autotune_run(rid):
-        return jsonify(call(svc.my_autotune_run, _id(rid, MY_OPT_ID, "autotuner run id")))
+        return jsonify(call(svc.my_autotune_run, _id(rid, MY_OPT_ID, "autotuner run id"), kind=_kind()))
 
     @app.post("/api/my/autotune/start")
     def my_autotune_start():
@@ -1461,15 +1465,15 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if mt is not None and (not isinstance(mt, int) or isinstance(mt, bool) or not 1 <= mt <= 5000):
             raise _bad("max_tries must be an integer between 1 and 5000")
         start = _id(b.get("start_id"), MY_BT_ID, "backtest id")
-        return jsonify(call(svc.my_autotune_start, start, p, mt)), 202
+        return jsonify(call(svc.my_autotune_start, start, p, mt, kind=_kind())), 202
 
     @app.post("/api/my/autotune/stop")
     def my_autotune_stop():
-        return jsonify(call(svc.my_autotune_stop))
+        return jsonify(call(svc.my_autotune_stop, kind=_kind()))
 
     @app.post("/api/my/autotune/runs/<rid>/bests/<int:n>/save")
     def my_autotune_save(rid, n):
-        return jsonify(call(svc.my_autotune_save, _id(rid, MY_OPT_ID, "autotuner run id"), n)), 202
+        return jsonify(call(svc.my_autotune_save, _id(rid, MY_OPT_ID, "autotuner run id"), n, kind=_kind())), 202
 
     @app.post("/api/my/reports/<rid>/meta")            # ADR-101: favourite / rename a backtest
     def my_report_meta(rid):
@@ -1481,29 +1485,38 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
             raise _bad("label must be text of at most 160 characters")
         if fav is None and label is None:
             raise _bad("nothing to change")
-        return jsonify(call(svc.my_strategy_set_meta, _id(rid, MY_REPORT_ID, "report id"), fav, label))
+        return jsonify(call(svc.my_strategy_set_meta, _id(rid, MY_REPORT_ID, "report id"), fav, label, kind=_kind()))
 
     @app.post("/api/my/exports/open")
     def my_open_exports():
-        return jsonify(svc.my_strategy_open_exports())
+        return jsonify(svc.my_strategy_open_exports(kind=_kind()))
 
     @app.post("/api/my/plans/check")
     def my_plan_check():
         plan = body().get("plan")
         if not isinstance(plan, dict):
             raise _bad("plan must be an object")
-        return jsonify(svc.my_strategy_check_plan(plan))
+        return jsonify(svc.my_strategy_check_plan(plan, kind=_kind()))
 
     @app.post("/api/my/plans/run")
     def my_plan_run():
         plan = body().get("plan")
         if not isinstance(plan, dict):
             raise _bad("plan must be an object")
-        return jsonify(call(svc.my_strategy_run_plan, plan)), 202
+        return jsonify(call(svc.my_strategy_run_plan, plan, kind=_kind())), 202
 
     @app.get("/api/my/plan-results/<pid>")
     def my_plan_result(pid):
-        return jsonify(svc.my_strategy_plan_result(_id(pid, MY_REPORT_ID, "plan result id")))
+        return jsonify(svc.my_strategy_plan_result(_id(pid, MY_REPORT_ID, "plan result id"), kind=_kind()))
+
+    # ADR-114: Fair price = the same routes under /api/fair (the view reads its kind from the path). The ES data for SMT
+    # belongs to My strategy only.
+    for rule in [r for r in app.url_map.iter_rules() if r.rule == "/api/my" or r.rule.startswith("/api/my/")]:
+        if rule.rule.startswith("/api/my/es"):
+            continue
+        app.add_url_rule("/api/fair" + rule.rule[len("/api/my"):], endpoint="fair__" + rule.endpoint,
+                         view_func=app.view_functions[rule.endpoint],
+                         methods=sorted(m for m in rule.methods if m not in ("HEAD", "OPTIONS")))
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")
