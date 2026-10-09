@@ -2880,6 +2880,56 @@ class Services:
         from edgelab.charts import store as CS
         return CS.save_layout(self.data_root, obj)
 
+    # ============================================================ SIMULATED LUCID ACCOUNTS (ADR-112)
+    def _sim(self):
+        m = self.__dict__.get("_sim_obj")
+        if m is None:
+            from edgelab.charts.sim import SimManager
+            sym = self.cfg["costs"]["symbols"]
+            costs = {s: float(sym[s].get("commission_per_side") or 0) + float(sym[s].get("fees_per_side") or 0)
+                     for s in ("NQ", "MNQ", "ES", "MES") if s in sym}
+            m = self.__dict__["_sim_obj"] = SimManager(self.data_root, self.root, costs)
+        return m
+
+    def sim_accounts(self) -> dict:
+        m = self._sim()
+        return {"accounts": m.list(), "costs": m.costs}
+
+    def sim_create(self, name: str, start_balance) -> dict:
+        return self._sim().view(self._sim().create(name, start_balance)["id"])
+
+    def sim_account(self, aid: str) -> dict:
+        return self._sim().view(aid)
+
+    def sim_action(self, aid: str, action: str, body: dict) -> dict:
+        m = self._sim()
+        if action == "order":
+            r = m.place(aid, body)
+        elif action == "modify":
+            r = {"order": m.modify(aid, str(body.get("order", "")), body)}
+        elif action == "cancel":
+            r = {"cancelled": m.cancel(aid, body.get("order"))}
+        elif action == "flatten":
+            r = m.flatten(aid, body.get("symbol"))
+        elif action == "reverse":
+            r = m.reverse(aid, str(body.get("symbol", "")))
+        elif action == "reset":
+            m.reset(aid, body.get("start_balance"))
+            r = {}
+        elif action == "rename":
+            m.rename(aid, str(body.get("name", "")))
+            r = {}
+        elif action == "delete":
+            m.delete(aid)
+            return {"deleted": aid}
+        else:
+            from edgelab.charts.sim import SimError
+            raise SimError("BAD_ACTION", f"Unknown action {action!r}.")
+        return {**r, "account": m.view(aid)}
+
+    def sim_quote(self, symbol: str) -> dict:
+        return self._sim().quote(symbol)
+
     def market_report(self) -> dict:
         """ADR-110: the report card of every forecast (saved predictions only; discovery, holdout after a look, new days)."""
         from edgelab.market import report as RP

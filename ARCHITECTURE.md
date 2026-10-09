@@ -3068,3 +3068,46 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   the 87 tools drawn and saved without a page error, text dialog, right-click clone, undo / redo, delete, drawings per
   symbol, custom timeframe and layout saved. A drawing made while a symbol was still loading is kept (found by the test).
 - **Never:** an order, a broker connection, a run, a trial, a holdout look, a change to backtests, rules, costs or configs.
+
+### ADR-112 Charts: simulated LucidFlex 50K accounts with every Tradovate order type, filled on live bid / ask ticks
+- **Request (user), round 2 of the Charts work:** place trades from the chart with all order types of a Tradovate account,
+  never real orders, following the rules of a Lucid account on Tradovate (drawdown, limits ...); a tracker of a balance the
+  user sets (the user has no real account). Answers: fills on real Dukascopy bid / ask ticks; costs from the app's cost
+  settings; the starting balance is set per account.
+- **Ticks** (`edgelab/charts/ticks.py`): dukascopy-python `INTERVAL_TICK` (bid / ask) of the same index CFDs the chart
+  draws; processed and dropped, never stored. An order only reacts to ticks stamped after it became active.
+- **Engine** (`edgelab/charts/sim.py`): market, limit, stop, stop-limit, market-if-touched, trailing stop, trailing
+  stop-limit; Day (expires 17:00 New York) / GTC / IOC / FOK; brackets (take-profit / stop-loss in ticks from the entry fill,
+  optional trailing stop-loss, the two exits OCO, cancelled when the position is flat), OCO pairs, modify (incl. dragging the
+  order line on the chart), cancel, cancel all, flatten (exit at market + cancel), reverse. Buys fill at the ASK, sells at
+  the BID; a limit that was not marketable when it became active fills only when the price trades THROUGH it (at the
+  limit); stops at the first tick through (gap paid); full quantity, no partial fills. Prices of orders rounded to 0.25
+  (Tradovate). Positions net per symbol; P&L = points x point value; costs per contract and side from configs/costs.yaml
+  (MNQ / MES 0.75, NQ / ES 2.20).
+- **Rules:** the registered LucidFlex 50K profile (latest version), unchanged; with a starting balance other than 50,000
+  only `evaluation.starting_balance` / `funded.starting_balance` are set (CUSTOM, via `profiles.customize`, in memory). The
+  authoritative state is the UNCHANGED `prop.lifecycle.simulate_lifecycle` on the account's completed trades, where a trade
+  is one flat-to-flat episode of the whole account (size = most micros held, NQ / ES = 10; worst equity inside = lowest
+  marked-to-market equity on any tick, passed as the MAE in USD), given ONLY the trading days that have ended (18:00 New
+  York): the end-of-day trailing floor, the lock, the pass check (target + 50 % consistency), the separate funded account
+  from the next day, scaling (20 / 30 / 40 micros) and the payouts (automatic at the end of an eligible day, the profile's
+  `payout.request: max_allowed`) happen exactly at the day's end. Live, every tick compares the equity marked at the
+  executable price with the current floor: touching it liquidates at the tick's bid / ask, cancels the orders and fails the
+  attempt (as at Lucid / Tradovate). An order that would exceed the contract limit is rejected (placement and fill). Reset =
+  a new attempt; history kept. A market order needs a tick from the last 2 minutes.
+- **Manager:** accounts as JSON in `<data>/charts/sim/`; one thread fetches ticks every 2 s while anything is working or a
+  chart shows quotes (stops when idle) and, after the app was closed, checks the missed ticks from each attempt's cursor
+  (up to 3 days; a longer gap is written into the account as "not monitored"). Started at app start when accounts exist.
+- **API:** `GET|POST /api/sim/accounts`, `GET /api/sim/accounts/<id>`, `POST /api/sim/accounts/<id>/<order|modify|cancel|
+  flatten|reverse|reset|rename|delete>`, `GET /api/sim/quote?symbol=`; refusals are 409 (closed account, no prices) or 422.
+- **UI** (`web/src/pages/charts/trading.tsx`): top-bar "Trade" opens the order ticket (account, rule status: stage,
+  balance / equity / open and day P&L, max-loss floor and room, target and consistency or payout progress, contracts;
+  ticket with every type, TIF, bracket, OCO, Buy / Sell, flatten, reverse, cancel all, exit all) and the account panel
+  (positions, working orders, order history, fills, trades, days, attempts, rules incl. the assumed ones). Chart lines for
+  working orders (drag to move, x to cancel) and positions (x to close); right-click on the chart: buy / sell limit or
+  stop at that price.
+- **Tests:** `tests/test_charts_sim.py` (synthetic ticks, known answers for every order type, costs, brackets, OCO, flatten,
+  reverse, modify, contract limits, live breach + liquidation, end-of-day floor, consistency holding the pass back, funded
+  start with 20 micros, custom starting balance, Day expiry, tick cursor after a pause, persistence, API) and
+  `tests/test_charts_sim_e2e.py` (browser: account, bracket market order, right-click limit, working orders, exit all).
+- **Never:** a real order, a broker connection, a run, a trial, a holdout look, a change to backtests, prop rules, costs or configs.

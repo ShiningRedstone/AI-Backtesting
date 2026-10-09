@@ -14,18 +14,21 @@ import { DAY, MONTH, TIME_ZONES, WEEK, fmtPrice, parseTf, resolveTz, sessionOpen
 import { ChartDialog, ContextMenu, DrawingDialog, FloatingBar, ObjectTree, ToolIcon } from "./panels";
 import type { GroupId } from "./tools";
 import { GROUPS, TOOL, TOOLS } from "./tools";
+import { AccountPanel, TradePanel, useSim } from "./trading";
+import { sim } from "../../api/sim";
 
 type Ev = { target: HTMLInputElement & HTMLSelectElement; key: string; stopPropagation(): void; preventDefault(): void };
 type ScaleMode = "normal" | "log" | "percent" | "indexed";
 interface Layout {
   symbol: string; tf: number; type: ChartType; tz: string; scale: ScaleMode; invert: boolean; style: ChartStyle; favTfs: number[]; favTools: string[];
   lastTool: Partial<Record<GroupId, string>>; toolDefaults: Record<string, Partial<Style>>; magnet: number; stay: boolean; tree: boolean;
+  trade: boolean; simAccount: string | null; tradeQty: number;                        // ADR-112: simulated trading
 }
 const STD_TFS = [1, 2, 3, 5, 10, 15, 30, 45, 60, 120, 180, 240, DAY, WEEK, MONTH];
 const DEFAULT_LAYOUT: Layout = {
   symbol: "MNQ", tf: 5, type: "candles", tz: "America/New_York", scale: "normal", invert: false, style: DEFAULT_STYLE,
   favTfs: [1, 5, 15, 60, 240, DAY], favTools: ["trend_line", "horizontal_line", "fib_retracement", "rectangle", "long_position"],
-  lastTool: {}, toolDefaults: {}, magnet: 0, stay: false, tree: false,
+  lastTool: {}, toolDefaults: {}, magnet: 0, stay: false, tree: false, trade: false, simAccount: null, tradeQty: 1,
 };
 const RANGES: { id: string; tf: number; days: number }[] = [
   { id: "1D", tf: 1, days: 1 }, { id: "5D", tf: 5, days: 5 }, { id: "1M", tf: 30, days: 31 }, { id: "3M", tf: 60, days: 92 },
@@ -183,6 +186,19 @@ export function ChartsPage() {
   const selected = st?.selectedId ? st.drawings.find((d) => d.id === st.selectedId) ?? null : null;
   const symbol = lay ? symOf(lay.symbol) : null;
 
+  const setSimAccount = useCallback((id: string | null) => patch({ simAccount: id }), [patch]);
+  const simS = useSim(!!lay?.trade, lay?.symbol ?? "MNQ", meta?.symbols ?? [], ctl, lay?.simAccount ?? null, setSimAccount);
+  useEffect(() => { if (ctl && symbol) ctl.tick = symbol.tick; }, [ctl, symbol]);
+  const tradeMenu = (() => {
+    const a = simS.acc, q = simS.quote, m = st?.menu;
+    if (!lay?.trade || !a || a.state !== "active" || !m || m.id || m.price == null || !symbol) return undefined;
+    const px = Math.round(m.price / symbol.tick) * symbol.tick, n = lay.tradeQty, sy = lay.symbol;
+    const buyType = q?.ask != null && px >= q.ask ? "stop" : "limit", sellType = q?.bid != null && px <= q.bid ? "stop" : "limit";
+    const go = (side: "buy" | "sell", type: "limit" | "stop") => void simS.act(() => sim.order(a.id,
+      { symbol: sy, side, qty: n, type, tif: "day", ...(type === "limit" ? { price: px } : { stop: px }) }));
+    return [{ label: `Buy ${n} ${sy} ${buyType} @ ${fmtPrice(px, 2)}`, run: () => go("buy", buyType), testId: "ch-menu-buy" },
+      { label: `Sell ${n} ${sy} ${sellType} @ ${fmtPrice(px, 2)}`, run: () => go("sell", sellType), testId: "ch-menu-sell" }];
+  })();
   if (!lay) return <div className="page ch-page"><div className="ch-loading">Loading the chart…</div></div>;
   return (
     <div className={`ch${full ? " ch-full" : ""}`} ref={wrap} data-testid="charts">
@@ -237,6 +253,9 @@ export function ChartsPage() {
         <button type="button" className="ch-ib" title="Undo (Ctrl+Z)" disabled={!st?.canUndo} onClick={() => ctl?.undoStep()} data-testid="ch-undo">↶</button>
         <button type="button" className="ch-ib" title="Redo (Ctrl+Y)" disabled={!st?.canRedo} onClick={() => ctl?.redoStep()} data-testid="ch-redo">↷</button>
         <span className="ch-sep" />
+        <button type="button" className={`ch-tb tr-toggle${lay.trade ? " on" : ""}`} title="Simulated trading (LucidFlex 50K rules, no real orders)"
+          onClick={() => patch({ trade: !lay.trade })} data-testid="ch-trade">Trade</button>
+        <span className="ch-sep" />
         <button type="button" className={`ch-ib${lay.tree ? " on" : ""}`} title="Object tree" onClick={() => patch({ tree: !lay.tree })} data-testid="ch-tree-btn">☰</button>
         <button type="button" className="ch-ib" title="Chart settings" onClick={() => setChartDlg(true)} data-testid="ch-settings">⚙</button>
         <button type="button" className="ch-ib" title="Take a snapshot (PNG)" onClick={shot} data-testid="ch-shot">📷</button>
@@ -254,13 +273,16 @@ export function ChartsPage() {
           <div className="ch-chart-wrap" onMouseDown={() => { setSymOpen(false); setTfOpen(false); setTypeOpen(false); }}>
             <div className={`ch-chart${cursor === "dot" ? " dot" : ""}`} ref={host} data-testid="ch-chart" />
             <LegendView ctl={ctl} sym={symbol} lay={lay} st={st} />
-            {st?.menu && ctl && <ContextMenu ctl={ctl} menu={st.menu} onSettings={(id) => setDlg({ id })} onChartSettings={() => setChartDlg(true)} />}
+            {st?.menu && ctl && <ContextMenu ctl={ctl} menu={st.menu} onSettings={(id) => setDlg({ id })} onChartSettings={() => setChartDlg(true)} trade={tradeMenu} />}
             {selected && st?.floating && ctl && !dlg && <FloatingBar ctl={ctl} d={selected} pos={st.floating} onSettings={() => setDlg({ id: selected.id })} />}
             {st?.tool && <div className="ch-hint" data-testid="ch-hint">{hintFor(st.tool)} · Esc to stop</div>}
             {(st?.measure || st?.zoom) && <div className="ch-hint">{st.measure ? "Click, move and click again to measure (Shift + click works too)" : "Drag a box to zoom in"} · Esc to stop</div>}
           </div>
           <BottomBar ctl={ctl} lay={lay} patch={patch} range={range} auto={auto} setAuto={setAuto} goto={goto} setGoto={setGoto} />
+          {lay.trade && <AccountPanel acc={simS.acc} act={simS.act} />}
         </div>
+        {lay.trade && <TradePanel symbol={lay.symbol} sym={symbol} s={simS} accountId={lay.simAccount} setAccountId={setSimAccount}
+          qty={lay.tradeQty} setQty={(n) => patch({ tradeQty: n })} />}
         {lay.tree && ctl && st && <ObjectTree ctl={ctl} drawings={st.drawings} selectedId={st.selectedId} />}
       </div>
       {dlg && ctl && <DrawingDialog key={dlg.id} ctl={ctl} id={dlg.id} initialTab={dlg.tab} tz={lay.tz} onClose={() => setDlg(null)} />}

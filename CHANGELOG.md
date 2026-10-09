@@ -3,6 +3,21 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Charts: simulated LucidFlex 50K accounts with every Tradovate order type (ADR-112)
+
+| Item | Status |
+|---|---|
+| Simulated accounts with a starting balance you set, following the app's LucidFlex 50K rules (evaluation → funded → payouts) | IMPLEMENTED, TESTED |
+| Order types market, limit, stop, stop-limit, market-if-touched, trailing stop, trailing stop-limit; Day / GTC / IOC / FOK; brackets; OCO; modify, cancel, flatten, reverse | IMPLEMENTED, TESTED |
+| Fills on Dukascopy bid / ask ticks (buys at the ask, sells at the bid); costs from the app's cost settings | IMPLEMENTED, TESTED (synthetic ticks) |
+| Live max-loss breach (liquidation), end-of-day trailing floor and lock, consistency, contract limits and funded scaling, payouts | IMPLEMENTED, TESTED |
+| Order and position lines on the chart (drag to move, x to cancel / close), right-click buy / sell at a price | IMPLEMENTED, TESTED (browser) |
+| Orders keep being checked after the app was closed (missed ticks, up to 3 days) | IMPLEMENTED, TESTED |
+| Live Dukascopy ticks | REQUIRES REAL DATA (not reachable from the build environment) |
+| Real orders / broker connection | NOT IMPLEMENTED (never: simulated only) |
+| The predictor on the live chart | NOT IMPLEMENTED (round 3) |
+| Backtests, prop rule profiles, costs, configs, tries, the research protocol | UNCHANGED |
+
 ## Charts tab: live MNQ / NQ / ES / MES chart with every TradingView drawing tool; version 0.6.0 (ADR-111)
 
 | Item | Status |

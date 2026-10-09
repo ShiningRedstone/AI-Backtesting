@@ -210,8 +210,12 @@ ADR-111 (version 0.6.0): tab "Charts" (`edgelab/charts/`: `feed.py` live Dukasco
 with a TradingView-style chart (`web/src/pages/charts/`, Lightweight Charts 5, Apache-2.0) and 87 drawing tools with full editing.
 Round 1 of 3: round 2 = SIMULATED orders (all Tradovate order types, never real) under LucidFlex 50K rules + a tracker for the real
 account; round 3 = the Market simulator predictor drawn live on the chart. Never a run / try / look.
+ADR-112: Charts round 2 = simulated LucidFlex 50K accounts (`charts/sim.py` engine + manager, `charts/ticks.py` Dukascopy bid / ask
+ticks; JSON in `<data>/charts/sim/`; `/api/sim/*`; UI `web/src/pages/charts/trading.tsx`): every Tradovate order type, TIFs, brackets,
+OCO, chart order lines; fills buys at ASK / sells at BID; rules = the UNCHANGED lifecycle on completed days' flat-to-flat episodes +
+a live floor check per tick (liquidation); user-set starting balance (starting balances CUSTOM). The user has NO real account.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-111.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-112.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -273,6 +277,7 @@ remains. Do not rely on this file alone.
     (level map + calls per candle), Live (new days), Holdout tests (first look + second, direction-only look, mistakes reports).
   - Charts (ADR-111): live MNQ / NQ / ES / MES (Dukascopy CFDs, labelled), TradingView-style chart, 87 drawing tools,
     drawings per symbol and the layout saved in the workspace.
+    "Trade" (ADR-112): simulated LucidFlex 50K accounts, order ticket, account panel, order lines on the chart.
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -499,4 +504,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-111). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-112). Update `README.md` status for phases.

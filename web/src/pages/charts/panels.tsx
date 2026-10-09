@@ -304,11 +304,11 @@ export function ObjectTree({ ctl, drawings, selectedId }: { ctl: ChartCtl; drawi
   );
 }
 
-export function ContextMenu({ ctl, menu, onSettings, onChartSettings }: { ctl: ChartCtl; menu: { x: number; y: number; id: string | null };
-  onSettings: (id: string) => void; onChartSettings: () => void }) {
+export function ContextMenu({ ctl, menu, onSettings, onChartSettings, trade }: { ctl: ChartCtl; menu: { x: number; y: number; id: string | null };
+  onSettings: (id: string) => void; onChartSettings: () => void; trade?: { label: string; run: () => void; testId?: string }[] }) {
   const d = menu.id ? ctl.drawings.find((x) => x.id === menu.id) : null;
   const item = (label: string, f: () => void, testId?: string) =>
-    <button type="button" onClick={() => { ctl.closeMenu(); f(); }} data-testid={testId}>{label}</button>;
+    <button key={label} type="button" onClick={() => { ctl.closeMenu(); f(); }} data-testid={testId}>{label}</button>;
   return (
     <div className="ch-menu" style={{ left: menu.x, top: menu.y }} role="menu" data-testid="ch-menu" onMouseDown={(e: Ev) => e.stopPropagation()}>
       {d ? <>
@@ -323,6 +323,7 @@ export function ContextMenu({ ctl, menu, onSettings, onChartSettings }: { ctl: C
         {item("Hide", () => ctl.update(d.id, (x) => { x.hidden = true; }))}
         {item("Remove", () => ctl.remove(d.id), "ch-menu-remove")}
       </> : <>
+        {trade && trade.length > 0 && <>{trade.map((t) => item(t.label, t.run, t.testId))}<hr /></>}
         {item("Reset chart view", () => ctl.resetView())}
         {item("Paste drawing", () => ctl.paste())}
         {item(ctl.hideAll ? "Show all drawings" : "Hide all drawings", () => { ctl.hideAll = !ctl.hideAll; ctl.emit(); ctl.redraw(); })}

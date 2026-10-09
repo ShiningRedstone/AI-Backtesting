@@ -71,6 +71,8 @@ def strategy_source(x: Any) -> Any:
 
 
 CHART_SYMBOL = re.compile(r"\A(MNQ|NQ|ES|MES)\Z")                 # ADR-111
+SIM_ID = re.compile(r"\ASIM[0-9A-F]{10}\Z")                        # ADR-112
+SIM_ACTION = re.compile(r"\A(order|modify|cancel|flatten|reverse|reset|rename|delete)\Z")
 CHART_TF = re.compile(r"\A([0-9]{1,4}[mh]?|1D|1W|1M)\Z")
 MARKET_SECTION = re.compile(r"\A[a-z_]{1,32}\Z")                 # ADR-106
 MARKET_DAY = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
@@ -104,6 +106,11 @@ def warm_caches(svc) -> None:
             except Exception:                                # noqa: BLE001 - a warm-up never affects the app
                 pass
     threading.Thread(target=work, daemon=True, name="munyun-cache-warmup").start()
+    if (Path(svc.data_root) / "charts" / "sim").is_dir():              # ADR-112: working simulated orders keep working
+        try:
+            svc._sim()._kick()
+        except Exception:                                    # noqa: BLE001 - shown on the Charts tab instead
+            pass
 
 
 def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None = None, warm: bool = False) -> Flask:
@@ -193,6 +200,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, ChartError):                        # ADR-111: live charts
             return jsonify({"error": {"kind": "charts", "code": e.code, "message": e.message}}), \
                 503 if e.code == "DOWNLOAD_FAILED" else 422
+        from edgelab.charts.sim import SimError
+        if isinstance(e, SimError):                          # ADR-112: simulated accounts (orders refused with a reason)
+            return jsonify({"error": {"kind": "sim", "code": e.code, "message": e.message}}), \
+                404 if e.code == "NO_ACCOUNT" else 409 if e.code in ("ACCOUNT_CLOSED", "NO_PRICES") else 422
         from edgelab.mystrategy.params import SettingsError
         from edgelab.mystrategy.runner import MyStrategyError
         if isinstance(e, SettingsError):                     # ADR-93
@@ -1291,6 +1302,32 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if not isinstance(body, dict):
             raise _bad("send a JSON object")
         return jsonify(call(svc.charts_save_layout, body))
+
+    @app.get("/api/sim/accounts")                      # ADR-112: simulated Lucid accounts (never real orders)
+    def sim_accounts():
+        return jsonify(call(svc.sim_accounts))
+
+    @app.post("/api/sim/accounts")
+    def sim_create():
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            raise _bad("send a JSON object")
+        return jsonify(call(svc.sim_create, str(body.get("name", "")), body.get("start_balance", 50000))), 201
+
+    @app.get("/api/sim/accounts/<aid>")
+    def sim_account(aid):
+        return jsonify(call(svc.sim_account, _id(aid, SIM_ID, "account")))
+
+    @app.post("/api/sim/accounts/<aid>/<action>")
+    def sim_action(aid, action):
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            raise _bad("send a JSON object")
+        return jsonify(call(svc.sim_action, _id(aid, SIM_ID, "account"), _id(action, SIM_ACTION, "action"), body))
+
+    @app.get("/api/sim/quote")
+    def sim_quote():
+        return jsonify(call(svc.sim_quote, _id(request.args.get("symbol", ""), CHART_SYMBOL, "symbol")))
 
     @app.get("/api/market/report")                     # ADR-110: report card of every forecast
     def market_report():

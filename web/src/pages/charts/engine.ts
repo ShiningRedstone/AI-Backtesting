@@ -49,7 +49,7 @@ export interface Legend { bar: Bar | null; prev: Bar | null; index: number; live
 export interface CtlState {
   drawings: Drawing[]; selectedId: string | null; tool: string | null; creating: boolean; canUndo: boolean; canRedo: boolean;
   loading: boolean; error: string | null; more: boolean; bars: number; lastTime: number | null; source: string;
-  menu: { x: number; y: number; id: string | null } | null; floating: { x: number; y: number } | null; measure: boolean; zoom: boolean;
+  menu: { x: number; y: number; id: string | null; price: number | null } | null; floating: { x: number; y: number } | null; measure: boolean; zoom: boolean;
 }
 export interface Theme { bg: string; text: string; muted: string; grid: string; axis: string; border: string }
 
@@ -77,6 +77,10 @@ class Layer implements ISeriesPrimitive<Time> {
   }
 }
 
+/** ADR-112: working orders and positions of the simulated account drawn on the chart (drag to modify, x to cancel / close). */
+export interface TradeLine { id: string; kind: "order" | "position"; price: number; label: string; color: string; draggable: boolean; pnl?: number }
+interface TradeHit { line: TradeLine; y: number; box: { x: number; y: number; w: number; h: number }; close: { x: number; y: number; w: number; h: number } }
+
 interface Creating { tool: ToolDef; points: Pt[]; cursor: Pt | null; downAt: XY | null }
 interface Drag { kind: "move" | "anchor"; id: string; anchor: number; start: XY; orig: Drawing; moved: boolean }
 
@@ -103,6 +107,13 @@ export class ChartCtl {
   private stateSubs = new Set<(s: CtlState) => void>();
   private clipboard: Drawing | null = null;
   onTextEdit: ((d: Drawing) => void) | null = null;
+  tradeLines: TradeLine[] = [];
+  private tradeHits: TradeHit[] = [];
+  private tradeDrag: { line: TradeLine; price: number; moved: boolean } | null = null;
+  onTradeDrag: ((line: TradeLine, price: number) => void) | null = null;
+  onTradeClose: ((line: TradeLine) => void) | null = null;
+  tick = 0.25;
+  setTradeLines(lines: TradeLine[]) { this.tradeLines = lines; this.redraw(); }
   onSettings: ((d: Drawing) => void) | null = null;
 
   constructor(public el: HTMLElement, theme: Theme) {
@@ -556,6 +567,7 @@ export class ChartCtl {
       const P = new Painter(c, e, d.style);
       c.save(); TOOL.date_price_range.draw(P, d.points.map((p) => toXY(e, d, p)), d, e); c.restore();
     }
+    this.renderTrades(c, e);
     if (this.zoom) {
       const { a, b } = this.zoom;
       c.fillStyle = withAlpha("#2962ff", 0.12); c.strokeStyle = "#2962ff"; c.lineWidth = 1; c.setLineDash([4, 3]);
@@ -563,6 +575,36 @@ export class ChartCtl {
       c.strokeRect(Math.min(a.x, b.x) + 0.5, Math.min(a.y, b.y) + 0.5, Math.abs(a.x - b.x), Math.abs(a.y - b.y));
       c.setLineDash([]);
     }
+  }
+  private renderTrades(c: CanvasRenderingContext2D, e: Env) {
+    this.tradeHits = [];
+    c.save();
+    c.font = "600 11.5px Inter, system-ui, sans-serif";
+    for (const L of this.tradeLines) {
+      const price = this.tradeDrag?.line.id === L.id ? this.tradeDrag.price : L.price;
+      const y = Math.round(e.yOf(price)) + 0.5;
+      if (!Number.isFinite(y) || y < -20 || y > e.h + 20) continue;
+      c.setLineDash(L.kind === "position" ? [] : [6, 4]); c.lineWidth = 1; c.strokeStyle = L.color;
+      c.beginPath(); c.moveTo(0, y); c.lineTo(e.w, y); c.stroke();
+      const text = this.tradeDrag?.line.id === L.id ? `${L.label.split(" @ ")[0]} @ ${fmtPrice(price, 2)}` : L.label;
+      const tw = c.measureText(text).width, h = 18, bx = 8, by = y - h / 2;
+      c.setLineDash([]);
+      c.fillStyle = L.color; c.beginPath(); c.roundRect(bx, by, tw + 12, h, 3); c.fill();
+      c.fillStyle = "#ffffff"; c.textBaseline = "middle"; c.fillText(text, bx + 6, y);
+      const cx = bx + tw + 14;
+      c.fillStyle = this.theme.bg; c.strokeStyle = L.color; c.beginPath(); c.roundRect(cx, by, h, h, 3); c.fill(); c.stroke();
+      c.fillStyle = L.color; c.fillText("×", cx + 5, y);
+      this.tradeHits.push({ line: L, y, box: { x: bx, y: by, w: tw + 12, h }, close: { x: cx, y: by, w: h, h } });
+    }
+    c.restore();
+  }
+  private hitTrade(q: XY): { hit: TradeHit; close: boolean } | null {
+    const inBox = (b: TradeHit["box"]) => q.x >= b.x && q.x <= b.x + b.w && q.y >= b.y && q.y <= b.y + b.h;
+    for (const h of [...this.tradeHits].reverse()) {
+      if (inBox(h.close)) return { hit: h, close: true };
+      if (inBox(h.box) || (h.line.draggable && Math.abs(q.y - h.y) <= 4)) return { hit: h, close: false };
+    }
+    return null;
   }
   private drawAnchors(c: CanvasRenderingContext2D, anchors: Anchor[], strong: boolean) {
     c.setLineDash([]);
@@ -585,6 +627,10 @@ export class ChartCtl {
     const e = this.env(), out: ISeriesPrimitiveAxisView[] = [];
     const lab = (coord: number, text: string, bg: string): ISeriesPrimitiveAxisView =>
       ({ coordinate: () => coord, text: () => text, textColor: () => "#ffffff", backColor: () => bg });
+    if (kind === "price") for (const L of this.tradeLines) {
+      const p = this.tradeDrag?.line.id === L.id ? this.tradeDrag.price : L.price, y = e.yOf(p);
+      if (Number.isFinite(y)) out.push(lab(y, fmtPrice(p, e.dp).replace(/,/g, ""), L.color));
+    }
     for (const d of this.drawings) {
       if (!this.visible(d) || d.screen) continue;
       const tool = TOOL[d.type], sel = d.id === this.selectedId;
@@ -625,6 +671,8 @@ export class ChartCtl {
   hoverInfo(x: number, y: number): { id: string; cursor: string } | null {
     if (this.tool || this.creating) return { id: "_draw", cursor: "crosshair" };
     if (this.zoomMode || this.measureMode) return { id: "_mode", cursor: "crosshair" };
+    const th = this.hitTrade({ x, y });
+    if (th) return { id: `_trade${th.hit.line.id}`, cursor: th.close ? "pointer" : th.hit.line.draggable ? "ns-resize" : "default" };
     if (this.cursorMode === "eraser") { const id = this.hitDrawing({ x, y }); return { id: id ?? "_eraser", cursor: id ? "pointer" : "not-allowed" }; }
     const a = this.hitAnchor({ x, y });
     if (a) return { id: a.id, cursor: a.cursor ?? "pointer" };
@@ -643,6 +691,14 @@ export class ChartCtl {
     if (!this.inPane(q)) return;
     if (this.menu) { this.menu = null; this.emit(); }
     if (this.zoomMode) { this.zoom = { a: q, b: q }; this.stop(ev); return; }
+    if (!this.tool && !this.creating && !this.measureMode) {
+      const th = this.hitTrade(q);
+      if (th) {
+        if (th.close) this.onTradeClose?.(th.hit.line);
+        else if (th.hit.line.draggable) this.tradeDrag = { line: th.hit.line, price: th.hit.line.price, moved: false };
+        this.stop(ev); return;
+      }
+    }
     if (this.measureMode || (ev.shiftKey && !this.tool && !this.creating)) {
       const p = this.snap(q, null);
       if (this.measure && !this.measure.done) { this.measure.b = p; this.measure.done = true; this.measureMode = false; this.emit(); }
@@ -681,6 +737,11 @@ export class ChartCtl {
   private onMove = (ev: MouseEvent) => {
     const q = this.local(ev);
     if (this.zoom) { this.zoom.b = q; this.redraw(); return; }
+    if (this.tradeDrag) {
+      const p = this.series?.coordinateToPrice(q.y);
+      if (p != null) { this.tradeDrag.price = Math.round(p / this.tick) * this.tick; this.tradeDrag.moved = true; this.redraw(); }
+      return;
+    }
     if (this.measure && !this.measure.done) { this.measure.b = this.snap(q, null); this.redraw(); }
     const cr = this.creating;
     if (cr) {
@@ -719,6 +780,11 @@ export class ChartCtl {
     this.redraw();
   };
   private onUp = (ev: MouseEvent) => {
+    if (this.tradeDrag) {
+      const d = this.tradeDrag;
+      if (d.moved && Math.abs(d.price - d.line.price) > 1e-9) { d.line.price = d.price; this.onTradeDrag?.(d.line, d.price); }
+      this.tradeDrag = null; this.redraw(); return;
+    }
     if (this.zoom) {
       const { a, b } = this.zoom, e = this.env();
       this.zoom = null; this.zoomMode = false;
@@ -774,7 +840,7 @@ export class ChartCtl {
     const id = this.hitDrawing(q);
     if (id) this.selectedId = id;
     const r = this.el.getBoundingClientRect();
-    this.menu = { x: ev.clientX - r.left, y: ev.clientY - r.top, id };
+    this.menu = { x: ev.clientX - r.left, y: ev.clientY - r.top, id, price: this.series?.coordinateToPrice(q.y) ?? null };
     this.emit(); this.redraw();
   };
   cancel() {
