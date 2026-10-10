@@ -42,6 +42,7 @@ export interface TradeRow {
   risk_points: number; model?: string; checklist?: Record<string, boolean | null>; quality?: number;
   confirmation_tf?: string; r_planned?: number;
   phase?: "eval" | "funded"; session?: string; target_points?: number; attempt?: number;     // ADR-114 (Fair price)
+  cut_from?: number | null;          // contracts the engine sized before the prop account's limit cut the trade
 }
 export interface Report extends ReportRow {
   settings: Record<string, unknown>; monthly: MonthRow[]; rule_stats: Record<string, number>; n_signals: number;

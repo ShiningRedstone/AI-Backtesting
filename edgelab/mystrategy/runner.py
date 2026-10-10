@@ -404,8 +404,10 @@ def build_report(folder: Path, s: dict, strat, res, ds, win, rec: dict, *, kind:
     folder.mkdir(parents=True, exist_ok=True)
     rows = trade_rows(res.trades)
     if Kk.phased and len(rows):              # ADR-114: which phase / chain attempt each as-traded trade belongs to
-        for r, x in zip(rows, res.trades[["phase", "phase_trade_no", "attempt"]].to_dict("records")):
-            r.update(phase=x["phase"], phase_trade_no=int(x["phase_trade_no"]), attempt=int(x["attempt"]))
+        cut = res.trades["cut_from"] if "cut_from" in res.trades.columns else pd.Series([None] * len(rows))
+        for r, x, c in zip(rows, res.trades[["phase", "phase_trade_no", "attempt"]].to_dict("records"), cut):
+            r.update(phase=x["phase"], phase_trade_no=int(x["phase_trade_no"]), attempt=int(x["attempt"]),
+                     cut_from=None if c is None or pd.isna(c) else float(c))
     charts = Charts(ds.bars, ds.calendar, s["models.price_series"])
     docs, candle_lines = [], []
     for r in rows:
@@ -515,7 +517,7 @@ def get_backtest(svc, bt_id: str, K=None) -> dict:
                               "r_planned": ((t.get("explanation") or {}).get("target") or {}).get("r_planned")}
                              | ({"phase": t.get("phase"), "session": (t.get("explanation") or {}).get("session"),
                                  "target_points": ((t.get("explanation") or {}).get("target") or {}).get("points"),
-                                 "attempt": t.get("attempt")} if "phase" in t else {})
+                                 "attempt": t.get("attempt"), "cut_from": t.get("cut_from")} if "phase" in t else {})
                              for t in trades]}
 
 

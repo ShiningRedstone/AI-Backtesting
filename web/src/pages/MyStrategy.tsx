@@ -393,12 +393,16 @@ function PhasesCard({ data }: { data: Report }) {
   const money = useMoney();
   const ph = data.phases!;
   const traded = data.trades.reduce((a, t) => { a[t.phase ?? "eval"] = (a[t.phase ?? "eval"] ?? 0) + 1; return a; }, {} as Record<string, number>);
+  const cut = data.trades.filter((t) => t.cut_from != null).length;
   return (
     <Card title="Evaluation and funded rules" testId="fair-phases">
       <p className="muted small">The headline numbers above are the trades the prop challenge chain of{" "}
         <b>{data.challenge?.names?.[data.criteria_profile ?? ""] ?? profileLabel(data.criteria_profile ?? "")}</b> actually took: {traded.eval ?? 0} with the evaluation rules (while an evaluation
         was running) and {traded.funded ?? 0} with the funded rules (once an evaluation passed, from the next trading day). Below: each
         rule set traded on every day of the window, on its own.</p>
+      {cut > 0 && <p className="muted small" data-testid="fair-cut">{cut} trade{cut > 1 ? "s were" : " was"} bigger than the account
+        allowed at that moment (for example LucidFlex funded: 20 micros at the start, 30 after $1,000 profit, 40 after $2,000) and
+        {cut > 1 ? " were" : " was"} taken with the allowed number of micros instead; wins and losses shrink in proportion (same R).</p>}
       <TableWrap><table className="dense">
         <thead><tr><th>Rules</th><th className="num">Trades</th><th className="num">Win rate</th><th className="num">Expectancy</th>
           <th className="num">Net R</th><th className="num">Net</th><th className="num">Profit factor</th><th className="num">Max drawdown</th>
@@ -715,7 +719,7 @@ function MyTradeListPage({ id }: { id: string }) {
             <tbody>{rows.map((t) => (
               <tr key={t.trade_no} onClick={() => go(`${kr("trades")}/${data.id}/${t.trade_no}`)} style={{ cursor: "pointer" }}>
                 <td className="num">{t.trade_no}</td><td>{nyTime(sec(t.entry_ts))}</td><td>{dirWord(t.direction)}</td>
-                {fair ? <><td>{PHASE_WORD[t.phase ?? ""] ?? "–"}</td><td>{t.session ?? "–"}</td><td>{MODEL(t.model)}</td></>
+                {fair ? <><td>{PHASE_WORD[t.phase ?? ""] ?? "–"}{t.cut_from != null ? ` · cut ${t.cut_from}→${t.contracts}` : ""}</td><td>{t.session ?? "–"}</td><td>{MODEL(t.model)}</td></>
                   : <><td>{MODEL(t.model)}</td><td>{t.confirmation_tf ?? "–"}</td></>}<td className="num">{px(t.entry_price_theo)}</td><td className="num">{px(t.stop_price)}</td>
                 <td className="num">{px(t.target_price)}</td><td className="num">{n(t.r_planned, 2)}</td><td>{exitWord(t.exit_reason)}</td>
                 <td className={`num ${signCls(t.net_r)}`}>{r(t.net_r, 2)}</td><td className={`num ${signCls(t.net_usd)}`}>{money.fmt(t.net_usd)}</td>

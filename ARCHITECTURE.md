@@ -3189,3 +3189,11 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   My strategy untouched) and the `/api/fair` routes.
 - **Not copied:** several accounts at once, discretionary fair-price moves, mid-candle / wick entries, unexpected news,
   live-account and bonus tactics.
+- **Fix (user report, chain `CHAIN_VERSION` 2):** a backtest's curve went flat after the first passed evaluation: funded trades
+  sized for the $1,500 win (30 MNQ at a 25-point target) exceeded LucidFlex's funded scaling limit (20 micros until $1,000
+  profit), the lifecycle marked the account INCOMPATIBLE, and `run_attempts` ends a chain there for good (0 passes shown).
+  User's rule: a trade bigger than the account allows at that moment is taken with the allowed micros (rounded down; one
+  that cannot keep a micro is not taken); its dollar columns scale in proportion, which is exact because every cost is per
+  contract (R unchanged). `chain.fit_to_limits` finds each violation with the UNCHANGED lifecycle (and its permitted
+  quantity) and repeats until none is left; cut trades keep `cut_from` and are counted per attempt (`cut_to_limit`) and
+  shown on the report. Fair price only (the user's choice): My strategy's chain is unchanged.

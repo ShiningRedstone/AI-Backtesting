@@ -26,7 +26,11 @@ import pandas as pd
 
 from edgelab.core.identity import hash_obj
 
-CHAIN_VERSION = 1
+CHAIN_VERSION = 2          # 2: trades bigger than the account allows are cut to its limit (the chain no longer stops)
+# Dollar columns of a trade record that scale with the contract count (every cost is per contract: commission, fees,
+# slippage, financing; the spread is in the fill prices), so a trade cut from n to m contracts keeps its R exactly.
+USD_COLS = ("gross_usd", "cost_usd", "cost_usd_base", "net_usd", "risk_usd", "commission_usd", "fees_usd", "slippage_usd",
+            "spread_usd", "financing_usd", "planned_risk_usd")
 
 
 def _ts(x) -> pd.Timestamp:
@@ -42,14 +46,56 @@ def _window(tr: pd.DataFrame, a: pd.Timestamp, until: pd.Timestamp | None) -> pd
     return tr[keep.to_numpy()]
 
 
+def fit_to_limits(tr: pd.DataFrame, profile: Mapping) -> pd.DataFrame:
+    """The user's rule (ADR-114 follow-up): a trade that asks for more micros than the account allows at that moment
+    (``max_micros``, or the funded scaling tier of that day) is taken with the allowed number, rounded down; its dollar
+    columns scale in proportion (same R); one that cannot keep a single micro is not taken. The UNCHANGED lifecycle finds
+    each violation (and the permitted quantity); earlier trades never change, so the loop ends. Column ``cut_from`` =
+    the engine's contracts of a cut trade. ``trade_no`` must be unique."""
+    from edgelab.prop.lifecycle import INCOMPATIBLE, simulate_lifecycle
+    if not len(tr):
+        return tr
+    tr = tr.copy()
+    if "cut_from" not in tr.columns:
+        tr["cut_from"] = np.nan
+    for _ in range(len(tr) + 1):
+        r = simulate_lifecycle(tr, profile)
+        br = None
+        for stage in ("evaluation", "funded"):
+            b = (r.get(stage) or {}).get("breach")
+            if b and b.get("reason") in INCOMPATIBLE:
+                br = b
+                break
+        if br is None:
+            return tr
+        k = int(np.flatnonzero(tr["trade_no"].to_numpy() == int(br["trade_no"]))[0])
+        n = float(tr.iloc[k]["contracts"])
+        m = float(np.floor(float(br["permitted_quantity"]) + 1e-9))
+        if m < 1:
+            tr = tr.drop(index=tr.index[k])
+            continue
+        f = m / n
+        idx = tr.index[k]
+        for c in USD_COLS:
+            if c in tr.columns:
+                tr.loc[idx, c] = float(tr.loc[idx, c]) * f
+        if pd.isna(tr.loc[idx, "cut_from"]):
+            tr.loc[idx, "cut_from"] = n
+        tr.loc[idx, "contracts"] = m
+    raise RuntimeError("could not fit the trades to the account's contract limits")
+
+
 def combined_from(ev_all: pd.DataFrame, fu_all: pd.DataFrame, profile: Mapping, t: pd.Timestamp,
                   until: pd.Timestamp | None = None) -> pd.DataFrame:
     """The trades an attempt starting at ``t`` takes: evaluation trades until its evaluation passes, funded trades from
-    the funded start. Column ``phase`` says which."""
+    the funded start, each cut to the account's contract limit when bigger (``fit_to_limits``). Column ``phase`` says
+    which; ``phase_trade_no`` = the engine's trade number; ``trade_no`` = 1.. in this attempt's order."""
     from edgelab.prop.lifecycle import simulate_lifecycle
     ev = _window(ev_all, t, until)
     if not len(ev):
         return ev.assign(phase=pd.Series(dtype=object)) if len(ev.columns) else ev
+    ev = ev.assign(phase_trade_no=ev["trade_no"].to_numpy())
+    ev = fit_to_limits(ev, profile)
     r = simulate_lifecycle(ev, profile)
     p = (r.get("evaluation") or {}).get("pass") if r.get("evaluation", {}).get("status") == "PASS" else None
     ev = ev.assign(phase="eval")
@@ -61,8 +107,12 @@ def combined_from(ev_all: pd.DataFrame, fu_all: pd.DataFrame, profile: Mapping, 
     fu = _window(fu_all, max(cut, last_exit), until)
     if len(fu):
         fu = fu[(pd.to_datetime(fu["entry_ts"], utc=True) >= last_exit).to_numpy()]
-    out = pd.concat([head, fu.assign(phase="funded")], ignore_index=True) if len(fu) else head
-    return out.sort_values("entry_ts", kind="mergesort").reset_index(drop=True)
+    if not len(fu):
+        return head
+    fu = fu.assign(phase="funded", phase_trade_no=fu["trade_no"].to_numpy(), cut_from=np.nan)
+    out = pd.concat([head, fu], ignore_index=True).sort_values("entry_ts", kind="mergesort").reset_index(drop=True)
+    out["trade_no"] = np.arange(1, len(out) + 1)               # unique numbers for the lifecycle's records
+    return fit_to_limits(out, profile)
 
 
 def phase_chain(ev_all: pd.DataFrame, fu_all: pd.DataFrame, profile: Mapping, start, until=None) -> tuple[dict, pd.DataFrame]:
@@ -75,7 +125,7 @@ def phase_chain(ev_all: pd.DataFrame, fu_all: pd.DataFrame, profile: Mapping, st
 
     def fetch(t):
         f = combined_from(ev_all, fu_all, profile, _ts(t), until)
-        f = f.assign(phase_trade_no=f["trade_no"], trade_no=np.arange(1, len(f) + 1)) if len(f) else f
+        f = f.assign(trade_no=np.arange(1, len(f) + 1)) if len(f) else f
         frames[_ts(t).isoformat()] = f
         return f
     try:
@@ -99,7 +149,8 @@ def phase_chain(ev_all: pd.DataFrame, fu_all: pd.DataFrame, profile: Mapping, st
         rows.append({"status": a["status"], "passed": bool(a.get("passed_at")), "payouts": int(a.get("payouts") or 0),
                      "trader": round(float(a.get("trader_payout") or 0.0), 2), "trades": int(a["n_trades"]),
                      "start": a["start"], "end": a["end"], "reason": a.get("reason"),
-                     "eval_trades": int((u["phase"] == "eval").sum()), "funded_trades": int((u["phase"] == "funded").sum())})
+                     "eval_trades": int((u["phase"] == "eval").sum()), "funded_trades": int((u["phase"] == "funded").sum()),
+                     "cut_to_limit": int(u["cut_from"].notna().sum()) if "cut_from" in u.columns else 0})
     raw = {"v": CHAIN_VERSION, "attempts": rows, "stopped": r["stopped"], "dropped": 0}
     if used:
         tr = pd.concat(used, ignore_index=True).sort_values("entry_ts", kind="mergesort").reset_index(drop=True)

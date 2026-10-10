@@ -211,12 +211,14 @@ class TestPerSignalRisk(unittest.TestCase):
             self.bt(_Fixed(200), {"mode": "fixed", "contracts": 1, "contract": "MNQ"})
 
 
-def _trades(rows):
+def _trades(rows, contracts=10.0):
     t = pd.DataFrame(rows, columns=["entry_ts", "exit_ts", "net_usd"])
     t["entry_ts"] = pd.to_datetime(t["entry_ts"], utc=True)
     t["exit_ts"] = pd.to_datetime(t["exit_ts"], utc=True)
     t["trade_no"] = np.arange(1, len(t) + 1)
-    t["contracts"] = 10.0
+    t["contracts"] = float(contracts)
+    t["gross_usd"] = t["net_usd"] + 5.0
+    t["cost_usd"] = 5.0
     for k in ("cost_usd", "net_r", "risk_points", "mae_points", "risk_usd"):
         t[k] = 1.0
     t["exit_reason"] = "TARGET"
@@ -243,6 +245,29 @@ class TestPhaseChain(unittest.TestCase):
         self.assertTrue(raw["attempts"][0]["passed"])
         self.assertGreater(raw["attempts"][0]["funded_trades"], 0)
         self.assertEqual(len(tr), sum(a["eval_trades"] + a["funded_trades"] for a in raw["attempts"]))
+
+    def test_trades_bigger_than_the_account_allows_are_cut_and_the_chain_goes_on(self):
+        # the user's report: a passed evaluation, funded trades of 30 micros, LucidFlex funded starts at 20 micros. Before
+        # the fix the account was "incompatible" and the chain stopped there for good.
+        days = pd.bdate_range("2024-03-04", periods=60)
+        ev = _trades([(f"{d.date()} 14:35", f"{d.date()} 14:50", 800.0) for d in days])
+        fu = _trades([(f"{d.date()} 14:40", f"{d.date()} 14:55", 300.0 if k % 2 else -150.0) for k, d in enumerate(days)],
+                     contracts=30)
+        raw, tr = phase_chain(ev, fu, self.prof, "2024-03-04")
+        self.assertFalse(any(a["status"] == "incompatible" for a in raw["attempts"]))
+        f = tr[tr["phase"] == "funded"]
+        self.assertGreater(len(f), 20)
+        self.assertEqual(pd.Timestamp(tr["entry_ts"].max()).date(), days[-1].date())     # trades to the end of the data
+        first = f.iloc[0]
+        self.assertEqual(float(first["contracts"]), 20.0)                  # cut to the funded starting limit
+        self.assertEqual(float(first["cut_from"]), 30.0)
+        self.assertAlmostEqual(float(first["net_usd"]), -150.0 * 20 / 30)  # dollars in proportion
+        self.assertAlmostEqual(float(first["gross_usd"]), (-150.0 + 5) * 20 / 30)
+        self.assertAlmostEqual(float(first["net_r"]), 1.0)                 # R unchanged
+        self.assertTrue(set(f["contracts"]) <= {20.0, 30.0})              # never more than asked, at least the start tier
+        self.assertGreater(raw["attempts"][0]["cut_to_limit"], 0)
+        untouched = phase_chain(ev, fu.assign(contracts=10.0), self.prof, "2024-03-04")[1]
+        self.assertTrue(untouched["cut_from"].isna().all())               # trades that fit are never changed
 
     def test_failed_evaluations_only_take_evaluation_trades(self):
         days = pd.bdate_range("2024-03-04", periods=20)
