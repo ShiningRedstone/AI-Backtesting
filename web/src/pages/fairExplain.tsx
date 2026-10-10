@@ -23,7 +23,7 @@ export interface FairExplanation {
   bias?: { hours: number; price_then: number; price_at_open: number; direction: number };
   big_opening_candle?: boolean;
   checklist: Record<string, boolean | null>;
-  flip?: { setup_direction: number; setup_stop: number; setup_target: number; setup_stop_points: number; setup_target_points: number;
+  flip?: { style?: "swap" | "same_distances"; setup_direction: number; setup_stop: number; setup_target: number; setup_stop_points: number; setup_target_points: number;
     setup_r_planned: number | null; contracts_kept: number };
 }
 
@@ -55,7 +55,10 @@ export function fairExplainText(e: FairExplanation): string[] {
     if (e.setup === "bos" && e.structure) out.push(`Break of structure: the candle closed ${up ? "above" : "below"} the 1-minute swing at ${px(e.structure.price)} (${nyTime(sec(e.structure.ts))}).`);
     if (e.setup === "displacement" && e.previous_candle) out.push(`Displacement: the candle's body was bigger than the previous candle's and it closed ${up ? "above" : "below"} its wick (${px(up ? e.previous_candle.h : e.previous_candle.l)}).`);
   }
-  if (e.flip) out.push(`Flipped: the setup was a ${side} (stop ${px(e.flip.setup_stop)}, target ${px(e.flip.setup_target)}); the trade is a ` +
+  if (e.flip && e.flip.style === "same_distances") out.push(`Flipped (whole trade): the setup was a ${side} (stop ${px(e.flip.setup_stop)}, target ` +
+    `${px(e.flip.setup_target)}); the trade is a ${up ? "short" : "long"} with the same ${e.flip.setup_stop_points}-point stop and ` +
+    `${e.flip.setup_target_points}-point target on the other side of the entry.`);
+  else if (e.flip) out.push(`Flipped: the setup was a ${side} (stop ${px(e.flip.setup_stop)}, target ${px(e.flip.setup_target)}); the trade is a ` +
     `${up ? "short" : "long"} with its stop at the old target and its target at the old stop, ${e.flip.contracts_kept} MNQ like the setup.`);
   out.push(`Take profit ${e.target_points} points, stop ${e.stop_points} points (planned ${e.target.r_planned.toFixed(2)} R)` +
     (e.phase === "funded" ? `, sized for the funded dollar win (risk budget $${e.risk_budget_usd.toLocaleString("en-US")}).` : `, risk $${e.risk_budget_usd.toLocaleString("en-US")}.`));

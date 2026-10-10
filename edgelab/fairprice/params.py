@@ -48,6 +48,11 @@ SCHEMA: list[dict] = [
        "of micros. The rules (incl. the losses-in-a-row stop) still follow the original setups, so the flipped run "
        "takes exactly the same trades, inverted. Not a rule from the video: it tests whether the setups are reliably "
        "wrong. Costs are paid either way.", S_U),
+    _p("models.flip_levels", "Flip style", C, "swap",
+       "swap = the flipped trade's stop sits at the setup's target and its target at the setup's stop (same micros; the "
+       "rules follow the original setups). same_distances = the whole trade is flipped: the same stop and target "
+       "DISTANCES (same reward : risk) on the other side of the entry, sized by the normal rules; the losses-in-a-row "
+       "rule counts the flipped trades. Only used with Flip every trade.", S_U, options=["swap", "same_distances"]),
     _p("models.price_series", "Price series for the rules", C, "bid",
        "Candles the rules read (fills always use BID/ASK). 'mid' = average of BID and ASK.", options=["bid", "mid"]),
     # ---------------------------------------------------------------- sessions
@@ -202,6 +207,8 @@ def smt_used(s: dict) -> bool:          # interface of My strategy's params; Fai
 def identity(s: dict) -> dict:
     """``models.flip`` is left out while off, so settings from before it existed keep their hash (same strategy)."""
     s = dict(s)
+    if not s["models.flip"] or s["models.flip_levels"] == "swap":       # the first flip style keeps its hash
+        s.pop("models.flip_levels")
     if not s["models.flip"]:
         s.pop("models.flip")
     return s

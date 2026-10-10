@@ -314,10 +314,22 @@ class Rules:
                 i += 1
                 continue
             stop, target = plan["stop"], plan["target"]
-            xbar, outcome = self._sim(d, i, stop, target, exit_bar, force)
+            same = s["models.flip"] and s["models.flip_levels"] == "same_distances"
+            if same:                                 # the whole trade flipped: track the flipped trade itself
+                fl = self._flip_same(i, d, plan)
+                xbar, outcome = self._sim(-d, i, fl["stop"], fl["target"], exit_bar, force)
+            else:
+                xbar, outcome = self._sim(d, i, stop, target, exit_bar, force)
             if outcome == "none":                    # counted only; whether it fills is the engine's business
                 self.stats["signals_not_filled_in_own_tracking"] += 1
-            if s["models.flip"]:
+            if same:
+                sig.direction[i] = -d
+                sig.stop_price[i], sig.target_price[i] = fl["stop"], fl["target"]
+                if fl["risk_usd"] is not None:
+                    risk[i] = fl["risk_usd"]
+                plan = {**plan, "explain": {**plan["explain"], **fl["explain"]}}
+                self.stats["signals_flipped"] += 1
+            elif s["models.flip"]:
                 fl = self._flip(i, d, plan)
                 sig.direction[i] = -d
                 sig.stop_price[i], sig.target_price[i] = fl["stop"], fl["target"]
@@ -455,6 +467,20 @@ class Rules:
                                                    "checklist": {"towards the fair price": True,
                                                                  f"{kind.replace('bos', 'break of structure')}": True,
                                                                  "enough room to the fair price": True}})
+
+    def _flip_same(self, i: int, d: int, plan: dict) -> dict:
+        """The whole trade flipped (the user's second style): direction -d from the flipped side's planned entry, the SAME
+        stop and target distances (same reward : risk), sized by the normal rules (the same budget on the same stop
+        distance, so the same micros)."""
+        e = plan["explain"]
+        S, T = float(e["stop_points"]), float(e["target_points"])
+        pe_f = float(self.ent[-d][3][i])
+        stop_f, target_f = pe_f + d * S, pe_f - d * T
+        return {"stop": stop_f, "target": target_f, "risk_usd": plan["risk_usd"], "explain": {
+            "flip": {"style": "same_distances", "setup_direction": d, "setup_stop": plan["stop"],
+                     "setup_target": plan["target"], "setup_stop_points": S, "setup_target_points": T,
+                     "setup_r_planned": round(T / S, 4) if S else None},
+            "planned_entry": pe_f, "stop": stop_f, "target_price": target_f}}
 
     def _flip(self, i: int, d: int, plan: dict) -> dict:
         """The opposite trade of a setup (the user's rule): direction -d, stop at the setup's target, target at the setup's

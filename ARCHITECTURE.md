@@ -3204,3 +3204,8 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   tracking, losses in a row, cooldown) follow the ORIGINAL setups (user's choice), so the flipped run takes the same setups,
   inverted. Costs are paid either way, so a flip is not the negative of the original result. Tested: known day (both
   phases), same setups inverted with swapped levels and equal contracts on random data, causality, hash unchanged while off.
+- **Flip style (user request):** `models.flip_levels` = `swap` (the above; default, so the first flip's hash is unchanged)
+  or `same_distances`: the whole trade flipped - direction -d from the flipped side's planned entry with the SAME stop and
+  target distances (same reward : risk), sized by the normal rules (same budget on the same stop distance = same micros).
+  The strategy's own tracking, the losses-in-a-row rule and the cooldown follow the FLIPPED trade (user's choice; its exits
+  differ from the setup's). Both flip settings are fixed for the autotuner.

@@ -190,9 +190,43 @@ class TestFlip(unittest.TestCase):
         with self.assertRaises(ValueError):
             FairStrategy({"models.flip": True}, CAL, "eval", news=NO_NEWS)           # needs the point value
 
+    def test_whole_trade_flipped_with_the_same_distances(self):
+        i = self.at(9, 44)
+        over = {"models.flip": True, "models.flip_levels": "same_distances"}
+        for phase, n, T in (("eval", 10, 38), ("funded", 15, 50)):
+            st, res = self.run_phase(phase, over)
+            self.assertTrue(res.causality.passed)
+            sig = st.last_signals
+            self.assertEqual(list(np.flatnonzero(sig.direction)), [i])
+            self.assertEqual(sig.direction[i], 1)                         # the short setup, bought
+            pe = 18045.5                                                   # a long is planned from the ASK close
+            self.assertAlmostEqual(sig.stop_price[i], pe - 25)            # the same 25-point stop, below
+            self.assertAlmostEqual(sig.target_price[i], pe + T)           # the same target distance, above
+            t = res.trades.iloc[0]
+            self.assertEqual(int(t["contracts"]), n)                       # normal sizing: same micros
+            self.assertEqual(t["exit_reason"], "STOP")                     # price falls back to fair: the long is stopped
+            self.assertEqual(st.explanations[i]["flip"]["style"], "same_distances")
+        ds = random_ds()
+        costs = cost_model_from_config(CFG, ds.instrument.symbol, provider="DUKASCOPY")
+        for phase in ("eval", "funded"):
+            b = FairStrategy(over, CAL, phase, news=NO_NEWS, point_value=self.pv)
+            self.assertTrue(check_causality(b, ds.bars, n_cuts=8).passed)
+            res = run_backtest(ds, b, costs, CFG["backtest"], sizing=b.sizing, contract=contract_for(CFG, b.sizing))
+            self.assertGreater(len(res.trades), 10)
+            self.assertEqual(res.skipped.get("BUSY_IN_POSITION_OR_ORDER", 0), 0)   # own tracking follows the flipped trade
+            for k in np.flatnonzero(b.last_signals.direction):
+                e = b.explanations[int(k)]
+                sg = b.last_signals
+                self.assertAlmostEqual(abs(e["planned_entry"] - sg.stop_price[k]), e["flip"]["setup_stop_points"])
+                self.assertAlmostEqual(abs(e["planned_entry"] - sg.target_price[k]), e["flip"]["setup_target_points"])
+
     def test_hash_unchanged_while_off(self):
         self.assertEqual(P.settings_hash({}), P.settings_hash({"models.flip": False}))
         self.assertNotEqual(P.settings_hash({}), P.settings_hash({"models.flip": True}))
+        self.assertEqual(P.settings_hash({"models.flip": True}), "6a6ecb19f2b01883")     # the first flip's results keep theirs
+        self.assertEqual(P.settings_hash({}), P.settings_hash({"models.flip_levels": "same_distances"}))   # inert while off
+        self.assertNotEqual(P.settings_hash({"models.flip": True}),
+                            P.settings_hash({"models.flip": True, "models.flip_levels": "same_distances"}))
 
 
 class TestCausality(unittest.TestCase):

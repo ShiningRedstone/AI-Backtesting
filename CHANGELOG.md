@@ -16,6 +16,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Real NQ results | REQUIRES REAL DATA (run on your PC) |
 | Fix: trades bigger than the prop account allows (e.g. 30 micros on a LucidFlex funded account that starts at 20) are cut to the allowed micros instead of ending the chain (the curve no longer goes flat after the first pass) | IMPLEMENTED, TESTED |
 | "Flip every trade": the same setups traded the other way (stop at the old target, target at the old stop, same micros; the rules follow the original setups) | IMPLEMENTED, TESTED |
+| Flip style "same distances": the whole trade flipped (same stop and target distances on the other side of the entry, same reward : risk; losses counted on the flipped trades) | IMPLEMENTED, TESTED |
 | Several accounts at once, discretionary fair-price moves, unexpected news, live-account / bonus tactics | NOT IMPLEMENTED |
 | My strategy (BP Blake), other backtests, fills, costs, prop rules, configs | UNCHANGED |
 

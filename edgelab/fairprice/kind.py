@@ -82,7 +82,7 @@ _FUNDED_REV = lambda s: s["funded.displacement"] or s["funded.bos"]    # noqa: E
 OPTIMIZER = {
     # the session opening times and the news time define WHICH sessions are traded; the cap is a safety limit
     "fixed": ("session.ny_am_open", "session.ny_pm_open", "session.asia_open", "session.london_open", "news.time",
-              "risk.max_contracts", "models.flip"),
+              "risk.max_contracts", "models.flip", "models.flip_levels"),
     "steps": {
         "session.window_minutes": 15, "session.exit_after_minutes": 30, "fair.cons_minutes": 10,
         "fair.cons_max_points": 10.0, "news.max_surprise_z": 0.5, "cont.max_minutes": 1, "cont.bias_hours": 2,
