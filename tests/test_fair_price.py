@@ -131,6 +131,70 @@ class TestKnownAnswer(unittest.TestCase):
         self.assertGreater(st2.stats["skipped_too_close_to_fair"], 0)
 
 
+class TestFlip(unittest.TestCase):
+    """The user's flip: the same setups traded the other way, stop at the old target, target at the old stop, same micros."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ds, at = known_ds()
+        cls.at = staticmethod(at)
+        cls.costs = cost_model_from_config(CFG, cls.ds.instrument.symbol, provider="DUKASCOPY")
+        cls.pv = contract_for(CFG, {"contract": "MNQ"}).point_value
+
+    def run_phase(self, phase, over):
+        st = FairStrategy(over, CAL, phase, news=NO_NEWS, point_value=self.pv)
+        res = run_backtest(self.ds, st, self.costs, CFG["backtest"], sizing=st.sizing, contract=contract_for(CFG, st.sizing))
+        return st, res
+
+    def test_known_day_flipped(self):
+        i = self.at(9, 44)
+        for phase, n in (("eval", 10), ("funded", 15)):
+            st, res = self.run_phase(phase, {"models.flip": True})
+            self.assertTrue(res.causality.passed)
+            sig = st.last_signals
+            self.assertEqual(list(np.flatnonzero(sig.direction)), [i])
+            self.assertEqual(sig.direction[i], 1)                         # the short setup, bought
+            tgt = 18045.0 - (38 if phase == "eval" else 50)
+            self.assertAlmostEqual(sig.stop_price[i], tgt)                 # stop at the setup's target
+            self.assertAlmostEqual(sig.target_price[i], 18045.0 + 25)     # target at the setup's stop
+            t = res.trades.iloc[0]
+            self.assertEqual(int(t["contracts"]), n)                       # the setup's contracts kept
+            # eval: price falls back to 18,000, through the flipped stop at 18,007; funded: the flipped stop (17,995) is
+            # never reached, the trade is closed at the session's time exit, below its entry
+            self.assertEqual(t["exit_reason"], "STOP" if phase == "eval" else "SIGNAL")
+            self.assertLess(float(t["net_r"]), 0)
+            e = st.explanations[i]
+            self.assertEqual((e["direction"], e["flip"]["setup_direction"], e["flip"]["contracts_kept"]), (1, -1, n))
+
+    def test_same_setups_inverted_and_causal(self):
+        ds = random_ds()
+        costs = cost_model_from_config(CFG, ds.instrument.symbol, provider="DUKASCOPY")
+        for phase in ("eval", "funded"):
+            a = FairStrategy({}, CAL, phase, news=NO_NEWS)
+            b = FairStrategy({"models.flip": True}, CAL, phase, news=NO_NEWS, point_value=self.pv)
+            sa, sb = a.generate_signals(ds.bars), b.generate_signals(ds.bars)
+            on = np.flatnonzero(sa.direction)
+            self.assertGreater(len(on), 10)
+            self.assertTrue(np.array_equal(on, np.flatnonzero(sb.direction)))       # the same setups
+            self.assertTrue(np.array_equal(sa.direction[on], -sb.direction[on]))    # inverted
+            self.assertTrue(np.allclose(sa.stop_price[on], sb.target_price[on]))    # levels swapped
+            self.assertTrue(np.allclose(sa.target_price[on], sb.stop_price[on]))
+            self.assertTrue(check_causality(b, ds.bars, n_cuts=8).passed)
+            ra = run_backtest(ds, a, costs, CFG["backtest"], sizing=a.sizing, contract=contract_for(CFG, a.sizing))
+            rb = run_backtest(ds, b, costs, CFG["backtest"], sizing=b.sizing, contract=contract_for(CFG, b.sizing))
+            ka = dict(zip(ra.trades["signal_bar"], ra.trades["contracts"]))
+            kb = dict(zip(rb.trades["signal_bar"], rb.trades["contracts"]))
+            common = set(ka) & set(kb)
+            self.assertGreater(len(common), 10)
+            self.assertTrue(all(ka[k] == kb[k] for k in common))                     # same micros
+        with self.assertRaises(ValueError):
+            FairStrategy({"models.flip": True}, CAL, "eval", news=NO_NEWS)           # needs the point value
+
+    def test_hash_unchanged_while_off(self):
+        self.assertEqual(P.settings_hash({}), P.settings_hash({"models.flip": False}))
+        self.assertNotEqual(P.settings_hash({}), P.settings_hash({"models.flip": True}))
+
+
 class TestCausality(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -42,6 +42,12 @@ SCHEMA: list[dict] = [
     # ---------------------------------------------------------------- models
     _p("models.direction", "Allowed directions", C, "both", "Restrict to longs or shorts.",
        options=["both", "long_only", "short_only"]),
+    _p("models.flip", "Flip every trade (take the opposite side)", B, False,
+       "Every setup is traded the other way with the same price levels: a long with its stop below and target above "
+       "becomes a short whose stop sits at the old target and whose target sits at the old stop, with the same number "
+       "of micros. The rules (incl. the losses-in-a-row stop) still follow the original setups, so the flipped run "
+       "takes exactly the same trades, inverted. Not a rule from the video: it tests whether the setups are reliably "
+       "wrong. Costs are paid either way.", S_U),
     _p("models.price_series", "Price series for the rules", C, "bid",
        "Candles the rules read (fills always use BID/ASK). 'mid' = average of BID and ASK.", options=["bid", "mid"]),
     # ---------------------------------------------------------------- sessions
@@ -194,7 +200,11 @@ def smt_used(s: dict) -> bool:          # interface of My strategy's params; Fai
 
 
 def identity(s: dict) -> dict:
-    return dict(s)
+    """``models.flip`` is left out while off, so settings from before it existed keep their hash (same strategy)."""
+    s = dict(s)
+    if not s["models.flip"]:
+        s.pop("models.flip")
+    return s
 
 
 def settings_hash(settings: dict) -> str:

@@ -25,7 +25,7 @@ class FairStrategy(Strategy):
     family = "fair_price"
 
     def __init__(self, settings: dict | None, calendar, phase: str, news: News | None = None, skip: set | None = None,
-                 trade_from_td: int | None = None):
+                 trade_from_td: int | None = None, point_value: float | None = None):
         s = P.resolve(settings)
         if P.news_used(s) and news is None:
             raise ValueError("these settings trade scheduled news, which needs the news calendar input (it may be empty)")
@@ -36,6 +36,9 @@ class FairStrategy(Strategy):
         self.news = news if P.news_used(s) else None
         self.skip = set(skip or ())
         self.trade_from_td = trade_from_td
+        self.point_value = point_value          # the execution contract's (flipped trades keep the setup's contracts)
+        if s["models.flip"] and not point_value:
+            raise ValueError("flipped trades need the execution contract's point value")
         self.sizing = sizing_of(s, phase)
         self.es = None
         self.explanations: dict[int, dict] = {}
@@ -45,7 +48,7 @@ class FairStrategy(Strategy):
 
     def generate_signals(self, bars) -> SignalSet:
         r = Rules(bars, self.calendar, self.settings, self.phase, news=self.news, skip=self.skip,
-                  trade_from_td=self.trade_from_td)
+                  trade_from_td=self.trade_from_td, point_value=self.point_value)
         sig, expl, stats = r.run()
         self.explanations, self.stats, self.days, self.last_signals = expl, stats, r.days, sig
         return sig

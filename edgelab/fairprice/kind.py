@@ -52,7 +52,9 @@ def execute(cfg, root, ds, s, news, *, td_from=None, skip=None, check=True, prof
         bt["require_causality_check"] = False
     strats, results = {}, {}
     for ph in PHASES:
-        st = FairStrategy(s, ds.calendar, ph, news=news, skip=(skip or {}).get(ph), trade_from_td=td_from)
+        contract = contract_for(cfg, {"contract": "MNQ"})
+        st = FairStrategy(s, ds.calendar, ph, news=news, skip=(skip or {}).get(ph), trade_from_td=td_from,
+                          point_value=contract.point_value)
         results[ph] = run_backtest(ds, st, costs, bt, sizing=st.sizing, contract=contract_for(cfg, st.sizing))
         strats[ph] = st
     a = pd.Timestamp(start) if start is not None else pd.Timestamp(int(ds.bars.ts_ns[0]), tz="UTC")
@@ -80,7 +82,7 @@ _FUNDED_REV = lambda s: s["funded.displacement"] or s["funded.bos"]    # noqa: E
 OPTIMIZER = {
     # the session opening times and the news time define WHICH sessions are traded; the cap is a safety limit
     "fixed": ("session.ny_am_open", "session.ny_pm_open", "session.asia_open", "session.london_open", "news.time",
-              "risk.max_contracts"),
+              "risk.max_contracts", "models.flip"),
     "steps": {
         "session.window_minutes": 15, "session.exit_after_minutes": 30, "fair.cons_minutes": 10,
         "fair.cons_max_points": 10.0, "news.max_surprise_z": 0.5, "cont.max_minutes": 1, "cont.bias_hours": 2,

@@ -15,6 +15,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Own protocols: 300 tries + 1 look, autotuner 5,000 tries + 1 look, holdout allowance 2 strategies x automatic + manual | IMPLEMENTED, TESTED |
 | Real NQ results | REQUIRES REAL DATA (run on your PC) |
 | Fix: trades bigger than the prop account allows (e.g. 30 micros on a LucidFlex funded account that starts at 20) are cut to the allowed micros instead of ending the chain (the curve no longer goes flat after the first pass) | IMPLEMENTED, TESTED |
+| "Flip every trade": the same setups traded the other way (stop at the old target, target at the old stop, same micros; the rules follow the original setups) | IMPLEMENTED, TESTED |
 | Several accounts at once, discretionary fair-price moves, unexpected news, live-account / bonus tactics | NOT IMPLEMENTED |
 | My strategy (BP Blake), other backtests, fills, costs, prop rules, configs | UNCHANGED |
 

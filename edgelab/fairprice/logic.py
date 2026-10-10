@@ -65,9 +65,12 @@ class News:
 
 class Rules:
     def __init__(self, bars, calendar, s: dict, phase: str, news: News | None = None, skip: set | None = None,
-                 trade_from_td: int | None = None):
+                 trade_from_td: int | None = None, point_value: float | None = None):
         if phase not in PHASES:
             raise ValueError(f"phase must be one of {PHASES}")
+        if s["models.flip"] and not (point_value and point_value > 0):
+            raise ValueError("flipped trades keep the original contracts, which needs the contract's point value")
+        self.pv = point_value
         self.s, self.phase, self.cal, self.news = s, phase, calendar, news
         self.skip = set(skip or ())
         self.trade_from_td = trade_from_td
@@ -314,17 +317,26 @@ class Rules:
             xbar, outcome = self._sim(d, i, stop, target, exit_bar, force)
             if outcome == "none":                    # counted only; whether it fills is the engine's business
                 self.stats["signals_not_filled_in_own_tracking"] += 1
-            sig.direction[i] = d
-            sig.stop_price[i], sig.target_price[i] = stop, target
-            if plan["risk_usd"] is not None:
-                risk[i] = plan["risk_usd"]
+            if s["models.flip"]:
+                fl = self._flip(i, d, plan)
+                sig.direction[i] = -d
+                sig.stop_price[i], sig.target_price[i] = fl["stop"], fl["target"]
+                risk[i] = fl["risk_usd"]
+                plan = {**plan, "explain": {**plan["explain"], **fl["explain"]}}
+                self.stats["signals_flipped"] += 1
+            else:
+                sig.direction[i] = d
+                sig.stop_price[i], sig.target_price[i] = stop, target
+                if plan["risk_usd"] is not None:
+                    risk[i] = plan["risk_usd"]
             info["signals"] += 1
             trades += 1
             self.stats[f"signals_{plan['setup']}"] += 1
             self.explain[i] = {**plan["explain"], "phase": phase, "session": ses["name"], "session_key": ses["key"],
                                "session_open": _iso(ses["open_ts"]), "fair": dict(fair),
                                "streak_before": streak, "trade_in_session": trades,
-                               "signal_ts": _iso(b.ts[i]), "model": plan["setup"], "direction": d}
+                               "signal_ts": _iso(b.ts[i]), "model": plan["setup"],
+                               "direction": -d if s["models.flip"] else d}
             xbar = max(i, xbar)
             self._busy, self._last_exit = xbar, xbar
             streak = streak + 1 if outcome == "loss" else 0
@@ -443,6 +455,26 @@ class Rules:
                                                    "checklist": {"towards the fair price": True,
                                                                  f"{kind.replace('bos', 'break of structure')}": True,
                                                                  "enough room to the fair price": True}})
+
+    def _flip(self, i: int, d: int, plan: dict) -> dict:
+        """The opposite trade of a setup (the user's rule): direction -d, stop at the setup's target, target at the setup's
+        stop, and the SAME contracts the setup would get. The engine sizes from a per-signal budget, so the budget is
+        (n + 0.5) x the flipped planned risk x point value: rounding down gives exactly n (0 stays 0). n = the setup's
+        contracts under the same rule as the engine (rounded down, capped)."""
+        s, pv = self.s, float(self.pv)
+        stop, target = plan["stop"], plan["target"]
+        S = abs(plan["explain"]["planned_entry"] - stop)
+        budget = plan["risk_usd"] if plan["risk_usd"] is not None else float(s["eval.risk_usd"])
+        n = min(int(math.floor(budget / (S * pv) + 1e-9)), int(s["risk.max_contracts"])) if S > 0 else 0
+        pe_f = float(self.ent[-d][3][i])                     # the flipped side's planned entry (BID for a short)
+        pr = abs(pe_f - target)
+        risk_usd = (n + 0.5) * pr * pv if n >= 1 and pr > 0 else 0.0
+        T = plan["explain"]["target_points"]
+        return {"stop": target, "target": stop, "risk_usd": risk_usd, "explain": {
+            "flip": {"setup_direction": d, "setup_stop": stop, "setup_target": target, "setup_stop_points": S,
+                     "setup_target_points": T, "setup_r_planned": round(T / S, 4) if S else None, "contracts_kept": n},
+            "planned_entry": pe_f, "stop": target, "target_price": stop, "stop_points": T, "target_points": S,
+            "risk_budget_usd": round(n * pr * pv, 2), "target": {"points": S, "r_planned": round(S / T, 4) if T else None}}}
 
     def _order(self, i: int, d: int, setup: str, pe: float, S: float, T: float, explain: dict) -> dict:
         s = self.s

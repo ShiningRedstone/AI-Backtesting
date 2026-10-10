@@ -3197,3 +3197,10 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   contract (R unchanged). `chain.fit_to_limits` finds each violation with the UNCHANGED lifecycle (and its permitted
   quantity) and repeats until none is left; cut trades keep `cut_from` and are counted per attempt (`cut_to_limit`) and
   shown on the report. Fair price only (the user's choice): My strategy's chain is unchanged.
+- **Flip (user request):** setting `models.flip` (off = left out of the settings hash, so earlier settings keep their identity;
+  fixed for the autotuner). Every setup is traded the other way at the same price levels: direction -d, stop at the setup's
+  target, target at the setup's stop, and the SAME contracts the setup would get (user's choice): the per-signal budget is
+  (n + 0.5) x the flipped planned risk x the MNQ point value, so the engine's floor rule gives exactly n. The rules (own
+  tracking, losses in a row, cooldown) follow the ORIGINAL setups (user's choice), so the flipped run takes the same setups,
+  inverted. Costs are paid either way, so a flip is not the negative of the original result. Tested: known day (both
+  phases), same setups inverted with swapped levels and equal contracts on random data, causality, hash unchanged while off.
