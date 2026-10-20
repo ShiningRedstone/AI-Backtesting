@@ -4,7 +4,8 @@ The backtests, reports, test plans, Strategy autotuner, holdout allowance and se
 ADR-103) serve more than one hand-built strategy. A ``Kind`` names what differs: the settings schema, the folder under
 the data root, the companion protocols (roles, scopes, texts), how a settings combination is run through the engine and
 what extra input it reads (ES for BP Blake's SMT, the news calendar for Fair price). ``BP`` (My strategy) is the default
-everywhere, so every existing call keeps exactly its behaviour; ``kinds.get("fair")`` is the Fair price strategy.
+everywhere, so every existing call keeps exactly its behaviour; ``kinds.get("fair")`` is the Fair price strategy,
+``kinds.get("pmb")`` the Premarket breakout (ADR-115).
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from typing import Any, Callable
 
 @dataclass(frozen=True)
 class Kind:
-    id: str                      # "my" | "fair" (API prefix /api/<id>)
+    id: str                      # "my" | "fair" | "pmb" (API prefix /api/<id>)
     label: str                   # shown in messages
     folder: str                  # <data>/<folder>/
     family: str                  # trial ledger family
@@ -36,6 +37,7 @@ class Kind:
     setup_reasons: dict = field(default_factory=dict)
     optimizer: dict = field(default_factory=dict)    # steps / fixed / inert_unless / contradicts / adjust
     phased: bool = False         # True: results are evaluation + funded phases (Fair price)
+    fit_limits: bool = False     # True: the challenge chain cuts trades bigger than the account allows (ADR-115)
 
     def strategy_ref(self, h: str) -> str:
         return f"{self.family}:{h}"
@@ -53,6 +55,9 @@ def get(kid: str | None = None) -> Kind:
         elif kid == "fair":
             from edgelab.fairprice.kind import fair_kind
             k = fair_kind()
+        elif kid == "pmb":
+            from edgelab.pmbreakout.kind import pm_kind
+            k = pm_kind()
         else:
             raise KeyError(kid)
         _CACHE[kid] = k

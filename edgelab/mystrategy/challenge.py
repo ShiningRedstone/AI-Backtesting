@@ -125,8 +125,10 @@ def resizer_for(cfg: Mapping, ds, strat, trades: pd.DataFrame) -> Resizer:
     return Resizer(trades, sig, ds.bars, sizing, inst, costs, strat.order)
 
 
-def chain(rs: Resizer, profile: Mapping, start, until=None) -> dict:
-    """The fee-free attempt chain of one rule profile from ``start`` (trades entered before ``until`` only)."""
+def chain(rs: Resizer, profile: Mapping, start, until=None, fit: bool = False) -> dict:
+    """The fee-free attempt chain of one rule profile from ``start`` (trades entered before ``until`` only). ``fit``
+    (ADR-115, Premarket breakout): a trade bigger than the account allows at that moment is cut to its limit
+    (``fairprice.chain.fit_to_limits``, the user's rule from ADR-114) instead of ending the chain."""
     from edgelab.paper.engine import run_attempts
     from edgelab.prop.simulator import PropDataError
     from edgelab.prop.profiles import resolve
@@ -135,7 +137,11 @@ def chain(rs: Resizer, profile: Mapping, start, until=None) -> dict:
     balance = float(resolve(profile)["evaluation"]["starting_balance"])
     before = rs.dropped
     try:
-        r = run_attempts(lambda t: rs.from_(t, balance, until), profile, {}, start)
+        if fit:
+            from edgelab.fairprice.chain import fit_to_limits
+            r = run_attempts(lambda t: fit_to_limits(rs.from_(t, balance, until), profile), profile, {}, start)
+        else:
+            r = run_attempts(lambda t: rs.from_(t, balance, until), profile, {}, start)
     except PropDataError as exc:
         return {"v": CHAIN_VERSION, "error": str(exc)}
     atts = [a for a in r["attempts"]]
@@ -148,7 +154,8 @@ def chain(rs: Resizer, profile: Mapping, start, until=None) -> dict:
         "stopped": r["stopped"], "dropped": rs.dropped - before}
 
 
-def chains(cfg: Mapping, root, ds, strat, trades: pd.DataFrame, start, profile_ids=None, until=None) -> dict:
+def chains(cfg: Mapping, root, ds, strat, trades: pd.DataFrame, start, profile_ids=None, until=None,
+           fit: bool = False) -> dict:
     """{profile_id: raw chain} for the registered rule profiles (all, or ``profile_ids``)."""
     from edgelab.prop.service import default_profiles
     rs = resizer_for(cfg, ds, strat, trades)
@@ -162,7 +169,7 @@ def chains(cfg: Mapping, root, ds, strat, trades: pd.DataFrame, start, profile_i
         if unit and contract != unit:
             out[pid] = {"v": CHAIN_VERSION, "error": f"the profile limits {unit} contracts; these trades are {contract}"}
             continue
-        out[pid] = chain(rs, p, start, until)
+        out[pid] = chain(rs, p, start, until, fit=fit)
     return out
 
 

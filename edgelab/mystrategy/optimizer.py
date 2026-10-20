@@ -484,7 +484,7 @@ def evaluate_phased(K, cfg: dict, ds, extra, root, win: tuple, split, td_from: i
 
 
 def evaluate(cfg: dict, ds, es, root, win: tuple, split, td_from: int, overrides: dict, profiles: list[str] | None,
-             *, check: bool = False) -> dict:
+             *, check: bool = False, K=None) -> dict:
     """One settings combination through the engine on the whole discovery window, numbers per part. ``check=False``
     (a try): no lookahead check, the train and check parts with the chains of ``profiles``. ``check=True`` (a new best):
     the empirical lookahead check, plus the whole window with every profile's chain and the months. Pure: no files."""
@@ -494,17 +494,22 @@ def evaluate(cfg: dict, ds, es, root, win: tuple, split, td_from: int, overrides
     from edgelab.mystrategy.records import report_numbers
     from edgelab.mystrategy.strategy import MyStrategy
     from edgelab.prop.service import default_profiles
-    s = P.resolve(overrides)
-    if P.smt_used(s) and es is None:
-        raise R.MyStrategyError("ES_DATA_REQUIRED", "These settings use SMT divergence, which needs ES data covering "
-                                                    "the discovery period.")
-    strat = MyStrategy(s, ds.calendar, trade_from_td=td_from, es=es)
-    check_identity(ds.instrument)
-    costs = cost_model_from_config(cfg, ds.instrument.symbol, provider=ds.manifest.provider)
-    bt = dict(cfg["backtest"])
-    if not check:
-        bt["require_causality_check"] = False          # a try: the check runs on every new best and the final result
-    res = run_backtest(ds, strat, costs, bt, sizing=strat.sizing, contract=contract_for(cfg, strat.sizing))
+    K = KD.of(K)
+    if K.id != "my":                                     # ADR-115: another one-run kind (Premarket breakout)
+        s = K.P.resolve(overrides)
+        strat, res = K.execute(cfg, root, ds, s, es, td_from=td_from, check=check)
+    else:
+        s = P.resolve(overrides)
+        if P.smt_used(s) and es is None:
+            raise R.MyStrategyError("ES_DATA_REQUIRED", "These settings use SMT divergence, which needs ES data "
+                                                        "covering the discovery period.")
+        strat = MyStrategy(s, ds.calendar, trade_from_td=td_from, es=es)
+        check_identity(ds.instrument)
+        costs = cost_model_from_config(cfg, ds.instrument.symbol, provider=ds.manifest.provider)
+        bt = dict(cfg["backtest"])
+        if not check:
+            bt["require_causality_check"] = False      # a try: the check runs on every new best and the final result
+        res = run_backtest(ds, strat, costs, bt, sizing=strat.sizing, contract=contract_for(cfg, strat.sizing))
     tr = res.trades
     rs = CH.resizer_for(cfg, ds, strat, tr)
     entry = pd.to_datetime(tr["entry_ts"], utc=True) if len(tr) else None
@@ -522,16 +527,17 @@ def evaluate(cfg: dict, ds, es, root, win: tuple, split, td_from: int, overrides
         nums = report_numbers(sub, a, b, sample)
         met = nums["metrics"]
         part = {"metrics": {k: met.get(k) for k in METRIC_KEYS},
-                "chains": {p["profile_id"]: CH.chain(rs, p, a, until=b if name == "train" else None) for p in profs}}
+                "chains": {p["profile_id"]: CH.chain(rs, p, a, until=b if name == "train" else None, fit=K.fit_limits)
+                           for p in profs}}
         if name == "full":
             part["monthly"] = nums["monthly"]
             part["weekly"] = met.get("weekly")
             part["prop_brief_all"] = True
         parts[name] = part
-    return {"settings_hash": P.settings_hash(s), "strategy_id": res.strategy_id, "trades_hash": res.trades_hash,
+    return {"settings_hash": K.P.settings_hash(s), "strategy_id": res.strategy_id, "trades_hash": res.trades_hash,
             "causality_passed": None if res.causality is None else bool(res.causality.passed),
             "n_signals": res.n_signals, "trade_count": int(len(tr)), "parts": parts,
-            "evaluated_content_hash": R.evaluated_hash(ds, s, es)}
+            "evaluated_content_hash": K.evaluated_hash(ds, s, es)}
 
 
 def _task(kind: str, tag, overrides: dict, profiles) -> dict:
@@ -543,7 +549,7 @@ def _task(kind: str, tag, overrides: dict, profiles) -> dict:
                                   overrides, profiles, _W.get("metrics_profile"), check=(kind == "check"))
         else:
             out = evaluate(_W["cfg"], _W["ds"], _W["es"], _W["root"], _W["win"], _W["split"], _W["td_from"], overrides,
-                           profiles, check=(kind == "check"))
+                           profiles, check=(kind == "check"), K=K)
     except Exception as exc:                             # noqa: BLE001 - recorded as a failed try / check
         code = getattr(exc, "code", None)
         msg = getattr(exc, "message", None) or str(exc)

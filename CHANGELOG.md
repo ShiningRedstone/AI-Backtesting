@@ -3,6 +3,18 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Premarket breakout: your premarket high / low breakout strategy (ADR-115)
+
+| Item | Status |
+|---|---|
+| Tab "Premarket breakout" with Overview, Settings, Backtest, Trades, Strategy autotuner, Setup review, Holdout review (same machinery as My strategy) | IMPLEMENTED, TESTED |
+| Rules: New York premarket high / low (4:00-9:30), a 5-minute close beyond it, stop at the candle's wick, target 1 : 8; both directions, first breakout of the day, closed at 15:55 (all settings) | IMPLEMENTED, TESTED (known answer + lookahead check) |
+| Own protocols: 300 tries + 1 look, autotuner 5,000 tries + 1 look, holdout allowance 2 strategies x automatic + manual | IMPLEMENTED, TESTED |
+| Prop chain cuts trades bigger than the account allows to the allowed micros (as for Fair price) | IMPLEMENTED, TESTED |
+| Holdout / setup review "Planned" line no longer assumes My strategy's explanation shape | IMPLEMENTED |
+| Real NQ results | REQUIRES REAL DATA (run on your PC) |
+| My strategy, Fair price, other backtests, engine, fills, costs, prop rules, configs | UNCHANGED |
+
 ## Fair price: the "fair pricing theory" strategy as a second hand-built strategy (ADR-114)
 
 | Item | Status |

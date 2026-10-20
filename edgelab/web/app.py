@@ -1130,8 +1130,11 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
 
     # ------------------------------------------------------------------ My strategy (ADR-93) / Fair price (ADR-114)
     def _kind():
-        """The strategy kind of a My strategy route: /api/fair/* = Fair price, /api/my/* = My strategy (BP Blake)."""
-        return "fair" if request.path.startswith("/api/fair") else None
+        """The strategy kind of a My strategy route: /api/fair/* = Fair price, /api/pmb/* = Premarket breakout (ADR-115),
+        /api/my/* = My strategy (BP Blake)."""
+        if request.path.startswith("/api/fair"):
+            return "fair"
+        return "pmb" if request.path.startswith("/api/pmb") else None
 
     @app.get("/api/my")
     def my_overview():
@@ -1514,9 +1517,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
     for rule in [r for r in app.url_map.iter_rules() if r.rule == "/api/my" or r.rule.startswith("/api/my/")]:
         if rule.rule.startswith("/api/my/es"):
             continue
-        app.add_url_rule("/api/fair" + rule.rule[len("/api/my"):], endpoint="fair__" + rule.endpoint,
-                         view_func=app.view_functions[rule.endpoint],
-                         methods=sorted(m for m in rule.methods if m not in ("HEAD", "OPTIONS")))
+        for pre in ("fair", "pmb"):                 # ADR-115: Premarket breakout the same way
+            app.add_url_rule(f"/api/{pre}" + rule.rule[len("/api/my"):], endpoint=f"{pre}__" + rule.endpoint,
+                             view_func=app.view_functions[rule.endpoint],
+                             methods=sorted(m for m in rule.methods if m not in ("HEAD", "OPTIONS")))
 
     # ------------------------------------------------------------------ static SPA
     @app.get("/api/<path:_rest>")

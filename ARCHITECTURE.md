@@ -3209,3 +3209,35 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   target distances (same reward : risk), sized by the normal rules (same budget on the same stop distance = same micros).
   The strategy's own tracking, the losses-in-a-row rule and the cooldown follow the FLIPPED trade (user's choice; its exits
   differ from the setup's). Both flip settings are fixed for the autotuner.
+
+### ADR-115 Premarket breakout: a third hand-built strategy (the user's own rules) on the My strategy machinery
+- **Request (user):** "Mark out NY premarket H and L, then wait for a 5min candle to close above it. Enter and set SL at
+  candle wick low / high and TP at 1 : 8 RR. Build it for NQ so I can backtest and do a holdout"; where it goes and every
+  other detail left to us. Choice: a new tab "Premarket breakout" with everything My strategy / Fair price have.
+- **Rules** (`edgelab/pmbreakout/{params,logic,strategy}.py`, 24 settings, `PARAMS_VERSION` 1, `RULES_VERSION` 1). The
+  user's rules (marked "Your rule"): the 5-minute breakout candle, the stop at its wick, the 1 : 8 target. Chosen defaults
+  (marked, all settings): premarket = 1m bars 4:00 to before 9:30 New York (days with < 60 premarket bars skipped); both
+  directions (a close below the low = short, the mirror of the rule); breakout candles on the New York clock (buckets
+  anchored at the 18:00 session open, `frames.build_tf`) starting 9:30 to before 12:00; any close beyond the level; only
+  the first close beyond each level; 1 trade a day; market entry at the next minute's open; planned entry = the entry
+  side's close (ASK for buys, BID for sells), target = entry + 8 x the stop distance; open trades closed at 15:55; $500
+  risk in MNQ, at most 40. Optional: range / stop size limits, stop buffer, entry buffer, 1m / 3m / 15m candles, weekdays,
+  mid prices, equity-% sizing. The signal is at the bar where the candle is known complete; the strategy's own copy of
+  each trade (engine rules) only tracks when it is flat; the signal is always emitted. Causal; every variant passes the
+  engine's lookahead check.
+- **Shared machinery:** `Kind` id `pmb` (`edgelab/pmbreakout/kind.py`, `<data>/pm_breakout/`), companion roles
+  `pm_breakout` (300 tries + 1 look), `pm_optimizer` (5,000 tries + 1 look), `pm_holdout` (2 strategies x automatic +
+  manual). One engine run per backtest (not phased). The kind-neutral paths added for it: `optimizer.evaluate(K=)` and
+  `review._run` run a non-BP one-run kind through `K.execute` (BP's paths unchanged). The autotuner never changes the size,
+  the contract cap or the breakout candle's timeframe.
+- **Prop chain:** `Kind.fit_limits` -> `challenge.chain(fit=True)`: a trade bigger than the account allows at that moment
+  is cut to the allowed micros (`fairprice.chain.fit_to_limits`, the user's rule from ADR-114) instead of ending the chain
+  INCOMPATIBLE. Default `fit=False`: My strategy's chain is unchanged.
+- **API / UI:** every `/api/my/*` route also under `/api/pmb/*` (not the ES import). Tab "Premarket breakout" (Overview with
+  `web/src/content/pm_breakout.md`, Settings, Backtest, Trades, Strategy autotuner, Setup review, Holdout review); trade
+  chart with the premarket range and the breakout candle, reasons and checklist in `web/src/pages/pmExplain.tsx`. The
+  holdout / setup review "Planned" lines read the planned levels kind-neutrally (they assumed BP's shape).
+- **Tests** (`tests/test_pm_breakout.py`): settings; a hand-built day gives the long at 9:34 (stop at the 17,998 wick, 8 R
+  target, 14 MNQ, TARGET exit) and settings change the answer as expected; a declined signal is not traded; causality of
+  rule variants; the chain cut; autotuner tweaks and one try; a workspace flow (own protocol, setup review, holdout
+  allowance, My strategy and Fair price untouched) and the `/api/pmb` routes.

@@ -158,6 +158,15 @@ def _run(svc, st: dict, lock=None, K=None):
                 memo.pop(next(iter(memo)))
             memo[key] = out
         return out
+    if K.id != "my":                          # ADR-115: a one-run kind without extra inputs (Premarket breakout)
+        strat, res = K.execute(svc.cfg, svc.root, ds, K.P.resolve(s), None,
+                               td_from=R._trading_date_ord(ds.calendar, start), skip=set(skip), check=False)
+        out = (strat, res, ds)
+        with _MEMO_LOCK:
+            if len(memo) > 6:
+                memo.pop(next(iter(memo)))
+            memo[key] = out
+        return out
     es = R.es_for(svc, P.resolve(s), ds, (start, end))
     if P.smt_used(P.resolve(s)) and (es is None or es.content_hash != st.get("es_content_hash")):
         raise R.MyStrategyError("ES_DATA_CHANGED", "The ES data changed since this holdout review started; the review "

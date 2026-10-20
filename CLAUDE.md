@@ -225,8 +225,11 @@ funded rules) combined by the prop chain (`fairprice/chain.py`: eval trades unti
 as traded under the pass-criteria account. Engine: optional `SignalSet.risk_usd` per-signal budget (funded dollar win; absent =
 unchanged). The My strategy runner / optimizer / holdout / setup review take a `mystrategy/kind.py` Kind (BP = default, unchanged);
 Fair price routes = `/api/fair/*`, pages via `web/src/pages/myKind.tsx`; own companion roles `fair_price` / `fair_optimizer` / `fair_holdout`.
+ADR-115: tab "Premarket breakout" (`edgelab/pmbreakout/`, Kind `pmb`, `/api/pmb/*`, `web/src/pages/pmExplain.tsx`): the user's rules
+(NY premarket 4:00-9:30 high / low, a 5m close beyond it, stop at the candle's wick, 1 : 8 target), 24 settings; companion roles
+`pm_breakout` / `pm_optimizer` / `pm_holdout`; its chain cuts oversized trades (`Kind.fit_limits`, `challenge.chain(fit=)`).
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-114.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-115.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -292,6 +295,7 @@ remains. Do not rely on this file alone.
     "Predictor" (ADR-113): the 15-min candle forecast and the level map drawn live on NQ / MNQ charts.
   - Fair price (ADR-114): the same sub-tabs as My strategy for the "fair pricing theory" strategy (evaluation / funded rules
     switched by the prop chain).
+  - Premarket breakout (ADR-115): the same sub-tabs for the user's premarket high / low breakout (5m close, wick stop, 1 : 8).
   - Edge lab (ADR-104/105): Edge check (frozen NQ hypotheses: 9:30-11:00 and the last half hour; discovery or earlier days of
     another dataset; strict statistics), Trade anatomy (My strategy reports, corrected for the number of tries).
   - Settings: display first (theme, USD/CHF + rate, chart grouping + distance, Show IDs / read-only, risk per trade),
@@ -518,4 +522,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-114). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-115). Update `README.md` status for phases.

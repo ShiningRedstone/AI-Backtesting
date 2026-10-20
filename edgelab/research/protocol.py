@@ -177,6 +177,12 @@ FAIR_OPTIMIZER_ROLE = "fair_optimizer"        # ADR-114: Fair price Strategy aut
 FAIR_OPTIMIZER_SCOPE_SUFFIX = "#fair_optimizer"
 FAIR_HOLDOUT_ROLE = "fair_holdout"            # ADR-114: Fair price holdout allowance (2 strategies, automatic + manual)
 FAIR_HOLDOUT_SCOPE_SUFFIX = "#fair_holdout"
+PMB_STRATEGY_ROLE = "pm_breakout"             # ADR-115: Premarket breakout backtests (own budget, like My strategy)
+PMB_STRATEGY_SCOPE_SUFFIX = "#pm_breakout"
+PMB_OPTIMIZER_ROLE = "pm_optimizer"           # ADR-115: Premarket breakout Strategy autotuner
+PMB_OPTIMIZER_SCOPE_SUFFIX = "#pm_optimizer"
+PMB_HOLDOUT_ROLE = "pm_holdout"               # ADR-115: Premarket breakout holdout allowance (2 strategies)
+PMB_HOLDOUT_SCOPE_SUFFIX = "#pm_holdout"
 
 
 def is_companion(rec: Mapping) -> bool:
@@ -184,7 +190,8 @@ def is_companion(rec: Mapping) -> bool:
     mat = rec.get("material", rec)
     return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE, OPTIMIZER_ROLE,
                                MY_HOLDOUT_ROLE, MARKET_SIM_ROLE, MARKET_DIRECTION_ROLE, FAIR_STRATEGY_ROLE,
-                               FAIR_OPTIMIZER_ROLE, FAIR_HOLDOUT_ROLE)
+                               FAIR_OPTIMIZER_ROLE, FAIR_HOLDOUT_ROLE, PMB_STRATEGY_ROLE, PMB_OPTIMIZER_ROLE,
+                               PMB_HOLDOUT_ROLE)
 
 
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,

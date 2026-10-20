@@ -24,7 +24,7 @@ import { MarketBehaviourPage, MarketDayReplayPage, MarketHoldoutPage, MarketLive
 import { EdgeCheckPage, TradeAnatomyPage } from "../pages/Edge";
 import { ChartsPage } from "../pages/charts/ChartsPage";
 import { MyBacktestPage, MyHoldoutPage, MyOverviewPage, MyPlanResultPage, MySettingsPage, MySetupReviewPage, MyTradePage, MyTradesPage } from "../pages/MyStrategy";
-import { FAIR_KIND, KindProvider } from "../pages/myKind";
+import { FAIR_KIND, KindProvider, PMB_KIND } from "../pages/myKind";
 import { UpdateBanner, VersionChip } from "../components/updates";
 import { WelcomePage } from "../components/workspace";
 import type { WorkspaceState } from "../api/types";
@@ -44,6 +44,8 @@ const NAV: NavItem[] = [
   { path: "/my", label: "My strategy", tid: "my", icon: "sparkle", heads: ["my", "my-settings", "my-backtest", "my-trades", "my-holdout", "my-plan", "my-setup", "my-autotune"] },
   { path: "/fair", label: "Fair price", tid: "fair", icon: "compare",                                             // ADR-114
     heads: ["fair", "fair-settings", "fair-backtest", "fair-trades", "fair-holdout", "fair-plan", "fair-setup", "fair-autotune"] },
+  { path: "/pmb", label: "Premarket breakout", tid: "pmb", icon: "flow",                                        // ADR-115
+    heads: ["pmb", "pmb-settings", "pmb-backtest", "pmb-trades", "pmb-holdout", "pmb-plan", "pmb-setup", "pmb-autotune"] },
   { path: "/charts", label: "Charts", tid: "charts", icon: "candles", heads: ["charts"] },                    // ADR-111: live charts
   { path: "/edge", label: "Edge lab", tid: "edge", icon: "search", heads: ["edge", "edge-anatomy"] },          // ADR-104
   { path: "/market", label: "Market simulator", tid: "market", icon: "pulse",
@@ -76,6 +78,10 @@ const SUBTABS: Record<string, { path: string; label: string; head: string }[]> =
     { path: "/fair-backtest", label: "Backtest", head: "fair-backtest" }, { path: "/fair-trades", label: "Trades", head: "fair-trades" },
     { path: "/fair-autotune", label: "Strategy autotuner", head: "fair-autotune" }, { path: "/fair-setup", label: "Setup review", head: "fair-setup" },
     { path: "/fair-holdout", label: "Holdout review", head: "fair-holdout" }],
+  pmb: [{ path: "/pmb", label: "Overview", head: "pmb" }, { path: "/pmb-settings", label: "Settings", head: "pmb-settings" },          // ADR-115
+    { path: "/pmb-backtest", label: "Backtest", head: "pmb-backtest" }, { path: "/pmb-trades", label: "Trades", head: "pmb-trades" },
+    { path: "/pmb-autotune", label: "Strategy autotuner", head: "pmb-autotune" }, { path: "/pmb-setup", label: "Setup review", head: "pmb-setup" },
+    { path: "/pmb-holdout", label: "Holdout review", head: "pmb-holdout" }],
 };
 
 const MARKET_ALIAS: Record<string, string> = { "market-trend": "market-behaviour", "market-nqes": "market-behaviour",   // ADR-110: old routes
@@ -149,6 +155,14 @@ function Page() {
         : route.parts[0] === "fair-holdout" ? <MyHoldoutPage /> : route.parts[0] === "fair-setup" ? <MySetupReviewPage />
         : route.parts[0] === "fair-autotune" ? <MyAutotunePage /> : <MyPlanResultPage />;
       return <KindProvider kind={FAIR_KIND}>{page}</KindProvider>;
+    }
+    case "pmb": case "pmb-settings": case "pmb-backtest": case "pmb-trades": case "pmb-holdout": case "pmb-setup":
+    case "pmb-autotune": case "pmb-plan": {                      // ADR-115: the same pages for the Premarket breakout
+      const h = route.parts[0].slice(4);
+      const page = h === "" ? <MyOverviewPage /> : h === "settings" ? <MySettingsPage /> : h === "backtest" ? <MyBacktestPage />
+        : h === "trades" ? (route.parts[2] ? <MyTradePage key={`${route.parts[1]}/${route.parts[2]}`} /> : <MyTradesPage key={route.parts[1] ?? ""} />)
+        : h === "holdout" ? <MyHoldoutPage /> : h === "setup" ? <MySetupReviewPage /> : h === "autotune" ? <MyAutotunePage /> : <MyPlanResultPage />;
+      return <KindProvider kind={PMB_KIND}>{page}</KindProvider>;
     }
     case "charts": return <ChartsPage />;                        // ADR-111: live charts
     case "edge": return <EdgeCheckPage />;                       // ADR-104: Edge lab

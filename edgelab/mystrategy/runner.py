@@ -393,7 +393,7 @@ def challenge_of(svc, ds, strat, res, win, K=None) -> dict:
             return {"version": CH.CHAIN_VERSION, "phase_chain_version": FV, "start": win[0].isoformat(),
                     "profiles": all_chains(svc.root, res, win[0])}
         return {"version": CH.CHAIN_VERSION, "start": win[0].isoformat(),
-                "profiles": CH.chains(svc.cfg, svc.root, ds, strat, res.trades, win[0])}
+                "profiles": CH.chains(svc.cfg, svc.root, ds, strat, res.trades, win[0], fit=KD.of(K).fit_limits)}
     except Exception as exc:                             # noqa: BLE001 - shown as unavailable, the report stands
         return {"version": CH.CHAIN_VERSION, "error": f"{type(exc).__name__}: {exc}"[:300]}
 

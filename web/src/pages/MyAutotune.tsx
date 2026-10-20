@@ -80,6 +80,7 @@ function HowCard({ st }: { st: OptStatus }) {
       <ol className="small at-how">
         <li>Pick one of your backtests. Its settings are the starting point {kindId === "fair"
           ? "(the session opening times and the contract cap are never changed; the evaluation risk and the funded dollar win are tuned like every other setting)."
+          : kindId === "pmb" ? "(the position size, the contract cap and the breakout candle's timeframe are never changed)."
           : "(position size and the flip switch are never changed)."}</li>
         <li>The autotuner tries one change at a time: a switch flipped, another choice, a number one step up or down, a time 15 minutes earlier or later.
           Settings that cannot change any trade with the current settings are skipped.</li>

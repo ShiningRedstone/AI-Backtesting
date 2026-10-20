@@ -20,6 +20,9 @@ import { Badge, Banner, Button, Card, Checkbox, Confirm, Empty, ErrorPanel, Fiel
 import summaryText from "../content/my_strategy.md";
 import fairSummaryText from "../content/fair_price.md";
 import { FairExplain, FairTradeCharts, PHASE_WORD, SETUP_WORD } from "./fairExplain";
+import pmSummaryText from "../content/pm_breakout.md";
+import { PmExplain, PmTradeCharts } from "./pmExplain";
+import type { PmExplanation } from "./pmExplain";
 import type { FairExplanation } from "./fairExplain";
 
 const TF_MIN: Record<string, number> = { "1m": 1, "2m": 2, "3m": 3, "4m": 4, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1D": 1440 };
@@ -54,7 +57,8 @@ const STAT_LABEL: Record<string, string> = {
   signals_declined_in_review: "Declined in the holdout review", signals_flipped: "Flipped (traded the other way)",
   setup_rejected_no_smt: "No SMT divergence with ES", setup_rejected_smt_unknown: "SMT unknown (ES minutes missing)",
 };
-export const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step" : m ? (SETUP_WORD[m] ?? m) : "–");
+export const MODEL = (m?: string) => (m === "judas" ? "Judas swing" : m === "ny_4step" ? "NY four-step"
+  : m === "breakout" ? "Premarket breakout" : m ? (SETUP_WORD[m] ?? m) : "–");
 
 export function useJob(onDone?: (j: MyJob) => void): [MyJob | null, (j: MyJob) => void] {
   const { api: my } = useKind();
@@ -100,8 +104,9 @@ export function MyOverviewPage() {
       {data && !data.protocol.ready && <Banner tone="warn">{data.protocol.problem}</Banner>}
       {data && <StatusKpis data={data} latest={latest} />}
       {kindId === "fair" && data?.news && <NewsLine news={data.news} />}
-      <Card title={kindId === "fair" ? "Fair price strategy: summary" : "BP Blake's strategy: summary"} testId="my-summary">
-        <Markdown text={kindId === "fair" ? fairSummaryText : summaryText} />
+      <Card title={kindId === "fair" ? "Fair price strategy: summary" : kindId === "pmb" ? "Premarket breakout: summary"
+        : "BP Blake's strategy: summary"} testId="my-summary">
+        <Markdown text={kindId === "fair" ? fairSummaryText : kindId === "pmb" ? pmSummaryText : summaryText} />
       </Card>
     </div>
   );
@@ -760,6 +765,14 @@ export function MyTradePage() {
   );
 }
 
+/** The planned entry / stop / target of a signal for any strategy kind (each records them in its own shape). */
+function planned(e: Explanation): { entry?: number; stop?: number; target?: number; rr?: number } {
+  const x = e as unknown as { entry?: { reference_price?: number }; planned_entry?: number; stop?: number | { price?: number };
+    target?: { price?: number; r_planned?: number }; target_price?: number };
+  return { entry: x.entry?.reference_price ?? x.planned_entry, stop: typeof x.stop === "number" ? x.stop : x.stop?.price,
+    target: x.target?.price ?? x.target_price, rr: x.target?.r_planned };
+}
+
 /** Why the strategy entered, in plain words (built from the recorded explanation; nothing recomputed). */
 function smtText(s: NonNullable<Explanation["smt"]>, up: boolean): string {
   const w = up ? "low" : "high";
@@ -796,6 +809,7 @@ function TradeExplain({ e }: { e: Explanation }) {
   const { id } = useKind();
   if (!e) return null;
   if (id === "fair") return <FairExplain e={e as unknown as FairExplanation} />;
+  if (id === "pmb") return <PmExplain e={e as unknown as PmExplanation} />;
   return (
     <div className="grid-cards">
       <Card title="Why it entered" testId="my-explain">
@@ -817,6 +831,7 @@ function TradeExplain({ e }: { e: Explanation }) {
 /** The trade chart of the strategy the page shows (ADR-114: Fair price has its own). */
 export function TradeCharts(props: Parameters<typeof BpTradeCharts>[0]) {
   const { id } = useKind();
+  if (id === "pmb") return <PmTradeCharts {...(props as unknown as Parameters<typeof PmTradeCharts>[0])} />;
   return id === "fair" ? <FairTradeCharts {...(props as unknown as Parameters<typeof FairTradeCharts>[0])} /> : <BpTradeCharts {...props} />;
 }
 
@@ -944,8 +959,8 @@ export function MyHoldoutPage() {
                 <div className="inline" style={{ justifyContent: "space-between" }}>
                   <div>
                     <b>{dirWord(data.candidate.explanation.direction)} at {nyTime(sec(data.candidate.signal_ts) + 60)}</b>
-                    <div className="muted small">Planned: entry about {px(data.candidate.explanation.entry.reference_price)}, stop {px(data.candidate.explanation.stop.price)},
-                      target {px(data.candidate.explanation.target.price)} (1 : {n(data.candidate.explanation.target.r_planned, 1)}).</div>
+                    <div className="muted small">Planned: entry about {px(planned(data.candidate.explanation).entry)}, stop {px(planned(data.candidate.explanation).stop)},
+                      target {px(planned(data.candidate.explanation).target)} (1 : {n(planned(data.candidate.explanation).rr, 1)}).</div>
                   </div>
                   <div className="inline">
                     <Button kind="primary" onClick={() => decide(true)} busy={busy} testId="my-take">Take trade</Button>
@@ -1156,8 +1171,8 @@ function SetupReviewRun({ id }: { id: string }) {
               <Button small kind="ghost" onClick={undo} disabled={busy || !pr?.decided} testId="my-setup-undo">Undo last</Button>
               <Button kind="primary" onClick={() => decide(true)} busy={busy && !skipping} disabled={busy} testId="my-setup-take">Take</Button>
               <Button onClick={() => setSkipping(!skipping)} disabled={busy} testId="my-setup-skip">Skip…</Button></div>}>
-            <p className="muted">Planned: entry about {px(c.explanation.entry.reference_price)}, stop {px(c.explanation.stop.price)},
-              target {px(c.explanation.target.price)} ({n(c.explanation.target.r_planned, 2)} R). Score {c.explanation.quality}.</p>
+            <p className="muted">Planned: entry about {px(planned(c.explanation).entry)}, stop {px(planned(c.explanation).stop)},
+              target {px(planned(c.explanation).target)} ({n(planned(c.explanation).rr, 2)} R){c.explanation.quality != null ? `. Score ${c.explanation.quality}` : ""}.</p>
             {skipping && (
               <div className="my-skip-box" data-testid="my-setup-reasons">
                 <p><b>Why skip it?</b> Tick one or more.</p>
