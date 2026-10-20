@@ -3,6 +3,14 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Strategy file: NY open 12 EMA trail (`strategies/user/ny_open_ema12_trail.yaml`)
+
+| Item | Status |
+|---|---|
+| Your rules as a Builder strategy (no new tab): first 5m candle of the 9:30 NY open closes above / below the 12 EMA -> long / short; no take profit; stop starts at the 12 EMA and trails it, moved only at candle closes (DSL `exit.trailing` level mode) | IMPLEMENTED (validated, synthetic backtest ran) |
+| Real NQ results | REQUIRES REAL DATA (load it in Strategies -> Builder -> "Load file...") |
+| Engine, DSL, configs | UNCHANGED |
+
 ## Premarket breakout: your premarket high / low breakout strategy (ADR-115)
 
 | Item | Status |

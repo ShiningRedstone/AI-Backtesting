@@ -1,0 +1,32 @@
+# User strategy (requested in chat): first 5-minute candle of the New York 9:30 open vs the 12 EMA.
+# Close above the EMA -> long, below -> short. No take profit; the stop starts at the 12 EMA and trails along it,
+# moved only at candle closes (exit.trailing level mode: decided at a bar close, effective from the next bar).
+# Not a claim that this strategy has an edge. Load it with Strategies -> Builder -> "Load file...".
+dsl_version: 1
+name: ny_open_ema12_trail
+description: First 5m candle of the 9:30 NY open closes above / below the 12 EMA; stop trails the 12 EMA on candle closes, no target.
+family: {id: ny_open_ema_trail, name: NY open EMA trail, category: trend,
+         hypothesis: "The side of the 12 EMA the first 5-minute candle closes on gives the morning's direction; trailing the EMA rides the move."}
+timeframe: 5m
+sessions:
+  FIRST_5M_0930: {timezone: America/New_York, start: "09:30", end: "09:35"}
+parameters:
+  ema: {type: integer, value: 12, min: 5, max: 50, step: 1}
+entry:
+  direction: both
+  session: FIRST_5M_0930
+  max_trades_per_day: 1
+  long:  {label: first 5m candle closes above the EMA, left: {bar: close}, op: ">", right: {feature: ema, params: {period: $ema}, output: ema}}
+  short: {label: first 5m candle closes below the EMA, left: {bar: close}, op: "<", right: {feature: ema, params: {period: $ema}, output: ema}}
+exit:
+  stop:
+    type: price
+    long:  {feature: ema, params: {period: $ema}, output: ema}
+    short: {feature: ema, params: {period: $ema}, output: ema}
+  target: {type: none}
+  trailing:
+    mode: level
+    level:
+      long:  {feature: ema, params: {period: $ema}, output: ema}
+      short: {feature: ema, params: {period: $ema}, output: ema}
+sizing: {mode: risk, risk_usd: 500, max_quantity: 40, contract: MNQ}
