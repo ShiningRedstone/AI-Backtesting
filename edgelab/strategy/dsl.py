@@ -684,7 +684,9 @@ def _validate_trailing(ck: _Checker, tr: Any, sides: tuple, stop: Mapping) -> No
         if not _num(off) or off < 0:
             ck.err(f"{p}.breakeven.offset_points", "offset_points must be a number >= 0")
     ap = tr.get("atr_period", 14)
-    if not isinstance(ap, int) or isinstance(ap, bool) or ap < 1:
+    if ap is None and not uses_atr:      # the canonical form writes null when no ATR is used (a saved strategy re-validates)
+        pass
+    elif not isinstance(ap, int) or isinstance(ap, bool) or ap < 1:
         ck.err(f"{p}.atr_period", "atr_period must be an integer >= 1")
     elif "atr_period" in tr and not uses_atr:
         ck.err(f"{p}.atr_period", "atr_period is given but no ATR-based distance, activation or trigger uses it")
@@ -735,7 +737,9 @@ def _validate_no_progress(ck: _Checker, npg: Any, trailing: Any) -> None:
         return
     ck.unknown_keys(mp, {"type", "value"}, f"{p}.min_progress")
     ap = npg.get("atr_period", 14)
-    if not isinstance(ap, int) or isinstance(ap, bool) or ap < 1:
+    if ap is None and mp["type"] != "atr":   # canonical null (no ATR used)
+        pass
+    elif not isinstance(ap, int) or isinstance(ap, bool) or ap < 1:
         ck.err(f"{p}.atr_period", "atr_period must be an integer >= 1")
     elif "atr_period" in npg and mp["type"] != "atr":
         ck.err(f"{p}.atr_period", "atr_period is given but min_progress is not ATR-based")

@@ -346,6 +346,18 @@ class TestDsl(unittest.TestCase):
                     "breakeven": {"trigger": {"type": "atr", "value": 1.0}}, "atr_period": 10}):
             self.assertEqual(errs(doc(**tr)), {}, tr)
 
+    def test_canonical_form_revalidates(self):
+        """A saved strategy is stored canonically (atr_period: null when no ATR is used) and re-validated before a
+        backtest; that canonical form must pass (user report: 'atr_period must be an integer >= 1')."""
+        from edgelab.strategy.dsl import canonical_definition
+        for tr in ({"mode": "level", "level": {"long": {"feature": "ema", "params": {"period": 12}, "output": "ema"}}},
+                   {"mode": "distance", "distance": {"type": "points", "points": 10}}):
+            c = canonical_definition(doc(**tr))
+            self.assertIsNone(c["exit"]["trailing"]["atr_period"])
+            self.assertEqual(errs(c), {}, tr)
+        self.assertIn("exit.trailing.atr_period", errs(doc(mode="distance", distance={"type": "atr", "multiple": 2.0},
+                                                          atr_period=None)))
+
     def test_invalid_declarations_are_refused_by_name(self):
         bad = [({"mode": "zigzag"}, "exit.trailing.mode"),
                ({"mode": "distance"}, "exit.trailing.distance"),

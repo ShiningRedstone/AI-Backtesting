@@ -9,7 +9,8 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 |---|---|
 | Your rules as a Builder strategy (no new tab): first 5m candle of the 9:30 NY open closes above / below the 12 EMA -> long / short; no take profit; stop starts at the 12 EMA and trails it, moved only at candle closes (DSL `exit.trailing` level mode) | IMPLEMENTED (validated, synthetic backtest ran) |
 | Real NQ results | REQUIRES REAL DATA (load it in Strategies -> Builder -> "Load file...") |
-| Engine, DSL, configs | UNCHANGED |
+| Fix: a SAVED strategy with a trailing stop (or no-progress exit) that uses no ATR failed its backtest with "atr_period must be an integer >= 1" (the canonical form stores `atr_period: null`); the validator now accepts null when no ATR is used (strategy identity unchanged) | IMPLEMENTED, TESTED |
+| Engine, configs | UNCHANGED |
 
 ## Premarket breakout: your premarket high / low breakout strategy (ADR-115)
 
