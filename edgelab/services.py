@@ -1909,10 +1909,33 @@ class Services:
         return [p for p in self.store.list_protocols(key)
                 if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
 
+    def _set_companions(self, parent: Mapping) -> list[dict]:
+        """Every companion with a registered strategy set of a parent: flip protocols (ADR-88) and the noise band set
+        (ADR-116), any status, oldest first."""
+        from edgelab.research.protocol import NOISE_SET_SCOPE_SUFFIX
+        sc = parent["material"]["scope"]
+        key = self._scope_key(sc["instrument"], sc["provider"]) + NOISE_SET_SCOPE_SUFFIX
+        sets = [p for p in self.store.list_protocols(key)
+                if (p["material"].get("parent") or {}).get("protocol_id") == parent["protocol_id"]]
+        return self._flip_protocols(parent) + sets
+
+    def _registered_hashes(self, p: Mapping) -> frozenset:
+        """The logic hashes a set companion registered: a flip protocol's ``mirror_set`` (ADR-88) or the noise band
+        set's file, checked against the hash in its material (ADR-116; remembered per protocol)."""
+        if p["material"].get("mirror_set") is not None:
+            return frozenset(r["logic_hash"] for r in p["material"]["mirror_set"])
+        memo = self.__dict__.setdefault("_set_hash_memo", {})
+        hit = memo.get(p["protocol_id"])
+        if hit is None:
+            from edgelab.research import noiseband
+            hit = memo[p["protocol_id"]] = frozenset(r["logic_hash"] for r in noiseband.load_set(self, p))
+        return hit
+
     def _flip_protocol_of(self, parent: Mapping, logic_hash: str) -> dict | None:
+        """The set companion (flip protocol or noise band set) that registered ``logic_hash``, or None."""
         from edgelab.research.protocol import verify_record
-        for p in self._flip_protocols(parent):
-            if any(r["logic_hash"] == logic_hash for r in p["material"]["mirror_set"]):
+        for p in self._set_companions(parent):
+            if logic_hash in self._registered_hashes(p):
                 verify_record(p)
                 return p
         return None
@@ -2001,7 +2024,7 @@ class Services:
             self.store.retire_protocol(supersedes)
         if replaces is not None:
             self.store.retire_protocol(replaces)
-            for c in self._flip_protocols(old):              # ADR-88: its flip protocol belongs to the replaced study
+            for c in self._set_companions(old):              # ADR-88/116: its set companions belong to the replaced study
                 self.store.retire_protocol(c["protocol_id"])
         created = self.store.save_protocol(rec, key)
         return _jsonable({**self.store.get_protocol(rec["protocol_id"]), "created": created})
@@ -2062,9 +2085,9 @@ class Services:
         also retires its flip companion (ADR-88), which only exists inside the parent's study."""
         p = self.store.get_protocol(protocol_id)
         self.store.retire_protocol(protocol_id)
-        from edgelab.research.protocol import is_flip
-        if not is_flip(p):
-            for c in self._flip_protocols(p):
+        from edgelab.research.protocol import is_flip, is_noise_set
+        if not is_flip(p) and not is_noise_set(p):
+            for c in self._set_companions(p):
                 self.store.retire_protocol(c["protocol_id"])
         return self.get_protocol(protocol_id)
 
@@ -2271,18 +2294,18 @@ class Services:
                                   protocol_ids=sorted(pids))
         if pids and logic_hashes:
             parent = self.store.get_protocol(next(iter(pids)))
-            flips = self._flip_protocols(parent)
+            flips = self._set_companions(parent)                 # ADR-116: the noise band set routes the same way
             if flips:
-                routed = {next((f["protocol_id"] for f in flips
-                                if any(r["logic_hash"] == lh for r in f["material"]["mirror_set"])), parent["protocol_id"])
-                          for lh in logic_hashes}
+                sets = [(f["protocol_id"], self._registered_hashes(f)) for f in flips]
+                routed = {next((pid for pid, hs in sets if lh in hs), parent["protocol_id"]) for lh in logic_hashes}
                 if len(routed) > 1:
-                    raise ProtocolRefusal("PROTOCOL_MISMATCH", "flipped strategies run under their flip protocol; search "
-                                          "them separately from other strategies", protocol_ids=sorted(routed))
+                    raise ProtocolRefusal("PROTOCOL_MISMATCH", "flipped / noise band strategies run under their own "
+                                          "protocol; search them separately from other strategies",
+                                          protocol_ids=sorted(routed))
                 pid = next(iter(routed))
                 if pid != parent["protocol_id"] and self.store.get_protocol(pid)["status"] != "ACTIVE":
-                    raise ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "these flipped strategies are governed by their flip "
-                                          "protocol, which is retired", protocol_id=pid)
+                    raise ProtocolRefusal("PROTOCOL_NOT_ACTIVE", "these strategies are governed by their own "
+                                          "protocol (flip scan / noise band set), which is retired", protocol_id=pid)
                 return pid
         return next(iter(pids), None)
 
@@ -2370,6 +2393,40 @@ class Services:
 
     def flip_job(self, job_id: str) -> dict:
         return _jsonable(self.jobs.flip_status(job_id))
+
+    # ------------------------------------------------------------ noise band set (ADR-116)
+    def noise_band(self) -> dict:
+        """Read-only: the noise band design, its datasets per timeframe and the set protocol (if created)."""
+        from edgelab.research import noiseband
+        self.store._require_search_storage()
+        return _jsonable(noiseband.status(self))
+
+    def start_noise_band_create(self) -> dict:
+        """Background job: create the noise band set protocol and save its 10,000 strategies (no backtest)."""
+        from edgelab.research import noiseband
+        self.store._require_search_storage()
+        parent = noiseband.parent_protocol(self)             # refuse up front: no active protocol / already created
+        if noiseband.set_protocol(self, parent) is not None:
+            raise noiseband.NoiseBandError("SET_EXISTS", "this research protocol already has its noise band set",
+                                           protocol_id=parent["protocol_id"])
+        return _jsonable(self.jobs.start_pool("noise_create"))
+
+    def noise_band_job(self, job_id: str) -> dict:
+        """The create job (pool job kind) or the run job (flip job kind) of the noise band set."""
+        try:
+            return _jsonable(self.jobs.flip_status(job_id))
+        except KeyError:
+            return _jsonable(self.jobs.pool_status(job_id))
+
+    def start_noise_band_job(self) -> dict:
+        """Backtest (or resume) the registered noise band strategies in the background: one research job at a time,
+        the Settings CPU cores, the normal protocol-gated search path (one trial per strategy, in the set protocol)."""
+        from edgelab.research import noiseband
+        self.store._require_search_storage()
+        sp = noiseband.set_protocol(self, noiseband.parent_protocol(self))
+        if sp is None:
+            raise noiseband.NoiseBandError("NO_NOISE_SET", "create the noise band set first")
+        return _jsonable(self.jobs.start_flip(sp["protocol_id"], self.research_processes()["processes"]))
 
     # ------------------------------------------------------------ strategy pool 2 (ADR-87)
     def pool2_status(self) -> dict:
@@ -2578,8 +2635,13 @@ class Services:
 
     def strategy_pools(self) -> list[dict]:
         """ADR-90: the pool picker of Backtest results (All | Strategy pool 1 | Strategy pool 2)."""
+        from edgelab.research import noiseband
         from edgelab.research.pool2 import pools
-        return _jsonable([{k: p[k] for k in ("pool", "ref", "label", "n_strategies")} for p in pools(self)])
+        out = [{k: p[k] for k in ("pool", "ref", "label", "n_strategies")} for p in pools(self)]
+        ids = noiseband.strategy_ids(self)                   # ADR-116: the noise band set as its own pick
+        if ids:
+            out.append({"pool": "noise", "ref": "set:noise", "label": "Noise band", "n_strategies": len(ids)})
+        return _jsonable(out)
 
     def research_runs(self) -> list[dict]:
         from edgelab.research import results_view as rv

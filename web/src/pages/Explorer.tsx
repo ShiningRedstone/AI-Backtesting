@@ -27,7 +27,7 @@ function optLabel(k: string, v: string, states?: Record<string, string>): string
   if (k === "scope") return SCOPE_TEXT[v] ?? humanize(v);
   if (k === "tested_only" || k === "survivors_only" || k === "favorites_only" || k === "live_only") return "yes";
   if (k === "prop") return PROP_TEXT[v] ?? v;
-  if (k === "campaign_run") return v.startsWith("pool:") ? `pool ${v.slice(5)}` : "one research run";
+  if (k === "campaign_run") return v.startsWith("pool:") ? `pool ${v.slice(5)}` : v === "set:noise" ? "noise band set" : "one research run";
   if (["q", "strategy_id", "min_trades", "max_trades_per_week", "protocol"].includes(k)) return v;
   return facetLabel(k, v);
 }

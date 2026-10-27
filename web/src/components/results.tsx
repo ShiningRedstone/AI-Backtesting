@@ -21,7 +21,7 @@ export function useCriteriaName(): string {
 
 /** ADR-90: pick which strategies Backtest results shows: all, or one strategy pool (each strategy's latest result). */
 export function PoolPicker({ value, onChange, testId = "pool-picker" }: { value: string; onChange: (ref: string) => void; testId?: string }) {
-  const { data } = useApi<{ pool: number; ref: string; label: string; n_strategies: number }[]>("/api/results-view/pools");
+  const { data } = useApi<{ pool: number | string; ref: string; label: string; n_strategies: number }[]>("/api/results-view/pools");
   return (
     <div className="segmented small" role="group" aria-label="which strategies" data-testid={testId}>
       <button className={!value ? "on" : ""} onClick={() => onChange("")} data-testid={`${testId}-all`}>All strategies</button>

@@ -186,6 +186,10 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
         if isinstance(e, ProtocolRefusal):                   # ADR-56: machine-readable refusal code
             return jsonify({"error": {"kind": "protocol_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409
+        from edgelab.research.noiseband import NoiseBandError
+        if isinstance(e, NoiseBandError):                    # ADR-116: noise band set refusals
+            return jsonify({"error": {"kind": "noise_band_refusal", "code": e.code, "message": e.message,
+                                      "refusal": e.to_dict()}}), 409 if e.code in ("SET_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
         if isinstance(e, FlipError):                         # ADR-88: flip scan refusals (machine-readable code)
             return jsonify({"error": {"kind": "flip_refusal", "code": e.code, "message": e.message,
                                       "refusal": e.to_dict()}}), 409 if e.code in ("FLIP_EXISTS", "PROTOCOL_NOT_ACTIVE") else 422
@@ -977,6 +981,27 @@ def create_app(root: str | Path = ".", demo: bool = False, web: WebConfig | None
 
     @app.post("/api/flips/jobs/<jid>/cancel")
     def flips_cancel(jid):                          # sets a flag; running cells finish and are recorded
+        return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
+
+    # ------------------------------------------------------------------ noise band set (ADR-116)
+    @app.get("/api/noise-band")
+    def noise_band_view():
+        return jsonify(call(svc.noise_band))
+
+    @app.post("/api/noise-band")
+    def noise_band_create():                        # background job (pool job kind): design + library, no backtest
+        return jsonify(call(svc.start_noise_band_create)), 202
+
+    @app.post("/api/noise-band/jobs")
+    def noise_band_start():
+        return jsonify(call(svc.start_noise_band_job)), 202
+
+    @app.get("/api/noise-band/jobs/<jid>")
+    def noise_band_job(jid):                        # lock-free: in-memory job record (create or run)
+        return jsonify(svc.noise_band_job(_id(jid, JOB_ID, "job id")))
+
+    @app.post("/api/noise-band/jobs/<jid>/cancel")
+    def noise_band_cancel(jid):
         return jsonify(svc.cancel_job(_id(jid, JOB_ID, "job id")))
 
     # ------------------------------------------------------------------ strategy pool 2 (ADR-87)

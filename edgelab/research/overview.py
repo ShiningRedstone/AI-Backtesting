@@ -244,13 +244,16 @@ def campaign_run_scope(svc, ref: Any) -> set[str] | None:
     Read from the run's persisted scope file (written once when the run started; never edited here)."""
     if not ref:
         return None
+    if str(ref) == "set:noise":                              # ADR-116: the noise band set of the active protocol
+        from edgelab.research import noiseband
+        return noiseband.strategy_ids(svc)
     pm = POOL_REF.match(str(ref))
     if pm:                                                   # ADR-90: a whole strategy pool ("pool:1", "pool:2")
         from edgelab.research.pool2 import pool_ids
         return set(pool_ids(svc, int(pm.group(1))))
     m = CAMPAIGN_RUN_REF.match(str(ref))
     if not m:
-        raise ValueError("campaign_run must be 'pool:<n>' or '<campaign id>/<run record id>'")
+        raise ValueError("campaign_run must be 'pool:<n>', 'set:noise' or '<campaign id>/<run record id>'")
     from edgelab.research import campaign as C
     try:
         return set(C.load_scope(svc, m.group(1), m.group(2))["strategy_ids"])

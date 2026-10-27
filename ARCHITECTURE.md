@@ -3241,3 +3241,41 @@ web/src/pages/Data.tsx         Datasets: identity/proxy/source hash/preferred co
   target, 14 MNQ, TARGET exit) and settings change the answer as expected; a declined signal is not traded; causality of
   rule variants; the chain cut; autotuner tweaks and one try; a workspace flow (own protocol, setup review, holdout
   allowance, My strategy and Fair price untouched) and the `/api/pmb` routes.
+
+### ADR-116 Noise band set: 10,000 frozen versions of the user's noise band breakout under their own protocol
+- **Request (user):** a new mass strategy tester with the same holdout rules: the noise band indicator on the Nasdaq,
+  starting at 9:30 New York ALWAYS, a trade whenever a candle closes outside the band, until the session end; 10,000
+  versions varying close time, timeframe, stop, target etc.; fixed: a trade only when price exits the band, only after
+  9:30 New York, NQ only. Answers: the Zarattini / Aziz / Barbon (2024) noise area, trade with the break, a frozen set
+  in Run backtest with its own protocol (not a new tab), 1-3 trades a day (varied).
+- **Feature** `noise_area` v1 (`features/library/noise.py`): per regular-session bar (opens 9:30 ... before 16:00 New
+  York on its trading date) at slot s = minutes since 9:30: sigma = mean over the previous `lookback` dates with a 9:30
+  bar of |close(slot) / open_930 - 1| (>= 70 % of them must have the slot), upper / lower = max / min(9:30 open,
+  previous regular-session close) x (1 +/- mult x sigma) (`gap` off: the 9:30 open). Computed on the strategy's own
+  bars; only earlier dates enter sigma; known at the bar close; prefix-invariant (tested against a plain recomputation).
+- **Space** (`strategy/noiseband_space.py`, `SPACE_VERSION` 1, seed 20261027, design fingerprint in the protocol):
+  timeframe 1m / 5m / 15m / 30m (each starts a bar at 9:30), lookback 7 / 10 / 14 / 20, width x0.75 ... 1.5, with / without
+  the previous close, any close outside vs a fresh break (`crosses_above`), last entry 10:00 ... 15:30, close time 11:00
+  ... 15:00 (a signal exit when the first bar opening at that time starts) or the 16:00 session end (the engine's
+  flatten), both / long / short, stop (ATR 1 / 1.5 / 2, 10 / 20 / 40 points, the band, the opposite band), target (none,
+  1 / 1.5 / 2 / 3 R, 20 / 40 / 80 points), trailing (none, the band as a level trail, 2 ATR), 1 / 2 / 3 trades a day;
+  fixed: entry window from 9:30, entry only on a close outside the band with the break, $500 risk in MNQ (max 40).
+  Uniform seeded draws; invalid combinations (no time between the last entry and the close) and duplicate logic refused.
+  Ordinary DSL strategies (no engine, compiler or DSL change).
+- **Set protocol** (`research/noiseband.py`, role `noise_band_set`, scope suffix `#noise_band`): one per ACTIVE research
+  protocol; the parent's data, windows, execution and config; trial budget = the set (10,000); its own holdout looks
+  (default 10); Bonferroni family = its own declared budget (designed from the user's rules, nothing selected from the
+  parent's results). The 10,000 rows live in `<data>/noise_band/sets/<hash>.json`; the material holds the file's content
+  hash (records stay small; every reader checks the file). Routing is the flip scan's (ADR-88) generalised:
+  `Services._set_companions` / `_registered_hashes` (memoised per protocol) route a registered strategy to its set
+  protocol in `_governing_protocol(logic_hash=)`, the search gate (mixing with other strategies refused) and the holdout
+  gate; retiring or replacing the parent retires it.
+- **Jobs / API / UI:** create = a pool job (`noise_create`; design + library save, about a minute, no backtest); run =
+  the flip job runner (`kind` `noise_band`, Settings CPU cores, resumable, stop keeps finished cells); `/api/noise-band`
+  (GET status, POST create, `/jobs` run / status / cancel). Run backtest → "Noise band" (`web/src/pages/NoiseBand.tsx`):
+  design table, counts (backtested / net positive / survivors / holdout tests left), live progress. Backtest results:
+  picker entry "Noise band" (`campaign_run=set:noise`). Survivors reach Holdout backtest under the set's own looks.
+- **Also:** `FEATURES.md` regenerated; it was stale since ADR-91 (implementation hashes of six features).
+- **Tests** (`tests/test_noise_band.py`): feature known answer, prefix invariance and the engine's lookahead check; the
+  space's fixed rules and determinism; create / run / routing / mixing refused / holdout gate under the set's own looks
+  / retired with the parent; jobs and API.

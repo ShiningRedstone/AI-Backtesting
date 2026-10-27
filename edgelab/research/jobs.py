@@ -102,7 +102,7 @@ class FlipJob(Job):
         self.live: dict = {"current": None, "done": 0, "total": n, "completed": 0, "failed": 0, "skipped": 0}
 
     def snapshot(self) -> dict:
-        return {**super().snapshot(), "kind": "flip", "protocol_id": self.protocol_id, "processes": self.processes,
+        return {**super().snapshot(), "kind": self.kind, "protocol_id": self.protocol_id, "processes": self.processes,
                 "live": dict(self.live)}
 
 
@@ -312,19 +312,29 @@ class JobManager:
     # ------------------------------------------------------------------ flip scan jobs (ADR-88)
     def start_flip(self, flip_id: str, processes: int = 1) -> dict:
         """Run (or resume) a flip protocol's search in the background; the same one-research-job-at-a-time rule."""
-        from edgelab.research import flips as F
+        from edgelab.research import flips as F, noiseband as NB
+        from edgelab.research.protocol import is_noise_set
         reading = getattr(self.services, "in_read_context", lambda: False)()
         with (nullcontext() if reading else self.lock):
             flip = self.services.store.get_protocol(flip_id)
+            noise = is_noise_set(flip)                       # ADR-116: the noise band set runs the same way
             if flip["status"] != "ACTIVE":
-                raise F.FlipError("PROTOCOL_NOT_ACTIVE", "the flip protocol is retired", protocol_id=flip_id)
-            F.materialize(self.services, flip)
-            plan = plan_search(F.search_spec(flip), self.services)     # references, routing and refusals up front
+                raise (NB.NoiseBandError if noise else F.FlipError)("PROTOCOL_NOT_ACTIVE", "the protocol is retired",
+                                                                    protocol_id=flip_id)
+            if noise:
+                NB.materialize(self.services, flip)
+                spec = NB.search_spec(self.services, flip)
+            else:
+                F.materialize(self.services, flip)
+                spec = F.search_spec(flip)
+            plan = plan_search(spec, self.services)          # references, routing and refusals up front
         with self._mu:
             if self._active is not None and self._active.state in ACTIVE:
                 raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
             job = FlipJob("JOB_" + uuid.uuid4().hex[:12].upper(), flip_id, plan.search_id, len(plan.eligible_cells()))
             job.processes = processes
+            if noise:
+                job.kind = "noise_band"
             self._jobs[job.job_id] = job
             self._active = job
             self._thread = threading.Thread(target=self._work_flip, args=(job,), name=f"edgelab-{job.job_id}", daemon=True)
@@ -356,8 +366,13 @@ class JobManager:
             job.live = live
 
         try:
-            out = F.run(self.services, job.protocol_id, processes=job.processes, lock=self.lock,
-                        cancel=job.cancel_requested.is_set, on_cell=on_cell)
+            if job.kind == "noise_band":                     # ADR-116
+                from edgelab.research import noiseband as NB
+                out = NB.run(self.services, job.protocol_id, processes=job.processes, lock=self.lock,
+                             cancel=job.cancel_requested.is_set, on_cell=on_cell)
+            else:
+                out = F.run(self.services, job.protocol_id, processes=job.processes, lock=self.lock,
+                            cancel=job.cancel_requested.is_set, on_cell=on_cell)
             final = "cancelled" if out["status"] == "cancelled" else "completed"
         except BaseException as exc:                         # recorded, never swallowed silently
             job.error = f"{type(exc).__name__}: {exc}"
@@ -382,8 +397,8 @@ class JobManager:
     # ------------------------------------------------------------------ strategy pool 2 jobs (ADR-87)
     def start_pool(self, action: str, confirm: str | None = None) -> dict:
         """Generate pool 2 or switch to the 20,000-strategy protocol; the same one-research-job-at-a-time rule."""
-        if action not in ("generate", "switch"):
-            raise ValueError("action must be generate or switch")
+        if action not in ("generate", "switch", "noise_create"):
+            raise ValueError("action must be generate, switch or noise_create")
         with self._mu:
             if self._active is not None and self._active.state in ACTIVE:
                 raise JobConflict(f"job {self._active.job_id} is still {self._active.state}; one research job runs at a time")
@@ -405,8 +420,12 @@ class JobManager:
 
         try:
             with self.lock:                      # store reads / protocol + campaign writes; pages keep reading (ADR-78)
-                job.result = pool2.generate(self.services, say) if job.action == "generate" else \
-                    pool2.switch(self.services, confirm or "", say)
+                if job.action == "noise_create":     # ADR-116: create the noise band set (no evaluation)
+                    from edgelab.research import noiseband
+                    job.result = noiseband.create(self.services, progress=say)
+                else:
+                    job.result = pool2.generate(self.services, say) if job.action == "generate" else \
+                        pool2.switch(self.services, confirm or "", say)
             final = "completed"
         except BaseException as exc:                         # recorded, never swallowed silently
             job.error = f"{type(exc).__name__}: {exc}"

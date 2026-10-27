@@ -228,8 +228,12 @@ Fair price routes = `/api/fair/*`, pages via `web/src/pages/myKind.tsx`; own com
 ADR-115: tab "Premarket breakout" (`edgelab/pmbreakout/`, Kind `pmb`, `/api/pmb/*`, `web/src/pages/pmExplain.tsx`): the user's rules
 (NY premarket 4:00-9:30 high / low, a 5m close beyond it, stop at the candle's wick, 1 : 8 target), 24 settings; companion roles
 `pm_breakout` / `pm_optimizer` / `pm_holdout`; its chain cuts oversized trades (`Kind.fit_limits`, `challenge.chain(fit=)`).
+ADR-116: noise band set (`research/noiseband.py`, `strategy/noiseband_space.py`, feature `noise_area`): 10,000 frozen DSL versions of the
+user's noise band breakout (NQ, from 9:30 NY, a close outside the band) under their own companion protocol (role `noise_band_set`,
+budget = the set, own holdout looks; rows in `<data>/noise_band/sets/<hash>.json`, hash in the material); routed like flips
+(`Services._set_companions`); Run backtest → Noise band, results picker `set:noise`.
 ADR-92 (strategy combinations) was added and then fully removed at the user's request (revert of 723b962, incl. its prop
-lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-115.
+lifecycle speed-up); do not re-add it unasked. ADR numbering continues after ADR-116.
 Before starting any phase, inspect the repository to establish exactly what already exists and what
 remains. Do not rely on this file alone.
 
@@ -277,7 +281,7 @@ remains. Do not rely on this file alone.
     version), latest results.
   - Strategies: Families (default), Library, Builder, Variations
   - Run backtest: **Research runs** (default), Single backtest, Holdout backtest (survivors only, ranked best → worst
-    for prop trading on 8 discovery criteria with drawdown and negative months ×2), Flip scan (ADR-88). `/research` →
+    for prop trading on 8 discovery criteria with drawdown and negative months ×2), Flip scan (ADR-88), Noise band (ADR-116). `/research` →
     `/runs`; job and result deep links still work.
   - Backtest results: Overview, Strategies explorer, Holdout results, Random controls (All runs / Compare / Candidate
     pipeline removed in ADR-90; run-detail links `/results/<id>` still work). Pool picker: All | Pool 1 | Pool 2.
@@ -522,4 +526,4 @@ python scripts/benchmark_search.py               # Phase 4 search throughput (in
   - Explain outcomes in plain English. The user-facing name is "Munyun Lab".
 - Stay within the requested task; no unrelated refactors or doc fixes.
 - When a feature or phase is done: add an ADR to `ARCHITECTURE.md`, a `CHANGELOG.md` entry, and a line in this file's
-  "Current state" (ADR numbering continues after ADR-115). Update `README.md` status for phases.
+  "Current state" (ADR numbering continues after ADR-116). Update `README.md` status for phases.

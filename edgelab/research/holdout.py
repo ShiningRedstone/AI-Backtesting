@@ -83,9 +83,9 @@ def protocol_summary(p: Mapping | None, used: int) -> dict | None:
     mat = p["material"]
     budget = int(mat["holdout_budget"]["max_unique_candidate_evaluations"])
     h = mat["windows"]["holdout"]
-    from edgelab.research.protocol import is_flip
+    from edgelab.research.protocol import is_flip, is_noise_set
     return {"protocol_id": p["protocol_id"], "name": mat.get("name"), "looks_used": used, "looks_budget": budget,
-            "role": "flip" if is_flip(p) else "research",                                      # ADR-88
+            "role": "flip" if is_flip(p) else "noise_band" if is_noise_set(p) else "research",      # ADR-88 / 116
             "looks_left": max(0, budget - used), "holdout_trading_dates": h["trading_dates"],
             "holdout_first_bar": h["first_bar"], "holdout_last_bar": h["last_bar"]}
 

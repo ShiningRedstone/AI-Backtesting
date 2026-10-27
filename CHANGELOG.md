@@ -3,6 +3,20 @@
 Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated tests) ·
 **NOT IMPLEMENTED** (deliberately absent) · **REQUIRES REAL DATA** (cannot be validated on synthetic data).
 
+## Noise band set: 10,000 versions of the noise band breakout (ADR-116)
+
+| Item | Status |
+|---|---|
+| Run backtest → Noise band: create the 10,000 frozen versions, backtest them (all CPU cores, stop and continue), progress, counts | IMPLEMENTED, TESTED |
+| Indicator `noise_area` (Zarattini / Aziz / Barbon 2024 noise area): bands from the 9:30 open / previous close and the average move at the same time of day | IMPLEMENTED, TESTED (known answer, lookahead check) |
+| Fixed in every version: NQ only, entries from 9:30 New York, only on a candle close outside the band (with the break); varied: timeframe, band, trigger, last entry, close time, direction, stop, target, trailing stop, 1-3 trades a day | IMPLEMENTED, TESTED |
+| Own protocol: 10,000 tries, own holdout tests; the research protocol and its holdout tests are untouched | IMPLEMENTED, TESTED |
+| Backtest results picker "Noise band"; survivors in Holdout backtest | IMPLEMENTED, TESTED |
+| FEATURES.md regenerated (was stale since ADR-91) | IMPLEMENTED, TESTED |
+| VWAP trailing stop of the paper | NOT IMPLEMENTED (volume-weighted features are refused on Dukascopy's provider volume) |
+| Real NQ results | REQUIRES REAL DATA (run on your PC) |
+| Engine, DSL, configs, other strategies | UNCHANGED |
+
 ## Strategy file: NY open 12 EMA trail (`strategies/user/ny_open_ema12_trail.yaml`)
 
 | Item | Status |

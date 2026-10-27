@@ -30,6 +30,7 @@ Conventions for every feature:
 | `kama` | 1 | trend | - | bar_close | yes | Kaufman adaptive moving average and efficiency ratio. |
 | `macd` | 1 | momentum | - | bar_close | yes | MACD line, signal line and histogram (SMA-seeded EMAs). |
 | `narrow_range` | 1 | volatility | - | bar_close | yes | Narrow-range bar (NR4 / NR7 ...). |
+| `noise_area` | 1 | session | - | bar_close | yes | Intraday noise area (Zarattini / Aziz / Barbon 2024): bands around the 9:30 open that widen by the average move seen at the same time of day on the previous days. |
 | `order_block` | 1 | structure | - | bar_close | yes | Order blocks (last opposite candle before a displacement that breaks structure) and breaker blocks (failed order blocks that flip polarity). |
 | `psar` | 1 | trend | - | bar_close | yes | Wilder Parabolic SAR (stop-and-reverse). |
 | `range_stats` | 1 | structure | - | bar_close | yes | Displacement, range expansion and consolidation, normalised by ATR. |
@@ -212,7 +213,7 @@ Trading-date levels from the dataset's exchange calendar.
 - **Known at:** bar_close   **Causal:** yes
 - **Warm-up:** one completed trading date for prev_*
 - **Depends on:** -
-- **Implementation hash:** `8f36d7f930647bbb`
+- **Implementation hash:** `53892f6484e973cc`
 
 **Calculation.** Trading date per calendar (CME: 18:00 ET previous day -> 17:00 ET). Previous = latest trading date whose scheduled session close <= bar close.
 
@@ -239,7 +240,7 @@ Session-level NR7: was the previous trading date the narrowest of the last n?
 - **Known at:** bar_close   **Causal:** yes
 - **Warm-up:** n completed trading dates
 - **Depends on:** -
-- **Implementation hash:** `73dda6161f12d33c`
+- **Implementation hash:** `e7fb3e826855c3fe`
 
 **Calculation.** Per trading date D (exchange calendar), R_D = range of the previous completed date (daily_levels prev_day_high - prev_day_low, completed = scheduled close <= bar close). prev_is_nr_D = R_D < min(R_{D-1} .. R_{D-n+2}); constant across the bars of D.
 
@@ -541,6 +542,36 @@ Narrow-range bar (NR4 / NR7 ...).
 | `is_nr` | 1 if H_t - L_t < min range of the previous n-1 bars, else 0 |
 | `range` | H_t - L_t |
 
+## `noise_area` (version 1)
+
+Intraday noise area (Zarattini / Aziz / Barbon 2024): bands around the 9:30 open that widen by the average move seen at the same time of day on the previous days.
+
+- **Input data:** OHLC of the computed timeframe; dataset calendar
+- **Timeframe:** native, or any multiple of it via `timeframe`
+- **Known at:** bar_close   **Causal:** yes
+- **Warm-up:** `lookback` trading dates
+- **Depends on:** -
+- **Implementation hash:** `1b462b62918bd493`
+
+**Calculation.** sigma(d, slot) = mean over the previous `lookback` dates of |close(slot) / open_930 - 1|; upper = max(open_930, prev close) x (1 + mult x sigma), lower = min(open_930, prev close) x (1 - mult x sigma) (gap off: the 9:30 open on both sides). Bars of the strategy's own timeframe.
+
+**Edge cases.** Regular session = bars OPENING 9:30 ... before 16:00 New York on their trading date. A date without a 9:30 bar has no bands and is not counted in later averages; a slot needs at least 70 % of the lookback dates to have it (half days are skipped there). On timeframes that do not start a bar at 9:30 there are no bands.
+
+| parameter | type | default | constraint | meaning |
+|---|---|---|---|---|
+| `lookback` | int | `14` | >= 2 | previous trading dates averaged per time-of-day slot |
+| `mult` | float | `1.0` | >= 0 | band width multiplier of the average move |
+| `gap` | bool | `True` |  | bands from max/min(9:30 open, previous regular-session close); off: the 9:30 open |
+
+| output | meaning |
+|---|---|
+| `upper` | upper noise band at the bar's slot (NaN outside 9:30-16:00 New York) |
+| `lower` | lower noise band at the bar's slot |
+| `sigma` | average absolute move from the 9:30 open at this slot over the previous `lookback` dates |
+| `rth_open` | the 9:30 New York open of the bar's trading date |
+| `prev_rth_close` | close of the previous trading date's last regular-session bar |
+| `slot` | minutes from 9:30 to the bar's open (NaN outside the regular session) |
+
 ## `order_block` (version 1)
 
 Order blocks (last opposite candle before a displacement that breaks structure) and breaker blocks (failed order blocks that flip polarity).
@@ -720,7 +751,7 @@ Session window membership, running session levels, previous session levels.
 - **Known at:** bar_close   **Causal:** yes
 - **Warm-up:** one completed instance for prev_*
 - **Depends on:** -
-- **Implementation hash:** `cd87e9b45fc06a4b`
+- **Implementation hash:** `2a4282283c4043c4`
 
 **Calculation.** Membership in the window's own timezone (DST-safe). Instance = local start date. Previous = latest instance with scheduled end <= bar close.
 
@@ -859,7 +890,7 @@ Local clock and weekday of each bar (for trading windows and weekday filters).
 - **Known at:** bar_open   **Causal:** yes
 - **Warm-up:** 0 bars
 - **Depends on:** -
-- **Implementation hash:** `19158b10cf23e428`
+- **Implementation hash:** `85c1ab7f7dae011f`
 
 **Calculation.** Bar open converted to `timezone` (DST-safe); trading_weekday from the dataset calendar.
 
@@ -910,7 +941,7 @@ Anchored volume-weighted average price with standard deviation.
 - **Known at:** bar_close   **Causal:** yes
 - **Warm-up:** 1 bar of the anchor period
 - **Depends on:** -
-- **Implementation hash:** `f5c50a4eda930292`
+- **Implementation hash:** `308bc01bd431f6a3`
 
 **Calculation.** TP = (H+L+C)/3; VWAP_t = cumsum(TP*V)/cumsum(V) within the anchor period; std = sqrt(cumsum(V*TP^2)/cumsum(V) - VWAP^2).
 
@@ -936,7 +967,7 @@ Trading-week levels (weeks of calendar trading dates, Monday-based).
 - **Known at:** bar_close   **Causal:** yes
 - **Warm-up:** one completed week for prev_*
 - **Depends on:** -
-- **Implementation hash:** `c3a75af59eaf0cb6`
+- **Implementation hash:** `37ab50101ed4750f`
 
 **Calculation.** Week = the Monday-based calendar week of each bar's TRADING DATE (dataset calendar). A week is complete at the scheduled session close of its last scheduled trading weekday; previous = latest completed week at the bar's close.
 

@@ -183,6 +183,8 @@ PMB_OPTIMIZER_ROLE = "pm_optimizer"           # ADR-115: Premarket breakout Stra
 PMB_OPTIMIZER_SCOPE_SUFFIX = "#pm_optimizer"
 PMB_HOLDOUT_ROLE = "pm_holdout"               # ADR-115: Premarket breakout holdout allowance (2 strategies)
 PMB_HOLDOUT_SCOPE_SUFFIX = "#pm_holdout"
+NOISE_SET_ROLE = "noise_band_set"            # ADR-116: the noise band set (10,000 registered DSL strategies)
+NOISE_SET_SCOPE_SUFFIX = "#noise_band"
 
 
 def is_companion(rec: Mapping) -> bool:
@@ -191,7 +193,70 @@ def is_companion(rec: Mapping) -> bool:
     return mat.get("role") in (FLIP_ROLE, MY_STRATEGY_ROLE, AUTOTUNE_ROLE, AUTOTUNE_FLIP_ROLE, OPTIMIZER_ROLE,
                                MY_HOLDOUT_ROLE, MARKET_SIM_ROLE, MARKET_DIRECTION_ROLE, FAIR_STRATEGY_ROLE,
                                FAIR_OPTIMIZER_ROLE, FAIR_HOLDOUT_ROLE, PMB_STRATEGY_ROLE, PMB_OPTIMIZER_ROLE,
-                               PMB_HOLDOUT_ROLE)
+                               PMB_HOLDOUT_ROLE, NOISE_SET_ROLE)
+
+
+def is_noise_set(rec: Mapping) -> bool:
+    """True for a noise band set protocol (ADR-116)."""
+    return rec.get("material", rec).get("role") == NOISE_SET_ROLE
+
+
+def build_noise_set_material(parent: Mapping, *, strategy_set: Mapping, design: Mapping, generation: Mapping,
+                             datasets_by_timeframe: Mapping, discovery_period: Mapping, parent_looks_used: int,
+                             holdout_looks: int = DEFAULT_HOLDOUT_LOOKS, name: str = "") -> dict:
+    """The material of the noise band set (ADR-116): the parent's data, windows, execution and config, its own
+    pre-registered set of strategies (the trial budget is exactly that set), its own holdout looks and a Bonferroni
+    family of its own declared budget (the set was designed from the user's rules before any result of it; nothing
+    was selected from the parent's results). ``strategy_set`` = {file, hash, count, ...}: the 10,000 rows live in a
+    workspace file whose content hash is part of this material (a protocol record stays small; every reader checks
+    the file against the hash)."""
+    import copy as _copy
+    pm = parent["material"]
+    if not isinstance(holdout_looks, int) or isinstance(holdout_looks, bool) or holdout_looks < 1:
+        raise ProtocolRefusal("PROTOCOL_INVALID", "holdout_looks must be a positive integer", value=holdout_looks)
+    own = int(strategy_set.get("count") or 0)
+    if own < 1 or not strategy_set.get("hash"):
+        raise ProtocolRefusal("SET_EMPTY", "no strategy to register")
+    mt = {**DEFAULT_MULTIPLE_TESTING, "familywise_alpha": float(pm["multiple_testing"]["familywise_alpha"]),
+          "family_size_rule": "declared_max_unique_trials",
+          "family_size": f"this protocol's declared trial budget ({own}): every registered strategy"}
+    acceptance = _copy.deepcopy(pm["acceptance_criteria"])
+    oc = acceptance.get("oos_confidence") or {}
+    if oc.get("method_id") == "min_normal_bootstrap_t_v1":
+        oc["bootstrap"]["replicates"] = bootstrap_replicates_for(own, mt["familywise_alpha"])
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "role": NOISE_SET_ROLE,
+        "name": name,
+        "parent": {"protocol_id": parent["protocol_id"], "material_hash": parent["material_hash"],
+                   "trial_budget": int(pm["trial_budget"]["max_unique_trials"]),
+                   "holdout_looks_used_at_creation": int(parent_looks_used)},
+        "scope": dict(pm["scope"]), "source_dataset": dict(pm["source_dataset"]), "windows": dict(pm["windows"]),
+        "execution": dict(pm["execution"]), "config_hash": pm["config_hash"],
+        "search_constraints": {
+            "strategies": "only the registered noise band strategies (strategy_set); every other strategy stays governed "
+                          "by the parent protocol, and a registered one is never governed by the parent",
+            "evaluation_windows": "every discovery evaluation must lie entirely inside the discovery window",
+            "stages": {"discovery": "the noise band set's search (one trial per registered strategy)",
+                       "holdout": "only Services.evaluate_holdout for a survivor of the set, within this protocol's looks"}},
+        "trial_budget": {"max_unique_trials": own,
+                         "unit": "unique numerical trial = (protocol, logic_hash, content hash of the evaluated bars "
+                                 "[dataset + window], config hash); the budget is exactly the registered set"},
+        "holdout_budget": {"max_unique_candidate_evaluations": holdout_looks, "per_candidate": 1},
+        "acceptance_criteria": acceptance,
+        "multiple_testing": mt,
+        "pre_protocol_exposure": {
+            "statement": ("The noise area and the breakout rule come from a published paper (Zarattini, Aziz & Barbon "
+                          "2024, tested on SPY); the user chose the rules and the varied settings before any result of "
+                          f"this set. The parent had used {int(parent_looks_used)} holdout look(s) when this protocol "
+                          "was created."),
+            "runs": []},
+        "strategy_set": dict(strategy_set),
+        "design": dict(design),
+        "generation": dict(generation),
+        "search": {"datasets_by_timeframe": dict(datasets_by_timeframe), "period": dict(discovery_period)},
+        "supersedes": None,
+    }
 
 
 def build_flip_material(parent: Mapping, *, mirror_set: Sequence[Mapping], selection: Mapping,
