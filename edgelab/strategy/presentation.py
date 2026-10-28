@@ -121,6 +121,9 @@ def display_name(row: Mapping) -> str:
     v = row.get("variation")
     fam = _FAMILIES.get(row.get("family_id") or (defn.get("family") or {}).get("id"))
     fam_name = fam.name if fam else humanize((defn.get("family") or {}).get("name") or row.get("family_id") or "Strategy")
+    from edgelab.strategy import noiseband_space as NB
+    if NB.is_variation(v):                                   # ADR-116: the noise band set records its own variation
+        return NB.display_name(v)
     if not isinstance(v, Mapping):
         base = humanize(re.sub(r"_[0-9a-f]{6,}$", "", str(defn.get("name") or row.get("strategy_id") or "")))
         return f"{fam_name} — {base}" if base and base.lower() != fam_name.lower() else fam_name
@@ -139,6 +142,9 @@ def key_parameters(row: Mapping) -> dict:
     """The distinguishing choices of a variation, flat and readable (values exactly as recorded)."""
     v = row.get("variation") or {}
     defn = row.get("definition") or {}
+    from edgelab.strategy import noiseband_space as NB
+    if NB.is_variation(v):                                   # ADR-116
+        return NB.key_parameters(v)
     if not isinstance(v, Mapping):
         return {"timeframe": defn.get("timeframe"), "direction": (defn.get("entry") or {}).get("direction")}
     out = {"timeframe": v.get("timeframe"), "direction": v.get("direction"), "session": v.get("session") or "anchored window",
@@ -166,6 +172,9 @@ def explanation(row: Mapping) -> str:
     v = row.get("variation")
     fam = _FAMILIES.get(row.get("family_id") or (defn.get("family") or {}).get("id"))
     hyp = (fam.hypothesis if fam else (defn.get("family") or {}).get("hypothesis") or "").rstrip(".")
+    from edgelab.strategy import noiseband_space as NB
+    if NB.is_variation(v):                                   # ADR-116
+        return NB.explain(v)
     if not isinstance(v, Mapping):
         tf = defn.get("timeframe")
         return (f"{hyp}. Runs on {_tf(tf)} bars." if hyp else f"Runs on {_tf(tf)} bars.")

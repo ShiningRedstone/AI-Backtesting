@@ -172,6 +172,51 @@ def describe(v: Mapping) -> str:
             f"stop {v['stop']}, target {v['target']}, trailing {v['trailing']}, up to {v['max_trades']} trade(s) a day.")
 
 
+_WORD = {"close_outside": "any close outside", "fresh_break": "fresh break", "session_end": "16:00 session end",
+         "both": "long and short", "long": "long only", "short": "short only", "none": "none", "band": "the band",
+         "opposite_band": "the opposite band"}
+
+
+def _w(x) -> str:
+    s = str(x)
+    if s in _WORD:
+        return _WORD[s]
+    kind, _, val = s.partition("_")
+    return {"atr": f"{val} x ATR", "pts": f"{val} points", "rr": f"1 : {val}"}.get(kind, s) if val else s
+
+
+def is_variation(v) -> bool:
+    """A noise band variation (the presentation layer's switch; the factory's variations look different)."""
+    return isinstance(v, Mapping) and set(DIMENSIONS) <= set(v)
+
+
+def display_name(v: Mapping) -> str:
+    return (f"Noise Band Breakout — {v['timeframe']} · {v['lookback']} days x{v['mult']} · {_w(v['direction'])} · "
+            f"until {v['entry_until']} · close {_w(v['close_time'])}")
+
+
+def explain(v: Mapping) -> str:
+    """Plain words for the results panel (``describe`` is part of the definition and stays unchanged)."""
+    side = {"both": "long above the upper band, short below the lower band", "long": "long above the upper band only",
+            "short": "short below the lower band only"}[v["direction"]]
+    trig = "any candle close outside the band" if v["trigger"] == "close_outside" else \
+        "the first candle close outside the band after a close inside it"
+    close = "at the 16:00 session end" if v["close_time"] == "session_end" else f"at {v['close_time']} New York"
+    base = "from the 9:30 open or yesterday's close" if v["gap"] else "from the 9:30 open"
+    return (f"Noise band breakout on {v['timeframe']} candles (band: the average move of the last {v['lookback']} days at "
+            f"the same time, x{v['mult']}, {base}): "
+            f"{side}, on {trig}, entries from 09:30 to {v['entry_until']}, up to {v['max_trades']} trade(s) a day. "
+            f"Stop {_w(v['stop'])}, target {_w(v['target'])}, trailing stop {_w(v['trailing'])}; open trades are closed {close}.")
+
+
+def key_parameters(v: Mapping) -> dict:
+    return {"timeframe": v["timeframe"], "band days": v["lookback"], "band width": f"x{v['mult']}",
+            "with previous close": "yes" if v["gap"] else "no", "trigger": _w(v["trigger"]),
+            "entries": f"09:30-{v['entry_until']}", "close time": _w(v["close_time"]), "direction": _w(v["direction"]),
+            "stop": _w(v["stop"]), "target": _w(v["target"]), "trailing": _w(v["trailing"]),
+            "trades per day": v["max_trades"], "sizing": "risk $500, MNQ, max 40"}
+
+
 def draw(rng: random.Random) -> dict:
     return {k: vals[rng.randrange(len(vals))] for k, vals in DIMENSIONS.items()}
 

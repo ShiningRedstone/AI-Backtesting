@@ -220,6 +220,10 @@ class TestSetProtocol(Base):
         again = NB.run(s, sid_p)
         self.assertEqual((again["search_id"], s.store.count_trials(sid_p)), (res["search_id"], 12))
         self.assertEqual(s.noise_band()["results"]["backtested"], 12)
+        for r in rows[:3]:                                                     # the results panel reads them (user report:
+            panel = s.strategy_panel(r["strategy_id"], {})                     # 'str' object has no attribute 'get')
+            self.assertTrue(panel["display_name"].startswith("Noise Band Breakout — "))
+            self.assertIn("noise band", panel["explanation"].lower())
         self.assertIn({"pool": "noise", "ref": "set:noise", "label": "Noise band", "n_strategies": 12}, s.strategy_pools())
 
         per = C.discovery_period(p["material"])

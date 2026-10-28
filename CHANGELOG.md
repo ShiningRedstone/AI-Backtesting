@@ -13,6 +13,7 @@ Status labels: **IMPLEMENTED** (code exists) · **TESTED** (covered by automated
 | Own protocol: 10,000 tries, own holdout tests; the research protocol and its holdout tests are untouched | IMPLEMENTED, TESTED |
 | Backtest results picker "Noise band"; survivors in Holdout backtest | IMPLEMENTED, TESTED |
 | FEATURES.md regenerated (was stale since ADR-91) | IMPLEMENTED, TESTED |
+| Fix: opening a noise band strategy's results crashed ("'str' object has no attribute 'get'"); it now shows a plain name, explanation and settings | IMPLEMENTED, TESTED |
 | VWAP trailing stop of the paper | NOT IMPLEMENTED (volume-weighted features are refused on Dukascopy's provider volume) |
 | Real NQ results | REQUIRES REAL DATA (run on your PC) |
 | Engine, DSL, configs, other strategies | UNCHANGED |
